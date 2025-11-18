@@ -1,8 +1,9 @@
 """Embedding repository interface following Repository Pattern."""
 
-from typing import Protocol, Optional, List, Tuple
-import numpy as np
 from datetime import datetime
+from typing import List, Optional, Protocol, Tuple
+
+import numpy as np
 
 
 class IEmbeddingRepository(Protocol):

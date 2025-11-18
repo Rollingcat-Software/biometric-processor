@@ -1,11 +1,12 @@
 """Verification API routes."""
 
 import logging
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.api.schemas.verification import VerificationResponse
-from app.core.container import get_verify_face_use_case, get_file_storage
 from app.application.use_cases.verify_face import VerifyFaceUseCase
+from app.core.container import get_file_storage, get_verify_face_use_case
 from app.domain.interfaces.file_storage import IFileStorage
 
 logger = logging.getLogger(__name__)
@@ -58,15 +59,9 @@ async def verify_face(
         image_path = await storage.save_temp(file)
 
         # Execute verification use case
-        result = await use_case.execute(
-            user_id=user_id, image_path=image_path, tenant_id=tenant_id
-        )
+        result = await use_case.execute(user_id=user_id, image_path=image_path, tenant_id=tenant_id)
 
-        message = (
-            "Face verified successfully"
-            if result.verified
-            else "Face does not match"
-        )
+        message = "Face verified successfully" if result.verified else "Face does not match"
 
         return VerificationResponse(
             verified=result.verified,

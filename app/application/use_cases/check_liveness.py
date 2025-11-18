@@ -1,11 +1,12 @@
 """Liveness check use case."""
 
 import logging
+
 import cv2
 
+from app.domain.entities.liveness_result import LivenessResult
 from app.domain.interfaces.face_detector import IFaceDetector
 from app.domain.interfaces.liveness_detector import ILivenessDetector
-from app.domain.entities.liveness_result import LivenessResult
 
 logger = logging.getLogger(__name__)
 

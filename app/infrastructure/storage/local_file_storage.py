@@ -5,10 +5,11 @@ import os
 import uuid
 from pathlib import Path
 from typing import Optional
+
 from fastapi import UploadFile
 
-from app.domain.interfaces.file_storage import IFileStorage
 from app.domain.exceptions.storage_errors import FileStorageError
+from app.domain.interfaces.file_storage import IFileStorage
 
 logger = logging.getLogger(__name__)
 
@@ -76,10 +77,7 @@ class LocalFileStorage:
 
             absolute_path = str(temp_file_path.absolute())
 
-            logger.info(
-                f"File saved successfully: {absolute_path} "
-                f"({len(content)} bytes)"
-            )
+            logger.info(f"File saved successfully: {absolute_path} " f"({len(content)} bytes)")
 
             return absolute_path
 

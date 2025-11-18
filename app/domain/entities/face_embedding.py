@@ -2,7 +2,8 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, List
+from typing import List, Optional
+
 import numpy as np
 
 

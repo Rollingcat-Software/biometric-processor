@@ -2,12 +2,13 @@
 
 import logging
 from typing import Optional, Tuple
+
 import numpy as np
 from deepface import DeepFace
 
-from app.domain.interfaces.face_detector import IFaceDetector
 from app.domain.entities.face_detection import FaceDetectionResult
 from app.domain.exceptions.face_errors import FaceNotDetectedError, MultipleFacesError
+from app.domain.interfaces.face_detector import IFaceDetector
 
 logger = logging.getLogger(__name__)
 

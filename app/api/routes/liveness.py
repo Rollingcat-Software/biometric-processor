@@ -1,11 +1,12 @@
 """Liveness check API routes."""
 
 import logging
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.api.schemas.liveness import LivenessResponse
-from app.core.container import get_check_liveness_use_case, get_file_storage
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
+from app.core.container import get_check_liveness_use_case, get_file_storage
 from app.domain.interfaces.file_storage import IFileStorage
 
 logger = logging.getLogger(__name__)
@@ -57,9 +58,7 @@ async def check_liveness(
         # Execute liveness check use case
         result = await use_case.execute(image_path=image_path)
 
-        message = (
-            "Liveness check passed" if result.is_live else "Liveness check failed"
-        )
+        message = "Liveness check passed" if result.is_live else "Liveness check failed"
 
         return LivenessResponse(
             is_live=result.is_live,

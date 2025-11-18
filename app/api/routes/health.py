@@ -1,6 +1,7 @@
 """Health check API routes."""
 
 import logging
+
 from fastapi import APIRouter
 
 from app.api.schemas.common import HealthResponse

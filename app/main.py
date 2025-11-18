@@ -16,10 +16,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.middleware.error_handler import setup_exception_handlers
+from app.api.routes import batch, enrollment, health, liveness, search, verification
 from app.core.config import settings
 from app.core.container import initialize_dependencies
-from app.api.middleware.error_handler import setup_exception_handlers
-from app.api.routes import enrollment, verification, liveness, health
 
 # Configure logging
 logging.basicConfig(
@@ -92,6 +92,8 @@ app.include_router(health.router, prefix=API_PREFIX)
 app.include_router(enrollment.router, prefix=API_PREFIX)
 app.include_router(verification.router, prefix=API_PREFIX)
 app.include_router(liveness.router, prefix=API_PREFIX)
+app.include_router(search.router, prefix=API_PREFIX)
+app.include_router(batch.router, prefix=API_PREFIX)
 
 # ============================================================================
 # Root Endpoint

@@ -1,16 +1,17 @@
 """Face enrollment use case."""
 
 import logging
-import cv2
-import numpy as np
 from typing import Optional
 
-from app.domain.interfaces.face_detector import IFaceDetector
-from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
-from app.domain.interfaces.quality_assessor import IQualityAssessor
-from app.domain.interfaces.embedding_repository import IEmbeddingRepository
+import cv2
+import numpy as np
+
 from app.domain.entities.face_embedding import FaceEmbedding
 from app.domain.exceptions.face_errors import PoorImageQualityError
+from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
+from app.domain.interfaces.embedding_repository import IEmbeddingRepository
+from app.domain.interfaces.face_detector import IFaceDetector
+from app.domain.interfaces.quality_assessor import IQualityAssessor
 
 logger = logging.getLogger(__name__)
 

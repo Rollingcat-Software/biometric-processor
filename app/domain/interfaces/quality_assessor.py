@@ -1,7 +1,9 @@
 """Quality assessor interface following Interface Segregation Principle."""
 
 from typing import Protocol
+
 import numpy as np
+
 from app.domain.entities.quality_assessment import QualityAssessment
 
 

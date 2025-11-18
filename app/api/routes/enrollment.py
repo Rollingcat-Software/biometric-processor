@@ -1,11 +1,12 @@
 """Enrollment API routes."""
 
 import logging
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.api.schemas.enrollment import EnrollmentResponse
-from app.core.container import get_enroll_face_use_case, get_file_storage
 from app.application.use_cases.enroll_face import EnrollFaceUseCase
+from app.core.container import get_enroll_face_use_case, get_file_storage
 from app.domain.interfaces.file_storage import IFileStorage
 
 logger = logging.getLogger(__name__)
@@ -57,9 +58,7 @@ async def enroll_face(
         image_path = await storage.save_temp(file)
 
         # Execute enrollment use case
-        result = await use_case.execute(
-            user_id=user_id, image_path=image_path, tenant_id=tenant_id
-        )
+        result = await use_case.execute(user_id=user_id, image_path=image_path, tenant_id=tenant_id)
 
         return EnrollmentResponse(
             success=True,

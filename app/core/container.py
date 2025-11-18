@@ -12,36 +12,34 @@ Following Dependency Inversion Principle:
 import logging
 from functools import lru_cache
 
-from app.core.config import settings
-
-# Domain interfaces (imported for type hints)
-from app.domain.interfaces.face_detector import IFaceDetector
-from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
-from app.domain.interfaces.quality_assessor import IQualityAssessor
-from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
-from app.domain.interfaces.embedding_repository import IEmbeddingRepository
-from app.domain.interfaces.file_storage import IFileStorage
-from app.domain.interfaces.liveness_detector import ILivenessDetector
-
-# Infrastructure implementations
-from app.infrastructure.ml.factories.detector_factory import FaceDetectorFactory
-from app.infrastructure.ml.factories.extractor_factory import (
-    EmbeddingExtractorFactory,
-)
-from app.infrastructure.ml.factories.similarity_factory import (
-    SimilarityCalculatorFactory,
-)
-from app.infrastructure.ml.quality.quality_assessor import QualityAssessor
-from app.infrastructure.ml.liveness.stub_liveness_detector import StubLivenessDetector
-from app.infrastructure.storage.local_file_storage import LocalFileStorage
-from app.infrastructure.persistence.repositories.memory_embedding_repository import (
-    InMemoryEmbeddingRepository,
-)
+from app.application.use_cases.batch_process import BatchEnrollmentUseCase, BatchVerificationUseCase
+from app.application.use_cases.check_liveness import CheckLivenessUseCase
 
 # Application use cases
 from app.application.use_cases.enroll_face import EnrollFaceUseCase
+from app.application.use_cases.search_face import SearchFaceUseCase
 from app.application.use_cases.verify_face import VerifyFaceUseCase
-from app.application.use_cases.check_liveness import CheckLivenessUseCase
+from app.core.config import settings
+from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
+from app.domain.interfaces.embedding_repository import IEmbeddingRepository
+
+# Domain interfaces (imported for type hints)
+from app.domain.interfaces.face_detector import IFaceDetector
+from app.domain.interfaces.file_storage import IFileStorage
+from app.domain.interfaces.liveness_detector import ILivenessDetector
+from app.domain.interfaces.quality_assessor import IQualityAssessor
+from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
+
+# Infrastructure implementations
+from app.infrastructure.ml.factories.detector_factory import FaceDetectorFactory
+from app.infrastructure.ml.factories.extractor_factory import EmbeddingExtractorFactory
+from app.infrastructure.ml.factories.similarity_factory import SimilarityCalculatorFactory
+from app.infrastructure.ml.liveness.texture_liveness_detector import TextureLivenessDetector
+from app.infrastructure.ml.quality.quality_assessor import QualityAssessor
+from app.infrastructure.persistence.repositories.memory_embedding_repository import (
+    InMemoryEmbeddingRepository,
+)
+from app.infrastructure.storage.local_file_storage import LocalFileStorage
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +57,7 @@ def get_face_detector() -> IFaceDetector:
         Face detector implementation
     """
     logger.info(f"Creating face detector: {settings.FACE_DETECTION_BACKEND}")
-    return FaceDetectorFactory.create(
-        detector_type=settings.FACE_DETECTION_BACKEND, align=True
-    )
+    return FaceDetectorFactory.create(detector_type=settings.FACE_DETECTION_BACKEND, align=True)
 
 
 @lru_cache()
@@ -141,11 +137,16 @@ def get_liveness_detector() -> ILivenessDetector:
         Liveness detector implementation
 
     Note:
-        Currently returns StubLivenessDetector for MVP.
-        Will be replaced with real smile detector in Sprint 3.
+        Uses TextureLivenessDetector which analyzes image properties
+        to detect spoofing attacks (printed photos, screens).
     """
-    logger.info("Creating liveness detector (stub)")
-    return StubLivenessDetector(default_score=85.0)
+    logger.info("Creating liveness detector (texture-based)")
+    return TextureLivenessDetector(
+        texture_threshold=100.0,
+        color_threshold=0.3,
+        frequency_threshold=0.5,
+        liveness_threshold=60.0,
+    )
 
 
 # ============================================================================
@@ -190,6 +191,51 @@ def get_check_liveness_use_case() -> CheckLivenessUseCase:
     return CheckLivenessUseCase(
         detector=get_face_detector(),
         liveness_detector=get_liveness_detector(),
+    )
+
+
+def get_search_face_use_case() -> SearchFaceUseCase:
+    """Get search face use case instance.
+
+    Returns:
+        SearchFaceUseCase with all dependencies injected
+    """
+    return SearchFaceUseCase(
+        detector=get_face_detector(),
+        extractor=get_embedding_extractor(),
+        repository=get_embedding_repository(),
+        similarity_calculator=get_similarity_calculator(),
+    )
+
+
+def get_batch_enrollment_use_case() -> BatchEnrollmentUseCase:
+    """Get batch enrollment use case instance.
+
+    Returns:
+        BatchEnrollmentUseCase with all dependencies injected
+    """
+    return BatchEnrollmentUseCase(
+        detector=get_face_detector(),
+        extractor=get_embedding_extractor(),
+        quality_assessor=get_quality_assessor(),
+        repository=get_embedding_repository(),
+        max_concurrent=5,
+    )
+
+
+def get_batch_verification_use_case() -> BatchVerificationUseCase:
+    """Get batch verification use case instance.
+
+    Returns:
+        BatchVerificationUseCase with all dependencies injected
+    """
+    return BatchVerificationUseCase(
+        detector=get_face_detector(),
+        extractor=get_embedding_extractor(),
+        repository=get_embedding_repository(),
+        similarity_calculator=get_similarity_calculator(),
+        max_concurrent=5,
+        default_threshold=settings.VERIFICATION_THRESHOLD,
     )
 
 

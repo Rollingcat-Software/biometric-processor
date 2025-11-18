@@ -2,6 +2,7 @@
 
 import os
 from typing import List, Literal, Optional
+
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
@@ -22,9 +23,7 @@ class Settings(BaseSettings):
     # Application
     APP_NAME: str = Field(default="FIVUCSAS Biometric Processor")
     VERSION: str = Field(default="1.0.0")
-    ENVIRONMENT: Literal["development", "staging", "production"] = Field(
-        default="development"
-    )
+    ENVIRONMENT: Literal["development", "staging", "production"] = Field(default="development")
     DEBUG: bool = Field(default=False)
 
     # API Settings
@@ -33,9 +32,7 @@ class Settings(BaseSettings):
     API_WORKERS: int = Field(default=4, ge=1, le=32)
 
     # CORS Settings (NO WILDCARD!)
-    CORS_ORIGINS: List[str] = Field(
-        default=["http://localhost:3000", "http://localhost:8080"]
-    )
+    CORS_ORIGINS: List[str] = Field(default=["http://localhost:3000", "http://localhost:8080"])
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
@@ -95,9 +92,7 @@ class Settings(BaseSettings):
     WEBHOOK_MAX_RETRIES: int = Field(default=3, ge=0, le=10)
 
     # Logging
-    LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
-        default="INFO"
-    )
+    LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(default="INFO")
     LOG_FORMAT: Literal["json", "text"] = Field(default="json")
 
     # Rate Limiting
