@@ -1,7 +1,9 @@
 """Liveness detector interface."""
 
 from typing import Protocol
+
 import numpy as np
+
 from app.domain.entities.liveness_result import LivenessResult
 
 

@@ -31,7 +31,9 @@ class BiometricProcessorError(Exception):
 
     def __repr__(self) -> str:
         """Repr representation for debugging."""
-        return f"{self.__class__.__name__}(message='{self.message}', error_code='{self.error_code}')"
+        return (
+            f"{self.__class__.__name__}(message='{self.message}', error_code='{self.error_code}')"
+        )
 
     def to_dict(self) -> dict:
         """Convert exception to dictionary for API responses.

@@ -1,6 +1,7 @@
 """Similarity calculator interface following Strategy Pattern."""
 
 from typing import Protocol
+
 import numpy as np
 
 

@@ -1,12 +1,13 @@
 """In-memory embedding repository implementation."""
 
 import logging
-from typing import Optional, List, Tuple, Dict
 from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+
 import numpy as np
 
-from app.domain.interfaces.embedding_repository import IEmbeddingRepository
 from app.domain.exceptions.repository_errors import RepositoryError
+from app.domain.interfaces.embedding_repository import IEmbeddingRepository
 
 logger = logging.getLogger(__name__)
 

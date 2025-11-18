@@ -1,6 +1,7 @@
 """Embedding extractor interface following Interface Segregation Principle."""
 
 from typing import Protocol
+
 import numpy as np
 
 

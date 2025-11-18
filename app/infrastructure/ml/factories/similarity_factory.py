@@ -49,8 +49,7 @@ class SimilarityCalculatorFactory:
             return CosineSimilarityCalculator(threshold=threshold, **kwargs)
         else:
             raise ValueError(
-                f"Unsupported similarity metric: {metric}. "
-                f"Supported metrics: cosine"
+                f"Unsupported similarity metric: {metric}. " f"Supported metrics: cosine"
             )
 
     @staticmethod

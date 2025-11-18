@@ -1,7 +1,9 @@
 """Face detector interface following Interface Segregation Principle."""
 
 from typing import Protocol
+
 import numpy as np
+
 from app.domain.entities.face_detection import FaceDetectionResult
 
 

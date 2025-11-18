@@ -1,10 +1,11 @@
 """Stub liveness detector implementation (to be replaced in Sprint 3)."""
 
 import logging
+
 import numpy as np
 
-from app.domain.interfaces.liveness_detector import ILivenessDetector
 from app.domain.entities.liveness_result import LivenessResult
+from app.domain.interfaces.liveness_detector import ILivenessDetector
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +46,7 @@ class StubLivenessDetector:
             This is a STUB implementation for MVP.
             Actual liveness detection will be implemented in Sprint 3.
         """
-        logger.debug(
-            f"Stub liveness check - returning default score {self._default_score}"
-        )
+        logger.debug(f"Stub liveness check - returning default score {self._default_score}")
 
         return LivenessResult(
             is_live=True,

@@ -1,11 +1,12 @@
 """DeepFace-based embedding extractor implementation."""
 
 import logging
+
 import numpy as np
 from deepface import DeepFace
 
-from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 from app.domain.exceptions.face_errors import EmbeddingExtractionError
+from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -103,9 +104,7 @@ class DeepFaceExtractor:
             # L2 normalize the embedding for cosine similarity
             embedding_normalized = self._l2_normalize(embedding_array)
 
-            logger.info(
-                f"Successfully extracted {len(embedding_normalized)}-D embedding"
-            )
+            logger.info(f"Successfully extracted {len(embedding_normalized)}-D embedding")
 
             return embedding_normalized
 

@@ -1,11 +1,12 @@
 """Image quality assessment implementation."""
 
 import logging
-import numpy as np
-import cv2
 
-from app.domain.interfaces.quality_assessor import IQualityAssessor
+import cv2
+import numpy as np
+
 from app.domain.entities.quality_assessment import QualityAssessment
+from app.domain.interfaces.quality_assessor import IQualityAssessor
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +86,7 @@ class QualityAssessor:
         size_quality = self._normalize_size_score(face_size)
 
         # Overall quality score (weighted average)
-        overall_score = (
-            blur_quality * 0.4 + lighting_quality * 0.3 + size_quality * 0.3
-        )
+        overall_score = blur_quality * 0.4 + lighting_quality * 0.3 + size_quality * 0.3
 
         # Determine if acceptable
         is_acceptable = (

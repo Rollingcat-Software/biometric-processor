@@ -1,29 +1,24 @@
 """Error handling middleware for converting domain exceptions to HTTP responses."""
 
 import logging
+
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
 
 from app.domain.exceptions.base import BiometricProcessorError
 from app.domain.exceptions.face_errors import (
+    EmbeddingExtractionError,
     FaceNotDetectedError,
     MultipleFacesError,
     PoorImageQualityError,
-    EmbeddingExtractionError,
 )
+from app.domain.exceptions.liveness_errors import LivenessCheckError, LivenessCheckFailedError
+from app.domain.exceptions.repository_errors import EmbeddingAlreadyExistsError, RepositoryError
+from app.domain.exceptions.storage_errors import FileStorageError
 from app.domain.exceptions.verification_errors import (
     EmbeddingNotFoundError,
     VerificationFailedError,
 )
-from app.domain.exceptions.liveness_errors import (
-    LivenessCheckFailedError,
-    LivenessCheckError,
-)
-from app.domain.exceptions.repository_errors import (
-    RepositoryError,
-    EmbeddingAlreadyExistsError,
-)
-from app.domain.exceptions.storage_errors import FileStorageError
 
 logger = logging.getLogger(__name__)
 
@@ -67,16 +62,10 @@ def setup_exception_handlers(app) -> None:
         }
 
         # Get status code (default to 500 for unknown exceptions)
-        http_status = status_code_map.get(
-            type(exc), status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+        http_status = status_code_map.get(type(exc), status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         # Log error
-        log_level = (
-            logging.ERROR
-            if http_status >= 500
-            else logging.WARNING
-        )
+        log_level = logging.ERROR if http_status >= 500 else logging.WARNING
         logger.log(
             log_level,
             f"Domain exception: {exc.error_code} - {exc.message}",
@@ -112,9 +101,7 @@ def setup_exception_handlers(app) -> None:
         )
 
     @app.exception_handler(Exception)
-    async def general_exception_handler(
-        request: Request, exc: Exception
-    ) -> JSONResponse:
+    async def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         """Handle unexpected exceptions.
 
         Args:

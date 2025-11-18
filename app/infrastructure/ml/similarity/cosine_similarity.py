@@ -1,6 +1,7 @@
 """Cosine similarity calculator implementation."""
 
 import logging
+
 import numpy as np
 
 from app.domain.interfaces.similarity_calculator import ISimilarityCalculator

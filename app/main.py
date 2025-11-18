@@ -16,10 +16,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.middleware.error_handler import setup_exception_handlers
+from app.api.routes import enrollment, health, liveness, verification
 from app.core.config import settings
 from app.core.container import initialize_dependencies
-from app.api.middleware.error_handler import setup_exception_handlers
-from app.api.routes import enrollment, verification, liveness, health
 
 # Configure logging
 logging.basicConfig(

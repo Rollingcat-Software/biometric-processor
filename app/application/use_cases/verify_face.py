@@ -1,15 +1,16 @@
 """Face verification use case."""
 
 import logging
-import cv2
 from typing import Optional
 
-from app.domain.interfaces.face_detector import IFaceDetector
-from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
-from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
-from app.domain.interfaces.embedding_repository import IEmbeddingRepository
+import cv2
+
 from app.domain.entities.verification_result import VerificationResult
 from app.domain.exceptions.verification_errors import EmbeddingNotFoundError
+from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
+from app.domain.interfaces.embedding_repository import IEmbeddingRepository
+from app.domain.interfaces.face_detector import IFaceDetector
+from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
 
 logger = logging.getLogger(__name__)
 

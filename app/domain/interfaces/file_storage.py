@@ -1,6 +1,7 @@
 """File storage interface for temporary file handling."""
 
 from typing import Protocol
+
 from fastapi import UploadFile
 
 
