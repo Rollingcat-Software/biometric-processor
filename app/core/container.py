@@ -32,7 +32,7 @@ from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
 from app.infrastructure.ml.factories.detector_factory import FaceDetectorFactory
 from app.infrastructure.ml.factories.extractor_factory import EmbeddingExtractorFactory
 from app.infrastructure.ml.factories.similarity_factory import SimilarityCalculatorFactory
-from app.infrastructure.ml.liveness.stub_liveness_detector import StubLivenessDetector
+from app.infrastructure.ml.liveness.texture_liveness_detector import TextureLivenessDetector
 from app.infrastructure.ml.quality.quality_assessor import QualityAssessor
 from app.infrastructure.persistence.repositories.memory_embedding_repository import (
     InMemoryEmbeddingRepository,
@@ -135,11 +135,16 @@ def get_liveness_detector() -> ILivenessDetector:
         Liveness detector implementation
 
     Note:
-        Currently returns StubLivenessDetector for MVP.
-        Will be replaced with real smile detector in Sprint 3.
+        Uses TextureLivenessDetector which analyzes image properties
+        to detect spoofing attacks (printed photos, screens).
     """
-    logger.info("Creating liveness detector (stub)")
-    return StubLivenessDetector(default_score=85.0)
+    logger.info("Creating liveness detector (texture-based)")
+    return TextureLivenessDetector(
+        texture_threshold=100.0,
+        color_threshold=0.3,
+        frequency_threshold=0.5,
+        liveness_threshold=60.0,
+    )
 
 
 # ============================================================================
