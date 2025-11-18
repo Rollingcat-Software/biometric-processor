@@ -12,10 +12,12 @@ Following Dependency Inversion Principle:
 import logging
 from functools import lru_cache
 
+from app.application.use_cases.batch_process import BatchEnrollmentUseCase, BatchVerificationUseCase
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
 
 # Application use cases
 from app.application.use_cases.enroll_face import EnrollFaceUseCase
+from app.application.use_cases.search_face import SearchFaceUseCase
 from app.application.use_cases.verify_face import VerifyFaceUseCase
 from app.core.config import settings
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
@@ -189,6 +191,51 @@ def get_check_liveness_use_case() -> CheckLivenessUseCase:
     return CheckLivenessUseCase(
         detector=get_face_detector(),
         liveness_detector=get_liveness_detector(),
+    )
+
+
+def get_search_face_use_case() -> SearchFaceUseCase:
+    """Get search face use case instance.
+
+    Returns:
+        SearchFaceUseCase with all dependencies injected
+    """
+    return SearchFaceUseCase(
+        detector=get_face_detector(),
+        extractor=get_embedding_extractor(),
+        repository=get_embedding_repository(),
+        similarity_calculator=get_similarity_calculator(),
+    )
+
+
+def get_batch_enrollment_use_case() -> BatchEnrollmentUseCase:
+    """Get batch enrollment use case instance.
+
+    Returns:
+        BatchEnrollmentUseCase with all dependencies injected
+    """
+    return BatchEnrollmentUseCase(
+        detector=get_face_detector(),
+        extractor=get_embedding_extractor(),
+        quality_assessor=get_quality_assessor(),
+        repository=get_embedding_repository(),
+        max_concurrent=5,
+    )
+
+
+def get_batch_verification_use_case() -> BatchVerificationUseCase:
+    """Get batch verification use case instance.
+
+    Returns:
+        BatchVerificationUseCase with all dependencies injected
+    """
+    return BatchVerificationUseCase(
+        detector=get_face_detector(),
+        extractor=get_embedding_extractor(),
+        repository=get_embedding_repository(),
+        similarity_calculator=get_similarity_calculator(),
+        max_concurrent=5,
+        default_threshold=settings.VERIFICATION_THRESHOLD,
     )
 
 
