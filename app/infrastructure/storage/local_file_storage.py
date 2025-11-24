@@ -1,4 +1,4 @@
-"""Local filesystem storage implementation."""
+"""Local filesystem storage implementation with security hardening."""
 
 import logging
 import os
@@ -15,15 +15,26 @@ logger = logging.getLogger(__name__)
 
 
 class LocalFileStorage:
-    """Local filesystem storage implementation.
+    """Local filesystem storage implementation with security features.
 
     Implements IFileStorage interface for storing files on local filesystem.
     Following Repository Pattern for file operations.
+
+    Security Features:
+    - Path traversal protection: Validates all file paths
+    - File size limits: Maximum 10MB per file
+    - Allowed file types: Only images (jpg, jpeg, png, webp)
+    - Unique filenames: UUID-based to prevent collisions
 
     Note:
         This is suitable for development and small-scale deployments.
         For production at scale, consider S3Storage or similar.
     """
+
+    # Security constants
+    MAX_FILE_SIZE_MB = 10
+    MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+    ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
     def __init__(self, storage_path: str = "./temp_uploads") -> None:
         """Initialize local file storage.
@@ -34,7 +45,7 @@ class LocalFileStorage:
         Raises:
             FileStorageError: If storage directory cannot be created
         """
-        self._storage_path = Path(storage_path)
+        self._storage_path = Path(storage_path).resolve()
 
         # Create storage directory if it doesn't exist
         try:
@@ -49,7 +60,7 @@ class LocalFileStorage:
             )
 
     async def save_temp(self, file: UploadFile) -> str:
-        """Save uploaded file to temporary storage.
+        """Save uploaded file to temporary storage with security validation.
 
         Args:
             file: Uploaded file from FastAPI
@@ -58,29 +69,60 @@ class LocalFileStorage:
             Absolute path to saved file
 
         Raises:
-            FileStorageError: When save operation fails
+            FileStorageError: When save operation fails or validation fails
         """
         try:
-            # Generate unique filename
+            # SECURITY: Validate file extension
             file_extension = self._get_file_extension(file.filename or "")
+            if file_extension not in self.ALLOWED_EXTENSIONS:
+                raise FileStorageError(
+                    operation="save",
+                    file_path=file.filename or "unknown",
+                    reason=f"File type not allowed. Allowed types: {', '.join(self.ALLOWED_EXTENSIONS)}",
+                )
+
+            # Generate unique filename to prevent collisions and path traversal
             temp_filename = f"{uuid.uuid4()}{file_extension}"
             temp_file_path = self._storage_path / temp_filename
+
+            # SECURITY: Validate path is within storage directory (prevent path traversal)
+            self._validate_path(temp_file_path)
 
             logger.debug(f"Saving file: {file.filename} -> {temp_filename}")
 
             # Read file content
             content = await file.read()
 
+            # SECURITY: Validate file size
+            file_size = len(content)
+            if file_size > self.MAX_FILE_SIZE_BYTES:
+                raise FileStorageError(
+                    operation="save",
+                    file_path=file.filename or "unknown",
+                    reason=f"File size ({file_size / 1024 / 1024:.2f} MB) exceeds maximum allowed size ({self.MAX_FILE_SIZE_MB} MB)",
+                )
+
+            if file_size == 0:
+                raise FileStorageError(
+                    operation="save",
+                    file_path=file.filename or "unknown",
+                    reason="File is empty (0 bytes)",
+                )
+
             # Write to disk
             with open(temp_file_path, "wb") as buffer:
                 buffer.write(content)
 
-            absolute_path = str(temp_file_path.absolute())
+            absolute_path = str(temp_file_path)
 
-            logger.info(f"File saved successfully: {absolute_path} " f"({len(content)} bytes)")
+            logger.info(
+                f"File saved successfully: {temp_filename} ({file_size / 1024:.2f} KB)"
+            )
 
             return absolute_path
 
+        except FileStorageError:
+            raise
         except Exception as e:
             logger.error(f"Failed to save file: {e}", exc_info=True)
             raise FileStorageError(
@@ -90,7 +132,7 @@ class LocalFileStorage:
             )
 
     async def cleanup(self, file_path: str) -> None:
-        """Delete temporary file.
+        """Delete temporary file with security validation.
 
         Args:
             file_path: Absolute path to file to delete
@@ -99,20 +141,27 @@ class LocalFileStorage:
             This method is idempotent - no error if file doesn't exist.
         """
         try:
-            path = Path(file_path)
+            path = Path(file_path).resolve()
+
+            # SECURITY: Validate path is within storage directory (prevent path traversal)
+            try:
+                self._validate_path(path)
+            except FileStorageError as e:
+                logger.warning(f"Path validation failed during cleanup: {e}")
+                return
 
             if path.exists():
                 path.unlink()
-                logger.debug(f"File deleted: {file_path}")
+                logger.debug(f"File deleted: {path.name}")
             else:
-                logger.debug(f"File already deleted or doesn't exist: {file_path}")
+                logger.debug(f"File already deleted or doesn't exist: {path.name}")
 
         except Exception as e:
             # Log warning but don't raise - cleanup is best-effort
             logger.warning(f"Failed to delete file {file_path}: {e}")
 
     async def read_as_bytes(self, file_path: str) -> bytes:
-        """Read file contents as bytes.
+        """Read file contents as bytes with security validation.
 
         Args:
             file_path: Absolute path to file
@@ -121,10 +170,13 @@ class LocalFileStorage:
             File contents as bytes
 
         Raises:
-            FileStorageError: When file doesn't exist or read fails
+            FileStorageError: When file doesn't exist, read fails, or path is invalid
         """
         try:
-            path = Path(file_path)
+            path = Path(file_path).resolve()
+
+            # SECURITY: Validate path is within storage directory (prevent path traversal)
+            self._validate_path(path)
 
             if not path.exists():
                 raise FileStorageError(
@@ -136,7 +188,7 @@ class LocalFileStorage:
             with open(path, "rb") as f:
                 content = f.read()
 
-            logger.debug(f"File read: {file_path} ({len(content)} bytes)")
+            logger.debug(f"File read: {path.name} ({len(content)} bytes)")
 
             return content
 
@@ -182,6 +234,37 @@ class LocalFileStorage:
         if path.exists():
             return path.stat().st_size
         return None
+
+    def _validate_path(self, file_path: Path) -> None:
+        """Validate file path is within storage directory.
+
+        SECURITY: Prevents path traversal attacks by ensuring all file operations
+        stay within the designated storage directory.
+
+        Args:
+            file_path: Path to validate (must be resolved/absolute)
+
+        Raises:
+            FileStorageError: If path is outside storage directory
+        """
+        try:
+            # Resolve to absolute path to handle symlinks and relative paths
+            resolved_path = file_path.resolve()
+
+            # Check if path is relative to storage directory
+            resolved_path.relative_to(self._storage_path)
+
+        except ValueError:
+            error_msg = (
+                f"SECURITY: Path traversal attempt detected. "
+                f"File path '{file_path}' is outside storage directory '{self._storage_path}'"
+            )
+            logger.error(error_msg)
+            raise FileStorageError(
+                operation="validation",
+                file_path=str(file_path),
+                reason="Path outside storage directory (path traversal attempt)",
+            )
 
     @staticmethod
     def _get_file_extension(filename: str) -> str:
