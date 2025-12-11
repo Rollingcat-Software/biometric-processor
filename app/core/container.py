@@ -14,6 +14,7 @@ from functools import lru_cache
 
 from app.application.use_cases.batch_process import BatchEnrollmentUseCase, BatchVerificationUseCase
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
+from app.application.use_cases.detect_card_type import DetectCardTypeUseCase
 
 # Application use cases
 from app.application.use_cases.enroll_face import EnrollFaceUseCase
@@ -24,6 +25,7 @@ from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
 
 # Domain interfaces (imported for type hints)
+from app.domain.interfaces.card_type_detector import ICardTypeDetector
 from app.domain.interfaces.face_detector import IFaceDetector
 from app.domain.interfaces.file_storage import IFileStorage
 from app.domain.interfaces.liveness_detector import ILivenessDetector
@@ -33,10 +35,9 @@ from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
 # Infrastructure implementations
 from app.infrastructure.ml.factories.detector_factory import FaceDetectorFactory
 from app.infrastructure.ml.factories.extractor_factory import EmbeddingExtractorFactory
+from app.infrastructure.ml.factories.liveness_factory import LivenessDetectorFactory
 from app.infrastructure.ml.factories.similarity_factory import SimilarityCalculatorFactory
-from app.infrastructure.ml.liveness.texture_liveness_detector import TextureLivenessDetector
-from app.infrastructure.ml.liveness.active_liveness_detector import ActiveLivenessDetector
-from app.infrastructure.ml.liveness.combined_liveness_detector import CombinedLivenessDetector
+from app.infrastructure.ml.card_type.yolo_card_type_detector import YOLOCardTypeDetector
 from app.infrastructure.ml.quality.quality_assessor import QualityAssessor
 from app.infrastructure.persistence.repositories.memory_embedding_repository import (
     InMemoryEmbeddingRepository,
@@ -140,32 +141,27 @@ def get_liveness_detector() -> ILivenessDetector:
         - passive: Texture-based analysis (printed photos, screens)
         - active: Facial action analysis (smile, blink)
         - combined: Both methods for highest accuracy
-    """
-    mode = settings.LIVENESS_MODE
-    threshold = settings.LIVENESS_THRESHOLD
 
-    if mode == "passive":
-        logger.info("Creating liveness detector (passive/texture-based)")
-        return TextureLivenessDetector(
-            texture_threshold=100.0,
-            color_threshold=0.3,
-            frequency_threshold=0.5,
-            liveness_threshold=60.0,
-        )
-    elif mode == "active":
-        logger.info("Creating liveness detector (active/smile-blink)")
-        return ActiveLivenessDetector(
-            ear_threshold=0.25,
-            mar_threshold=0.6,
-            liveness_threshold=threshold,
-        )
-    else:  # combined (default)
-        logger.info("Creating liveness detector (combined)")
-        return CombinedLivenessDetector(
-            texture_weight=0.4,
-            active_weight=0.6,
-            liveness_threshold=threshold,
-        )
+    Uses LivenessDetectorFactory for Open/Closed Principle compliance.
+    """
+    logger.info(f"Creating liveness detector: {settings.LIVENESS_MODE}")
+    return LivenessDetectorFactory.create(
+        mode=settings.LIVENESS_MODE,
+        liveness_threshold=settings.LIVENESS_THRESHOLD,
+    )
+
+
+@lru_cache()
+def get_card_type_detector() -> ICardTypeDetector:
+    """Get card type detector instance (singleton).
+
+    Returns:
+        Card type detector implementation
+    """
+    logger.info("Creating card type detector (YOLO)")
+    return YOLOCardTypeDetector(
+        confidence_threshold=0.5,
+    )
 
 
 # ============================================================================
@@ -258,6 +254,17 @@ def get_batch_verification_use_case() -> BatchVerificationUseCase:
     )
 
 
+def get_detect_card_type_use_case() -> DetectCardTypeUseCase:
+    """Get detect card type use case instance.
+
+    Returns:
+        DetectCardTypeUseCase with all dependencies injected
+    """
+    return DetectCardTypeUseCase(
+        detector=get_card_type_detector(),
+    )
+
+
 # ============================================================================
 # Utility Functions
 # ============================================================================
@@ -301,3 +308,4 @@ def clear_cache() -> None:
     get_file_storage.cache_clear()
     get_embedding_repository.cache_clear()
     get_liveness_detector.cache_clear()
+    get_card_type_detector.cache_clear()
