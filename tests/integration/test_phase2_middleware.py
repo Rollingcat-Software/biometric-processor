@@ -132,47 +132,54 @@ class TestAPIKeyAuthMiddleware:
 class TestAPIKeyAuthMiddlewareRequired:
     """Test API key auth middleware when auth is required."""
 
-    @pytest.fixture
-    def mock_api_key_repository(self):
-        """Create mock API key repository."""
-        repository = Mock()
-        repository.find_by_key_hash = AsyncMock(return_value=None)
-        repository.update_last_used = AsyncMock()
-        return repository
-
-    @pytest.fixture
-    def app_with_required_auth(self, mock_api_key_repository):
-        """Create FastAPI app with required API key auth."""
+    def test_request_without_api_key_rejected(self):
+        """Test that requests without API key are rejected when required."""
         from app.api.middleware.api_key_auth import APIKeyAuthMiddleware
+
+        mock_repo = Mock()
+        mock_repo.find_by_key_hash = AsyncMock(return_value=None)
+        mock_repo.update_last_used = AsyncMock()
 
         app = FastAPI()
 
         app.add_middleware(
             APIKeyAuthMiddleware,
-            repository=mock_api_key_repository,
+            repository=mock_repo,
             require_auth=True,
+            exclude_paths=["/health"],  # Only exclude health, not /test
         )
 
         @app.get("/test")
         async def test_endpoint():
             return {"status": "ok"}
 
-        return app
-
-    def test_request_without_api_key_rejected(self, app_with_required_auth):
-        """Test that requests without API key are rejected when required."""
-        client = TestClient(app_with_required_auth)
+        client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test")
         assert response.status_code == 401
         assert "API key required" in response.json()["message"]
 
-    def test_request_with_invalid_api_key_rejected(
-        self, app_with_required_auth, mock_api_key_repository
-    ):
+    def test_request_with_invalid_api_key_rejected(self):
         """Test that requests with invalid API key are rejected."""
-        mock_api_key_repository.find_by_key_hash = AsyncMock(return_value=None)
+        from app.api.middleware.api_key_auth import APIKeyAuthMiddleware
 
-        client = TestClient(app_with_required_auth)
+        mock_repo = Mock()
+        mock_repo.find_by_key_hash = AsyncMock(return_value=None)
+        mock_repo.update_last_used = AsyncMock()
+
+        app = FastAPI()
+
+        app.add_middleware(
+            APIKeyAuthMiddleware,
+            repository=mock_repo,
+            require_auth=True,
+            exclude_paths=["/health"],  # Only exclude health, not /test
+        )
+
+        @app.get("/test")
+        async def test_endpoint():
+            return {"status": "ok"}
+
+        client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/test", headers={"X-API-Key": "invalid_key"})
         assert response.status_code == 401
 
