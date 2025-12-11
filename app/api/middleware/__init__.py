@@ -8,6 +8,11 @@ from app.api.middleware.api_key_auth import (
     require_scope,
     RequireAPIKey,
 )
+from app.api.middleware.security import (
+    SecurityHeadersMiddleware,
+    InputSanitizationMiddleware,
+    RequestSizeLimitMiddleware,
+)
 
 __all__ = [
     "setup_exception_handlers",
@@ -17,4 +22,7 @@ __all__ = [
     "get_api_key_context",
     "require_scope",
     "RequireAPIKey",
+    "SecurityHeadersMiddleware",
+    "InputSanitizationMiddleware",
+    "RequestSizeLimitMiddleware",
 ]
