@@ -17,7 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.middleware.error_handler import setup_exception_handlers
-from app.api.routes import batch, enrollment, health, liveness, search, verification,card_type_router
+from app.api.routes import batch, enrollment, health, liveness, search, verification, card_type_router
+from app.api.routes import quality, multi_face, demographics, landmarks, comparison, similarity_matrix, embeddings_io, webhooks
 from app.core.config import settings
 from app.core.container import initialize_dependencies
 
@@ -95,6 +96,16 @@ app.include_router(liveness.router, prefix=API_PREFIX)
 app.include_router(search.router, prefix=API_PREFIX)
 app.include_router(batch.router, prefix=API_PREFIX)
 app.include_router(card_type_router.router, prefix=API_PREFIX)
+
+# New feature routes
+app.include_router(quality.router, prefix=API_PREFIX)
+app.include_router(multi_face.router, prefix=API_PREFIX)
+app.include_router(demographics.router, prefix=API_PREFIX)
+app.include_router(landmarks.router, prefix=API_PREFIX)
+app.include_router(comparison.router, prefix=API_PREFIX)
+app.include_router(similarity_matrix.router, prefix=API_PREFIX)
+app.include_router(embeddings_io.router, prefix=API_PREFIX)
+app.include_router(webhooks.router, prefix=API_PREFIX)
 # ============================================================================
 # Root Endpoint
 # ============================================================================

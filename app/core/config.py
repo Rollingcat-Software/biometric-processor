@@ -101,6 +101,35 @@ class Settings(BaseSettings):
     # Rate Limiting
     RATE_LIMIT_ENABLED: bool = Field(default=True)
     RATE_LIMIT_PER_MINUTE: int = Field(default=60, ge=1)
+    RATE_LIMIT_STORAGE: Literal["memory", "redis"] = Field(default="memory")
+    RATE_LIMIT_DEFAULT: int = Field(default=60, ge=1)
+    RATE_LIMIT_PREMIUM: int = Field(default=300, ge=1)
+
+    # Demographics Analysis
+    DEMOGRAPHICS_ENABLED: bool = Field(default=True)
+    DEMOGRAPHICS_INCLUDE_RACE: bool = Field(default=False)  # Privacy consideration
+    DEMOGRAPHICS_INCLUDE_EMOTION: bool = Field(default=True)
+
+    # Landmarks
+    LANDMARK_MODEL: Literal["mediapipe_468", "dlib_68"] = Field(default="mediapipe_468")
+
+    # Image Preprocessing
+    PREPROCESS_AUTO_ROTATE: bool = Field(default=True)
+    PREPROCESS_MAX_SIZE: int = Field(default=1920, ge=640, le=4096)
+    PREPROCESS_NORMALIZE: bool = Field(default=True)
+
+    # Webhooks
+    WEBHOOK_ENABLED: bool = Field(default=False)
+    WEBHOOK_URL: Optional[str] = Field(default=None)
+    WEBHOOK_SECRET: Optional[str] = Field(default=None)
+    WEBHOOK_EVENTS: List[str] = Field(
+        default=["enrollment", "verification", "liveness"]
+    )
+    WEBHOOK_RETRY_COUNT: int = Field(default=3, ge=0, le=10)
+
+    # Export/Import
+    EXPORT_FORMAT: Literal["json", "msgpack"] = Field(default="json")
+    EXPORT_INCLUDE_METADATA: bool = Field(default=True)
 
     model_config = {
         "env_file": ".env",
