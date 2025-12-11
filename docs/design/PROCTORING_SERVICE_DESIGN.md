@@ -1,9 +1,10 @@
 # Proctoring Service - Technical Design Document
 
-**Version:** 1.0
+**Version:** 1.1
 **Date:** December 2024
 **Status:** PROPOSED
 **Author:** Architecture Team
+**Updated:** Added deepfake detection, circuit breaker, per-session rate limiting
 
 ---
 
@@ -133,11 +134,14 @@ Design a continuous identity verification and proctoring service that monitors e
 |-----------|---------------|------------|
 | **Session Manager** | Lifecycle management, state machine | Python/FastAPI |
 | **Face Verifier** | Continuous identity verification | DeepFace, existing code |
+| **Deepfake Detector** | Detect synthetic/manipulated faces | Custom CNN, frequency analysis |
 | **Gaze Tracker** | Head pose & eye direction monitoring | MediaPipe |
 | **Object Detector** | Phone/book/person detection | YOLOv8 |
 | **Audio Analyzer** | Voice activity, multiple speakers | WebRTC VAD |
 | **Fusion Engine** | Aggregate signals, compute risk | Custom Python |
 | **Incident Manager** | Flag, classify, store incidents | Python |
+| **Circuit Breaker** | ML failure resilience, graceful degradation | pybreaker |
+| **Rate Limiter** | Per-session frame submission throttling | Redis + sliding window |
 
 ---
 
@@ -562,6 +566,7 @@ class IncidentType(str, Enum):
     FACE_NOT_MATCHED = "face_not_matched"
     MULTIPLE_FACES = "multiple_faces"
     LIVENESS_FAILED = "liveness_failed"
+    DEEPFAKE_DETECTED = "deepfake_detected"  # Synthetic/manipulated face detected
 
     # Attention incidents
     GAZE_AWAY_PROLONGED = "gaze_away_prolonged"
@@ -592,6 +597,7 @@ class IncidentType(str, Enum):
     # Session incidents
     EXCESSIVE_PAUSES = "excessive_pauses"
     SESSION_TIMEOUT = "session_timeout"
+    RATE_LIMIT_EXCEEDED = "rate_limit_exceeded"  # Too many frame submissions
 
 
 class IncidentSeverity(str, Enum):
@@ -779,6 +785,7 @@ INCIDENT_SEVERITY_MAP: Dict[IncidentType, IncidentSeverity] = {
     IncidentType.MULTIPLE_FACES: IncidentSeverity.CRITICAL,
     IncidentType.FACE_NOT_MATCHED: IncidentSeverity.CRITICAL,
     IncidentType.PERSON_IN_BACKGROUND: IncidentSeverity.CRITICAL,
+    IncidentType.DEEPFAKE_DETECTED: IncidentSeverity.CRITICAL,  # Highest priority
 
     # High - serious concern
     IncidentType.PHONE_DETECTED: IncidentSeverity.HIGH,
@@ -794,6 +801,7 @@ INCIDENT_SEVERITY_MAP: Dict[IncidentType, IncidentSeverity] = {
     IncidentType.HEAD_TURNED_AWAY: IncidentSeverity.MEDIUM,
     IncidentType.GAZE_AWAY_PROLONGED: IncidentSeverity.MEDIUM,
     IncidentType.SUSPICIOUS_AUDIO: IncidentSeverity.MEDIUM,
+    IncidentType.RATE_LIMIT_EXCEEDED: IncidentSeverity.MEDIUM,  # Suspicious behavior
 
     # Low - informational
     IncidentType.FACE_NOT_DETECTED: IncidentSeverity.LOW,
@@ -1932,6 +1940,416 @@ class IAudioAnalyzer(Protocol):
             AudioAnalysisResult with voice activity and speaker count
         """
         ...
+
+
+# app/domain/interfaces/deepfake_detector.py
+
+@dataclass
+class DeepfakeAnalysisResult:
+    """Result of deepfake detection analysis.
+
+    Attributes:
+        session_id: Session being analyzed
+        timestamp: Analysis timestamp
+        is_deepfake: Whether deepfake was detected
+        confidence: Detection confidence (0.0-1.0)
+        detection_method: Which method triggered detection
+        artifacts_found: List of detected artifacts
+    """
+    session_id: UUID
+    timestamp: datetime
+    is_deepfake: bool
+    confidence: float
+    detection_method: str  # "frequency", "texture", "temporal", "ensemble"
+    artifacts_found: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "session_id": str(self.session_id),
+            "timestamp": self.timestamp.isoformat(),
+            "is_deepfake": self.is_deepfake,
+            "confidence": self.confidence,
+            "detection_method": self.detection_method,
+            "artifacts_found": self.artifacts_found,
+        }
+
+
+class IDeepfakeDetector(Protocol):
+    """Interface for deepfake detection.
+
+    Detects synthetic/manipulated faces using multiple techniques:
+    - Frequency analysis (DCT artifacts)
+    - Texture inconsistency detection
+    - Temporal coherence analysis (video)
+    - Ensemble model classification
+    """
+
+    def detect(
+        self,
+        image: np.ndarray,
+        session_id: UUID,
+    ) -> DeepfakeAnalysisResult:
+        """Analyze image for deepfake indicators.
+
+        Args:
+            image: BGR image array
+            session_id: Session being analyzed
+
+        Returns:
+            DeepfakeAnalysisResult with detection outcome
+        """
+        ...
+
+    def detect_video(
+        self,
+        frames: List[np.ndarray],
+        session_id: UUID,
+    ) -> DeepfakeAnalysisResult:
+        """Analyze video frames for temporal deepfake indicators.
+
+        Args:
+            frames: List of BGR image arrays
+            session_id: Session being analyzed
+
+        Returns:
+            DeepfakeAnalysisResult with temporal analysis
+        """
+        ...
+```
+
+### 6.2.1 Circuit Breaker Pattern
+
+```python
+# app/infrastructure/resilience/circuit_breaker.py
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Callable, Generic, TypeVar, Optional
+import time
+import threading
+
+
+class CircuitState(str, Enum):
+    """Circuit breaker states."""
+    CLOSED = "closed"      # Normal operation, requests pass through
+    OPEN = "open"          # Failures exceeded, requests blocked
+    HALF_OPEN = "half_open"  # Testing if service recovered
+
+
+@dataclass
+class CircuitBreakerConfig:
+    """Circuit breaker configuration.
+
+    Attributes:
+        failure_threshold: Failures before opening circuit
+        success_threshold: Successes in half-open before closing
+        timeout_seconds: Seconds before trying half-open
+        excluded_exceptions: Exceptions that don't count as failures
+    """
+    failure_threshold: int = 5
+    success_threshold: int = 2
+    timeout_seconds: float = 30.0
+    excluded_exceptions: tuple = ()
+
+
+T = TypeVar('T')
+
+
+class CircuitBreaker(Generic[T]):
+    """Circuit breaker for ML service resilience.
+
+    Prevents cascading failures by stopping requests to failing services.
+    Provides graceful degradation when ML models fail.
+
+    Usage:
+        breaker = CircuitBreaker(config)
+
+        @breaker
+        def call_ml_model(image):
+            return model.predict(image)
+
+        # Or with fallback
+        result = breaker.call(
+            func=lambda: model.predict(image),
+            fallback=lambda: default_result
+        )
+    """
+
+    def __init__(self, config: Optional[CircuitBreakerConfig] = None):
+        self.config = config or CircuitBreakerConfig()
+        self._state = CircuitState.CLOSED
+        self._failure_count = 0
+        self._success_count = 0
+        self._last_failure_time: Optional[float] = None
+        self._lock = threading.Lock()
+
+    @property
+    def state(self) -> CircuitState:
+        """Get current circuit state."""
+        with self._lock:
+            if self._state == CircuitState.OPEN:
+                if self._should_attempt_reset():
+                    self._state = CircuitState.HALF_OPEN
+            return self._state
+
+    def _should_attempt_reset(self) -> bool:
+        """Check if enough time passed to try half-open."""
+        if self._last_failure_time is None:
+            return True
+        return (time.time() - self._last_failure_time) >= self.config.timeout_seconds
+
+    def call(
+        self,
+        func: Callable[[], T],
+        fallback: Optional[Callable[[], T]] = None,
+    ) -> T:
+        """Execute function with circuit breaker protection.
+
+        Args:
+            func: Function to execute
+            fallback: Optional fallback if circuit is open
+
+        Returns:
+            Function result or fallback result
+
+        Raises:
+            CircuitBreakerOpenError: If circuit is open and no fallback
+        """
+        state = self.state
+
+        if state == CircuitState.OPEN:
+            if fallback:
+                return fallback()
+            raise CircuitBreakerOpenError("Circuit breaker is open")
+
+        try:
+            result = func()
+            self._on_success()
+            return result
+        except Exception as e:
+            if isinstance(e, self.config.excluded_exceptions):
+                raise
+            self._on_failure()
+            if fallback:
+                return fallback()
+            raise
+
+    def _on_success(self) -> None:
+        """Handle successful call."""
+        with self._lock:
+            if self._state == CircuitState.HALF_OPEN:
+                self._success_count += 1
+                if self._success_count >= self.config.success_threshold:
+                    self._state = CircuitState.CLOSED
+                    self._failure_count = 0
+                    self._success_count = 0
+            elif self._state == CircuitState.CLOSED:
+                self._failure_count = 0
+
+    def _on_failure(self) -> None:
+        """Handle failed call."""
+        with self._lock:
+            self._failure_count += 1
+            self._last_failure_time = time.time()
+
+            if self._state == CircuitState.HALF_OPEN:
+                self._state = CircuitState.OPEN
+                self._success_count = 0
+            elif self._failure_count >= self.config.failure_threshold:
+                self._state = CircuitState.OPEN
+
+
+class CircuitBreakerOpenError(Exception):
+    """Raised when circuit breaker is open."""
+    pass
+
+
+# Pre-configured circuit breakers for ML components
+FACE_VERIFIER_BREAKER = CircuitBreaker(CircuitBreakerConfig(
+    failure_threshold=3,
+    success_threshold=2,
+    timeout_seconds=30.0,
+))
+
+DEEPFAKE_DETECTOR_BREAKER = CircuitBreaker(CircuitBreakerConfig(
+    failure_threshold=5,
+    success_threshold=2,
+    timeout_seconds=60.0,  # Longer timeout for complex model
+))
+
+GAZE_TRACKER_BREAKER = CircuitBreaker(CircuitBreakerConfig(
+    failure_threshold=5,
+    success_threshold=2,
+    timeout_seconds=30.0,
+))
+
+OBJECT_DETECTOR_BREAKER = CircuitBreaker(CircuitBreakerConfig(
+    failure_threshold=5,
+    success_threshold=2,
+    timeout_seconds=30.0,
+))
+```
+
+### 6.2.2 Per-Session Rate Limiter
+
+```python
+# app/infrastructure/resilience/session_rate_limiter.py
+
+from dataclasses import dataclass
+from typing import Optional
+from uuid import UUID
+import time
+import redis
+
+
+@dataclass
+class SessionRateLimitConfig:
+    """Per-session rate limiting configuration.
+
+    Attributes:
+        max_frames_per_second: Maximum frames allowed per second
+        max_frames_per_minute: Maximum frames allowed per minute
+        burst_allowance: Extra frames allowed in burst
+        cooldown_seconds: Seconds to wait after limit exceeded
+    """
+    max_frames_per_second: float = 2.0   # 2 FPS max
+    max_frames_per_minute: int = 60      # 60 frames/min max
+    burst_allowance: int = 5             # Allow 5 extra in burst
+    cooldown_seconds: int = 10           # 10s cooldown after violation
+
+
+@dataclass
+class RateLimitResult:
+    """Result of rate limit check.
+
+    Attributes:
+        allowed: Whether request is allowed
+        remaining: Remaining requests in window
+        retry_after: Seconds until limit resets (if blocked)
+        is_suspicious: Whether pattern is suspicious
+    """
+    allowed: bool
+    remaining: int
+    retry_after: Optional[float] = None
+    is_suspicious: bool = False
+
+
+class SessionRateLimiter:
+    """Per-session rate limiter using sliding window algorithm.
+
+    Prevents frame flooding attacks and detects suspicious submission patterns.
+    Uses Redis for distributed rate limiting across instances.
+
+    Features:
+    - Sliding window rate limiting (accurate, no boundary issues)
+    - Burst allowance for legitimate traffic spikes
+    - Suspicious pattern detection
+    - Distributed via Redis
+    """
+
+    def __init__(
+        self,
+        redis_client: redis.Redis,
+        config: Optional[SessionRateLimitConfig] = None,
+    ):
+        self.redis = redis_client
+        self.config = config or SessionRateLimitConfig()
+
+    def check(self, session_id: UUID) -> RateLimitResult:
+        """Check if frame submission is allowed for session.
+
+        Args:
+            session_id: Session to check
+
+        Returns:
+            RateLimitResult with allow/deny and metadata
+        """
+        now = time.time()
+        key_second = f"proctor:rate:{session_id}:second"
+        key_minute = f"proctor:rate:{session_id}:minute"
+        key_violations = f"proctor:rate:{session_id}:violations"
+
+        # Check cooldown from previous violations
+        violations = int(self.redis.get(key_violations) or 0)
+        if violations > 0:
+            ttl = self.redis.ttl(key_violations)
+            if ttl > 0:
+                return RateLimitResult(
+                    allowed=False,
+                    remaining=0,
+                    retry_after=ttl,
+                    is_suspicious=True,
+                )
+
+        # Sliding window check for per-second limit
+        second_count = self._sliding_window_count(key_second, now, 1.0)
+        if second_count >= self.config.max_frames_per_second + self.config.burst_allowance:
+            self._record_violation(session_id)
+            return RateLimitResult(
+                allowed=False,
+                remaining=0,
+                retry_after=1.0,
+                is_suspicious=second_count > self.config.max_frames_per_second * 2,
+            )
+
+        # Sliding window check for per-minute limit
+        minute_count = self._sliding_window_count(key_minute, now, 60.0)
+        if minute_count >= self.config.max_frames_per_minute + self.config.burst_allowance:
+            self._record_violation(session_id)
+            return RateLimitResult(
+                allowed=False,
+                remaining=0,
+                retry_after=60.0 - (now % 60),
+                is_suspicious=minute_count > self.config.max_frames_per_minute * 1.5,
+            )
+
+        # Record this request
+        pipe = self.redis.pipeline()
+        pipe.zadd(key_second, {str(now): now})
+        pipe.expire(key_second, 2)
+        pipe.zadd(key_minute, {str(now): now})
+        pipe.expire(key_minute, 120)
+        pipe.execute()
+
+        return RateLimitResult(
+            allowed=True,
+            remaining=self.config.max_frames_per_minute - minute_count - 1,
+            is_suspicious=False,
+        )
+
+    def _sliding_window_count(self, key: str, now: float, window_seconds: float) -> int:
+        """Count requests in sliding window."""
+        window_start = now - window_seconds
+        # Remove old entries and count current
+        pipe = self.redis.pipeline()
+        pipe.zremrangebyscore(key, 0, window_start)
+        pipe.zcard(key)
+        _, count = pipe.execute()
+        return count
+
+    def _record_violation(self, session_id: UUID) -> None:
+        """Record rate limit violation."""
+        key = f"proctor:rate:{session_id}:violations"
+        pipe = self.redis.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, self.config.cooldown_seconds)
+        pipe.execute()
+
+    def get_session_stats(self, session_id: UUID) -> dict:
+        """Get rate limiting stats for session."""
+        now = time.time()
+        key_minute = f"proctor:rate:{session_id}:minute"
+        key_violations = f"proctor:rate:{session_id}:violations"
+
+        minute_count = self._sliding_window_count(key_minute, now, 60.0)
+        violations = int(self.redis.get(key_violations) or 0)
+
+        return {
+            "frames_last_minute": minute_count,
+            "remaining_this_minute": max(0, self.config.max_frames_per_minute - minute_count),
+            "violation_count": violations,
+            "is_throttled": violations > 0,
+        }
 ```
 
 ### 6.3 Database Schema
@@ -2190,6 +2608,26 @@ PROCTOR_AUDIO_MONITORING_ENABLED=true
 PROCTOR_AUDIO_VAD_THRESHOLD=0.5
 PROCTOR_AUDIO_MULTI_SPEAKER_THRESHOLD=0.7
 
+# Deepfake Detection (Market Differentiator)
+PROCTOR_DEEPFAKE_DETECTION_ENABLED=true
+PROCTOR_DEEPFAKE_CONFIDENCE_THRESHOLD=0.7
+PROCTOR_DEEPFAKE_DETECTION_MODEL=ensemble  # ensemble, frequency, texture
+PROCTOR_DEEPFAKE_TEMPORAL_ANALYSIS=true    # Analyze video frames for temporal artifacts
+
+# Circuit Breaker (ML Resilience)
+PROCTOR_CIRCUIT_BREAKER_ENABLED=true
+PROCTOR_CB_FAILURE_THRESHOLD=5
+PROCTOR_CB_SUCCESS_THRESHOLD=2
+PROCTOR_CB_TIMEOUT_SECONDS=30
+PROCTOR_CB_FALLBACK_BEHAVIOR=skip  # skip, default, error
+
+# Per-Session Rate Limiting
+PROCTOR_SESSION_RATE_LIMIT_ENABLED=true
+PROCTOR_SESSION_MAX_FPS=2.0
+PROCTOR_SESSION_MAX_FRAMES_PER_MINUTE=60
+PROCTOR_SESSION_BURST_ALLOWANCE=5
+PROCTOR_SESSION_RATE_COOLDOWN_SECONDS=10
+
 # Risk Thresholds
 PROCTOR_RISK_THRESHOLD_WARNING=0.5
 PROCTOR_RISK_THRESHOLD_CRITICAL=0.8
@@ -2221,6 +2659,11 @@ DEFAULT_SESSION_CONFIG = SessionConfig(
     enable_object_detection=True,
     enable_audio_monitoring=True,
     enable_multi_face_detection=True,
+    enable_deepfake_detection=True,       # NEW: Market differentiator
+    enable_session_rate_limiting=True,    # NEW: Prevent frame flooding
+    deepfake_confidence_threshold=0.7,    # NEW: Deepfake detection threshold
+    max_frames_per_second=2.0,            # NEW: Per-session rate limit
+    max_frames_per_minute=60,             # NEW: Per-session rate limit
     risk_threshold_warning=0.5,
     risk_threshold_critical=0.8,
     max_pause_duration_sec=300,
@@ -2338,6 +2781,57 @@ PROCTOR_RISK_SCORE = Histogram(
     "Session risk scores",
     buckets=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
 )
+
+# Deepfake detection metrics
+PROCTOR_DEEPFAKE_DETECTIONS_TOTAL = Counter(
+    "biometric_proctor_deepfake_detections_total",
+    "Total deepfake detections",
+    ["result", "method"],  # result: detected/clean, method: frequency/texture/temporal/ensemble
+)
+
+PROCTOR_DEEPFAKE_LATENCY = Histogram(
+    "biometric_proctor_deepfake_latency_seconds",
+    "Deepfake detection latency",
+    buckets=(0.1, 0.25, 0.5, 1.0, 2.0, 5.0),
+)
+
+# Circuit breaker metrics
+PROCTOR_CIRCUIT_BREAKER_STATE = Gauge(
+    "biometric_proctor_circuit_breaker_state",
+    "Circuit breaker state (0=closed, 1=half-open, 2=open)",
+    ["component"],  # face_verifier, deepfake_detector, gaze_tracker, object_detector
+)
+
+PROCTOR_CIRCUIT_BREAKER_TRIPS = Counter(
+    "biometric_proctor_circuit_breaker_trips_total",
+    "Circuit breaker trip count",
+    ["component"],
+)
+
+PROCTOR_CIRCUIT_BREAKER_FALLBACKS = Counter(
+    "biometric_proctor_circuit_breaker_fallbacks_total",
+    "Circuit breaker fallback invocations",
+    ["component"],
+)
+
+# Rate limiting metrics
+PROCTOR_RATE_LIMIT_CHECKS = Counter(
+    "biometric_proctor_rate_limit_checks_total",
+    "Rate limit check count",
+    ["result"],  # allowed, denied
+)
+
+PROCTOR_RATE_LIMIT_VIOLATIONS = Counter(
+    "biometric_proctor_rate_limit_violations_total",
+    "Rate limit violations",
+    ["session_status"],  # suspicious, normal
+)
+
+PROCTOR_FRAMES_PER_SESSION = Histogram(
+    "biometric_proctor_frames_per_session",
+    "Frames submitted per session per minute",
+    buckets=(10, 20, 30, 40, 50, 60, 80, 100, 150),
+)
 ```
 
 ### 10.2 Alerts
@@ -2373,6 +2867,52 @@ PROCTOR_RISK_SCORE = Histogram(
     severity: warning
   annotations:
     summary: "High frame analysis latency"
+
+- alert: ProctorDeepfakeDetectionSpike
+  expr: |
+    sum(rate(biometric_proctor_deepfake_detections_total{result="detected"}[10m])) > 0.5
+  for: 5m
+  labels:
+    severity: critical
+  annotations:
+    summary: "Unusual spike in deepfake detections - possible coordinated attack"
+
+- alert: ProctorCircuitBreakerOpen
+  expr: |
+    biometric_proctor_circuit_breaker_state == 2
+  for: 2m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Circuit breaker open for {{ $labels.component }}"
+    description: "ML component {{ $labels.component }} is failing, circuit breaker is open"
+
+- alert: ProctorCircuitBreakerMultipleOpen
+  expr: |
+    count(biometric_proctor_circuit_breaker_state == 2) >= 2
+  for: 1m
+  labels:
+    severity: critical
+  annotations:
+    summary: "Multiple circuit breakers are open - service degradation"
+
+- alert: ProctorHighRateLimitViolations
+  expr: |
+    sum(rate(biometric_proctor_rate_limit_violations_total[5m])) > 10
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "High rate of rate limit violations - possible abuse"
+
+- alert: ProctorSuspiciousRateLimitPattern
+  expr: |
+    sum(rate(biometric_proctor_rate_limit_violations_total{session_status="suspicious"}[5m])) > 1
+  for: 2m
+  labels:
+    severity: critical
+  annotations:
+    summary: "Suspicious rate limit pattern detected - possible attack"
 ```
 
 ---
@@ -2497,6 +3037,65 @@ Tasks:
 └── Tests
 ```
 
+### Phase 7: Deepfake Detection (Weeks 13-14) - MARKET DIFFERENTIATOR
+
+```
+Tasks:
+├── Domain
+│   ├── DeepfakeAnalysisResult entity
+│   └── DEEPFAKE_DETECTED incident type (already added)
+├── Infrastructure
+│   ├── IDeepfakeDetector interface
+│   ├── FrequencyAnalysisDetector (DCT artifact detection)
+│   ├── TextureAnalysisDetector (skin texture inconsistencies)
+│   ├── TemporalAnalysisDetector (video frame consistency)
+│   └── EnsembleDeepfakeDetector (combines all methods)
+├── ML Models
+│   ├── Train/fine-tune deepfake classifier
+│   ├── Frequency domain analysis (FFT/DCT)
+│   └── Face texture analysis network
+├── Integration
+│   └── Add to frame analysis pipeline (parallel with face verification)
+├── API
+│   └── Deepfake detection results in frame response
+└── Tests
+    ├── Unit tests with synthetic face datasets
+    ├── Integration tests with FaceForensics++ dataset
+    └── False positive rate testing with real faces
+```
+
+### Phase 8: Resilience & Rate Limiting (Weeks 15-16)
+
+```
+Tasks:
+├── Infrastructure
+│   ├── Circuit Breaker implementation
+│   │   ├── CircuitBreaker generic class
+│   │   ├── CircuitBreakerConfig
+│   │   ├── Pre-configured breakers for each ML component
+│   │   └── Fallback behavior handlers
+│   └── Session Rate Limiter implementation
+│       ├── SessionRateLimiter class
+│       ├── Redis sliding window algorithm
+│       ├── Burst allowance logic
+│       └── Suspicious pattern detection
+├── Integration
+│   ├── Wrap all ML components with circuit breakers
+│   ├── Add rate limiting to frame submission endpoint
+│   └── Create RATE_LIMIT_EXCEEDED incidents
+├── Monitoring
+│   ├── Circuit breaker state metrics
+│   ├── Rate limiting metrics
+│   └── Alerts for open circuits
+├── API
+│   ├── Rate limit headers in responses (X-RateLimit-*)
+│   └── 429 Too Many Requests responses
+└── Tests
+    ├── Circuit breaker state transition tests
+    ├── Rate limiter accuracy tests
+    └── Load tests for rate limiting
+```
+
 ---
 
 ## 12. Validation Checklist
@@ -2552,13 +3151,15 @@ app/
 │   ├── entities/
 │   │   ├── proctor_session.py      # NEW
 │   │   ├── proctor_incident.py     # NEW
-│   │   └── proctor_analysis.py     # NEW
+│   │   ├── proctor_analysis.py     # NEW
+│   │   └── deepfake_analysis.py    # NEW v1.1
 │   └── interfaces/
 │       ├── proctor_session_repository.py  # NEW
 │       ├── proctor_incident_repository.py # NEW
 │       ├── gaze_tracker.py         # NEW
 │       ├── object_detector.py      # NEW
-│       └── audio_analyzer.py       # NEW
+│       ├── audio_analyzer.py       # NEW
+│       └── deepfake_detector.py    # NEW v1.1
 ├── application/
 │   └── use_cases/
 │       ├── proctor/                # NEW directory
@@ -2580,18 +3181,28 @@ app/
 │   │   │   └── mediapipe_gaze_tracker.py
 │   │   ├── detection/              # NEW directory
 │   │   │   └── yolo_object_detector.py
-│   │   └── audio/                  # NEW directory
-│   │       └── vad_audio_analyzer.py
+│   │   ├── audio/                  # NEW directory
+│   │   │   └── vad_audio_analyzer.py
+│   │   └── deepfake/               # NEW v1.1 - Market differentiator
+│   │       ├── frequency_analyzer.py      # DCT artifact detection
+│   │       ├── texture_analyzer.py        # Skin texture analysis
+│   │       ├── temporal_analyzer.py       # Video frame consistency
+│   │       └── ensemble_detector.py       # Combined detection
+│   ├── resilience/                 # NEW v1.1 - Reliability patterns
+│   │   ├── circuit_breaker.py      # Circuit breaker implementation
+│   │   └── session_rate_limiter.py # Per-session rate limiting
 │   └── storage/
 │       └── s3_evidence_storage.py  # NEW
 ├── api/
 │   ├── routes/
 │   │   └── proctor.py              # NEW
+│   ├── middleware/
+│   │   └── session_rate_limit.py   # NEW v1.1
 │   └── schemas/
 │       └── proctor.py              # NEW
 └── core/
     └── metrics/
-        └── proctor_metrics.py      # NEW
+        └── proctor_metrics.py      # NEW (includes deepfake, circuit breaker, rate limit metrics)
 ```
 
 ---
@@ -2601,16 +3212,22 @@ app/
 | Term | Definition |
 |------|------------|
 | **Baseline Embedding** | Reference face embedding captured at session start |
+| **Circuit Breaker** | Pattern that stops requests to failing services to prevent cascading failures |
+| **Deepfake** | Synthetic or manipulated face/video created using AI/ML techniques |
 | **Frame** | Single image capture from webcam |
 | **Gaze Direction** | Estimated direction where eyes are looking |
 | **Head Pose** | 3D orientation of head (pitch, yaw, roll) |
 | **Incident** | Detected suspicious event during session |
 | **Liveness** | Verification that face is real, not photo/video |
+| **Rate Limiting** | Controlling the rate of requests per session to prevent abuse |
 | **Risk Score** | Aggregated suspicion level (0.0-1.0) |
 | **Session** | Single proctored exam period |
+| **Sliding Window** | Rate limiting algorithm that counts requests in a moving time window |
 | **Verification** | Confirming identity matches baseline |
 
 ---
 
 **Document Status:** Ready for Review
+**Version:** 1.1 (Added deepfake detection, circuit breaker, per-session rate limiting)
+**Implementation Timeline:** 16 weeks (8 phases)
 **Next Steps:** Stakeholder approval → Implementation kickoff
