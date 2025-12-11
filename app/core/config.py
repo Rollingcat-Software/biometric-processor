@@ -131,6 +131,15 @@ class Settings(BaseSettings):
     EXPORT_FORMAT: Literal["json", "msgpack"] = Field(default="json")
     EXPORT_INCLUDE_METADATA: bool = Field(default=True)
 
+    # API Key Authentication
+    API_KEY_ENABLED: bool = Field(default=False)
+    API_KEY_REQUIRE_AUTH: bool = Field(default=False)
+    API_KEY_HEADER: str = Field(default="X-API-Key")
+
+    # Metrics
+    METRICS_ENABLED: bool = Field(default=True)
+    METRICS_PATH: str = Field(default="/metrics")
+
     model_config = {
         "env_file": ".env",
         "case_sensitive": True,

@@ -17,18 +17,33 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.middleware.error_handler import setup_exception_handlers
+from app.api.middleware.rate_limit import RateLimitMiddleware
+from app.api.middleware.metrics import PrometheusMiddleware
 from app.api.routes import batch, enrollment, health, liveness, search, verification, card_type_router
-from app.api.routes import quality, multi_face, demographics, landmarks, comparison, similarity_matrix, embeddings_io, webhooks
+from app.api.routes import quality, multi_face, demographics, landmarks, comparison, similarity_matrix, embeddings_io, webhooks, metrics
 from app.core.config import settings
 from app.core.container import initialize_dependencies
+from app.core.metrics import init_metrics
+from app.infrastructure.rate_limit.storage_factory import RateLimitStorageFactory
 
 # Configure logging
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-
-logger = logging.getLogger(__name__)
+if settings.LOG_FORMAT == "json":
+    # Use structured logging for JSON format
+    from app.core.logging import configure_logging, get_logger
+    configure_logging(
+        log_level=settings.LOG_LEVEL,
+        log_format="json",
+        service_name=settings.APP_NAME,
+        version=settings.VERSION,
+    )
+    logger = get_logger(__name__)
+else:
+    # Use standard logging for text format
+    logging.basicConfig(
+        level=getattr(logging, settings.LOG_LEVEL),
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+    logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -42,6 +57,11 @@ async def lifespan(app: FastAPI):
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"Face Detection: {settings.FACE_DETECTION_BACKEND}")
     logger.info(f"Face Recognition Model: {settings.FACE_RECOGNITION_MODEL}")
+
+    # Initialize metrics
+    if settings.METRICS_ENABLED:
+        init_metrics(settings.APP_NAME, settings.VERSION, settings.ENVIRONMENT)
+        logger.info("Metrics initialized")
 
     # Initialize dependencies (pre-load ML models)
     logger.info("Initializing dependencies...")
@@ -77,6 +97,31 @@ app.add_middleware(
 )
 
 # ============================================================================
+# Rate Limiting Middleware
+# ============================================================================
+
+if settings.RATE_LIMIT_ENABLED:
+    rate_limit_storage = RateLimitStorageFactory.create(
+        backend=settings.RATE_LIMIT_STORAGE,
+        redis_url=settings.REDIS_URL,
+    )
+    app.add_middleware(
+        RateLimitMiddleware,
+        storage=rate_limit_storage,
+        default_limit=settings.RATE_LIMIT_PER_MINUTE,
+        window_seconds=60,
+    )
+    logger.info(f"Rate limiting enabled: {settings.RATE_LIMIT_PER_MINUTE} requests/minute")
+
+# ============================================================================
+# Prometheus Metrics Middleware
+# ============================================================================
+
+if settings.METRICS_ENABLED:
+    app.add_middleware(PrometheusMiddleware, exclude_paths=["/metrics", "/health"])
+    logger.info("Prometheus metrics middleware enabled")
+
+# ============================================================================
 # Exception Handlers
 # ============================================================================
 
@@ -106,6 +151,11 @@ app.include_router(comparison.router, prefix=API_PREFIX)
 app.include_router(similarity_matrix.router, prefix=API_PREFIX)
 app.include_router(embeddings_io.router, prefix=API_PREFIX)
 app.include_router(webhooks.router, prefix=API_PREFIX)
+
+# Metrics route (no prefix)
+if settings.METRICS_ENABLED:
+    app.include_router(metrics.router)
+
 # ============================================================================
 # Root Endpoint
 # ============================================================================
