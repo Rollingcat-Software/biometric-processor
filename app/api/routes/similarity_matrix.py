@@ -59,7 +59,7 @@ async def compute_similarity_matrix(
     # Parse labels
     label_list = None
     if labels:
-        label_list = [l.strip() for l in labels.split(",")]
+        label_list = [label.strip() for label in labels.split(",")]
         # Ensure label count matches image count
         if len(label_list) != len(images):
             label_list = None

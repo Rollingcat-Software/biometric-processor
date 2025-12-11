@@ -166,11 +166,9 @@ class TextureLivenessDetector(ILivenessDetector):
         # Analyze saturation distribution
         saturation = hsv[:, :, 1]
         sat_mean = np.mean(saturation)
-        sat_std = np.std(saturation)
 
         # Analyze value (brightness) distribution
         value = hsv[:, :, 2]
-        val_mean = np.mean(value)
         val_std = np.std(value)
 
         # Real faces have moderate saturation and varied brightness

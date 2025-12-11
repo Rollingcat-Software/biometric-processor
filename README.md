@@ -22,9 +22,23 @@ This microservice is part of a larger biometric authentication ecosystem develop
 | Face Verification (1:1) | ✅ Complete | Verify if two faces belong to the same person |
 | Face Search (1:N) | ✅ Complete | Identify a person from enrolled faces |
 | Batch Processing | ✅ Complete | Process multiple enrollment/verification requests |
-| Liveness Detection | ✅ Complete | Passive texture-based anti-spoofing detection |
+| Liveness Detection | ✅ Complete | Passive + Active anti-spoofing detection |
 | Card Type Detection | ✅ Complete | YOLO-based document classification |
 | Quality Assessment | ✅ Complete | Face image quality scoring and validation |
+
+### New Features (Sprint 4)
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Quality Feedback | ✅ Complete | Detailed quality analysis with actionable recommendations |
+| Multi-Face Detection | ✅ Complete | Detect all faces in a single image |
+| Demographics Analysis | ✅ Complete | Age, gender, emotion estimation via DeepFace |
+| Facial Landmarks | ✅ Complete | 468-point landmark detection via MediaPipe |
+| Face Comparison | ✅ Complete | Direct 1:1 comparison without enrollment |
+| Similarity Matrix | ✅ Complete | NxN similarity computation with clustering |
+| Embeddings Export/Import | ✅ Complete | Backup and migration of face embeddings |
+| Webhooks | ✅ Complete | Event notifications with HMAC signing |
+| Rate Limiting | ✅ Complete | Sliding window rate limit storage |
 
 ### Technical Features
 
@@ -213,6 +227,8 @@ http://localhost:8001/api/v1
 
 ### Endpoints Summary
 
+#### Core Biometric Operations
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/health` | GET | Health check |
@@ -223,6 +239,23 @@ http://localhost:8001/api/v1
 | `/api/v1/batch/enroll` | POST | Batch enrollment |
 | `/api/v1/batch/verify` | POST | Batch verification |
 | `/api/v1/card-type/detect-live` | POST | Card type detection |
+
+#### New Feature Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/quality/analyze` | POST | Detailed image quality analysis with feedback |
+| `/api/v1/faces/detect-all` | POST | Multi-face detection in single image |
+| `/api/v1/demographics/analyze` | POST | Age, gender, emotion estimation |
+| `/api/v1/landmarks/detect` | POST | 468-point facial landmark detection |
+| `/api/v1/compare` | POST | Direct 1:1 face comparison without enrollment |
+| `/api/v1/similarity/matrix` | POST | NxN similarity matrix computation |
+| `/api/v1/embeddings/export` | GET | Export all embeddings to JSON |
+| `/api/v1/embeddings/import` | POST | Import embeddings from JSON |
+| `/api/v1/webhooks/register` | POST | Register a webhook endpoint |
+| `/api/v1/webhooks` | GET | List registered webhooks |
+| `/api/v1/webhooks/{id}` | DELETE | Delete a webhook |
+| `/api/v1/webhooks/{id}/test` | POST | Test webhook delivery |
 
 ---
 
@@ -464,6 +497,258 @@ Content-Type: multipart/form-data
 | 1 | ehliyet | Driver's License |
 | 2 | pasaport | Passport |
 | 3 | ogrenci_karti | Student Card |
+
+---
+
+### Quality Analysis
+
+Detailed image quality analysis with actionable feedback.
+
+```bash
+POST /api/v1/quality/analyze
+Content-Type: multipart/form-data
+```
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `file` | file | Yes | Face image to analyze |
+
+**Response:**
+```json
+{
+  "overall_score": 85.0,
+  "is_acceptable": true,
+  "metrics": {
+    "blur_score": 150.0,
+    "brightness_score": 120.0,
+    "face_size_score": 100.0
+  },
+  "issues": [],
+  "recommendations": ["Good lighting", "Face well-centered"]
+}
+```
+
+---
+
+### Multi-Face Detection
+
+Detect all faces in a single image.
+
+```bash
+POST /api/v1/faces/detect-all
+Content-Type: multipart/form-data
+```
+
+**Response:**
+```json
+{
+  "faces": [
+    {
+      "face_id": 0,
+      "bounding_box": {"x": 50, "y": 50, "width": 100, "height": 100},
+      "confidence": 0.95,
+      "quality_score": 85.0
+    }
+  ],
+  "face_count": 1,
+  "processing_time_ms": 150.0
+}
+```
+
+---
+
+### Demographics Analysis
+
+Estimate age, gender, and emotion from a face image.
+
+```bash
+POST /api/v1/demographics/analyze
+Content-Type: multipart/form-data
+```
+
+**Response:**
+```json
+{
+  "age": {"value": 30, "confidence": 0.9, "range_low": 25, "range_high": 35},
+  "gender": {"value": "male", "confidence": 0.95},
+  "emotion": {"dominant": "happy", "scores": {"happy": 0.8, "neutral": 0.15}}
+}
+```
+
+---
+
+### Facial Landmarks
+
+Detect 468 facial landmarks using MediaPipe Face Mesh.
+
+```bash
+POST /api/v1/landmarks/detect
+Content-Type: multipart/form-data
+```
+
+**Response:**
+```json
+{
+  "landmarks": [
+    {"index": 0, "name": "nose_tip", "x": 100.0, "y": 100.0, "z": 0.0},
+    {"index": 1, "name": "left_eye", "x": 80.0, "y": 90.0, "z": 0.0}
+  ],
+  "head_pose": {"pitch": 5.0, "yaw": -3.0, "roll": 1.0},
+  "model": "mediapipe_468"
+}
+```
+
+---
+
+### Face Comparison
+
+Compare two faces directly without enrollment.
+
+```bash
+POST /api/v1/compare
+Content-Type: multipart/form-data
+```
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `file1` | file | Yes | First face image |
+| `file2` | file | Yes | Second face image |
+| `threshold` | float | No | Match threshold (default: 0.6) |
+
+**Response:**
+```json
+{
+  "is_match": true,
+  "similarity": 0.87,
+  "distance": 0.13,
+  "threshold": 0.6,
+  "face1": {"bounding_box": [50, 50, 100, 100], "confidence": 0.95},
+  "face2": {"bounding_box": [50, 50, 100, 100], "confidence": 0.93}
+}
+```
+
+---
+
+### Similarity Matrix
+
+Compute NxN similarity matrix for multiple faces.
+
+```bash
+POST /api/v1/similarity/matrix
+Content-Type: multipart/form-data
+```
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `files` | file[] | Yes | Multiple face images |
+| `labels` | string | No | Comma-separated labels |
+| `threshold` | float | No | Clustering threshold (default: 0.6) |
+
+**Response:**
+```json
+{
+  "matrix": [[1.0, 0.85, 0.3], [0.85, 1.0, 0.25], [0.3, 0.25, 1.0]],
+  "labels": ["person_a", "person_a_2", "person_b"],
+  "clusters": [{"id": 0, "members": [0, 1], "avg_similarity": 0.85}],
+  "threshold": 0.6
+}
+```
+
+---
+
+### Embeddings Export
+
+Export all face embeddings for backup/migration.
+
+```bash
+GET /api/v1/embeddings/export?tenant_id=default
+```
+
+**Response:**
+```json
+{
+  "embeddings": [
+    {"user_id": "user1", "vector": [...], "quality_score": 85.0}
+  ],
+  "metadata": {
+    "count": 100,
+    "tenant_id": "default",
+    "export_timestamp": "2024-01-01T00:00:00Z",
+    "checksum": "abc123"
+  }
+}
+```
+
+---
+
+### Embeddings Import
+
+Import embeddings from JSON export.
+
+```bash
+POST /api/v1/embeddings/import
+Content-Type: multipart/form-data
+```
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `file` | file | Yes | JSON export file |
+| `mode` | string | No | merge/replace/skip_existing (default: merge) |
+| `tenant_id` | string | No | Target tenant |
+
+**Response:**
+```json
+{
+  "imported": 95,
+  "skipped": 5,
+  "errors": []
+}
+```
+
+---
+
+### Webhook Management
+
+Register webhooks to receive event notifications.
+
+```bash
+POST /api/v1/webhooks/register
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "url": "https://example.com/webhook",
+  "events": ["enrollment", "verification", "liveness"],
+  "secret": "optional_hmac_secret"
+}
+```
+
+**Response:**
+```json
+{
+  "webhook_id": "wh_abc123def456",
+  "url": "https://example.com/webhook",
+  "events": ["enrollment", "verification"],
+  "enabled": true,
+  "created_at": "2024-01-01T00:00:00Z"
+}
+```
+
+**Webhook Event Payload:**
+```json
+{
+  "event_type": "enrollment.success",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "tenant_id": "default",
+  "data": {"user_id": "user123", "quality_score": 85.0}
+}
+```
 
 ---
 
