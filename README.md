@@ -350,7 +350,7 @@ Content-Type: multipart/form-data
 
 ### Liveness Detection
 
-Passive texture-based liveness detection to prevent spoofing attacks.
+Anti-spoofing liveness detection with configurable modes.
 
 ```bash
 POST /api/v1/liveness
@@ -366,16 +366,22 @@ Content-Type: multipart/form-data
 ```json
 {
   "is_live": true,
-  "liveness_score": 92.5,
-  "challenge": "texture_analysis",
+  "liveness_score": 85.0,
+  "challenge": "combined",
   "challenge_completed": true,
   "message": "Liveness check passed"
 }
 ```
 
-**Detection Methods:**
-The liveness detector uses multiple heuristics with weighted scoring:
+**Detection Modes** (set via `LIVENESS_MODE` env var):
 
+| Mode | Description | Best For |
+|------|-------------|----------|
+| `passive` | Texture-based analysis | Detecting printed photos, screens |
+| `active` | Smile/blink detection via MediaPipe | Interactive verification |
+| `combined` | Both methods (default) | Highest accuracy |
+
+**Passive Detection Methods:**
 | Method | Weight | Description |
 |--------|--------|-------------|
 | Texture Analysis | 35% | Laplacian variance for texture variation |
@@ -383,7 +389,13 @@ The liveness detector uses multiple heuristics with weighted scoring:
 | Frequency Analysis | 25% | FFT-based frequency pattern detection |
 | Moiré Detection | 15% | Gabor filter screen pattern detection |
 
-**Threshold:** Score ≥ 60.0 = Live
+**Active Detection Methods:**
+| Method | Description |
+|--------|-------------|
+| Eye Aspect Ratio (EAR) | Detects if eyes are open (EAR > 0.25) |
+| Mouth Aspect Ratio (MAR) | Detects smile (MAR > 0.6) |
+
+**Threshold:** Score ≥ 70.0 = Live (configurable via `LIVENESS_THRESHOLD`)
 
 ---
 
@@ -485,7 +497,8 @@ Configure via `FACE_RECOGNITION_MODEL` environment variable.
 | `FACE_DETECTION_BACKEND` | opencv | Face detector (opencv/ssd/mtcnn/retinaface) |
 | `FACE_RECOGNITION_MODEL` | Facenet | Recognition model |
 | `VERIFICATION_THRESHOLD` | 0.6 | Verification distance threshold |
-| `LIVENESS_THRESHOLD` | 80.0 | Liveness score threshold (0-100) |
+| `LIVENESS_MODE` | combined | Liveness mode (passive/active/combined) |
+| `LIVENESS_THRESHOLD` | 70.0 | Liveness score threshold (0-100) |
 | `QUALITY_THRESHOLD` | 70.0 | Quality score threshold (0-100) |
 | `MIN_FACE_SIZE` | 80 | Minimum face size in pixels |
 | `BLUR_THRESHOLD` | 100.0 | Blur detection threshold |
@@ -537,7 +550,7 @@ pre-commit install
 - **In-Memory Storage**: Face embeddings are stored in memory and lost on restart
 - **No Database**: PostgreSQL integration planned for Sprint 4
 - **No Redis**: Caching/queue integration planned for Sprint 5
-- **Passive Liveness Only**: Active challenge-response liveness not yet implemented
+- **No Docker**: Containerization planned for Sprint 5
 
 ## Roadmap
 

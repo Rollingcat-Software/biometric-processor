@@ -70,8 +70,11 @@ class Settings(BaseSettings):
 
     # Thresholds
     VERIFICATION_THRESHOLD: float = Field(default=0.6, ge=0.0, le=1.0)
-    LIVENESS_THRESHOLD: float = Field(default=80.0, ge=0.0, le=100.0)
+    LIVENESS_THRESHOLD: float = Field(default=70.0, ge=0.0, le=100.0)
     QUALITY_THRESHOLD: float = Field(default=70.0, ge=0.0, le=100.0)
+
+    # Liveness Detection Mode
+    LIVENESS_MODE: Literal["passive", "active", "combined"] = Field(default="combined")
 
     # Quality Assessment
     MIN_IMAGE_SIZE: int = Field(default=100, ge=50, le=1000)

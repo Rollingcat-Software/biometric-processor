@@ -35,6 +35,8 @@ from app.infrastructure.ml.factories.detector_factory import FaceDetectorFactory
 from app.infrastructure.ml.factories.extractor_factory import EmbeddingExtractorFactory
 from app.infrastructure.ml.factories.similarity_factory import SimilarityCalculatorFactory
 from app.infrastructure.ml.liveness.texture_liveness_detector import TextureLivenessDetector
+from app.infrastructure.ml.liveness.active_liveness_detector import ActiveLivenessDetector
+from app.infrastructure.ml.liveness.combined_liveness_detector import CombinedLivenessDetector
 from app.infrastructure.ml.quality.quality_assessor import QualityAssessor
 from app.infrastructure.persistence.repositories.memory_embedding_repository import (
     InMemoryEmbeddingRepository,
@@ -134,19 +136,36 @@ def get_liveness_detector() -> ILivenessDetector:
     """Get liveness detector instance (singleton).
 
     Returns:
-        Liveness detector implementation
-
-    Note:
-        Uses TextureLivenessDetector which analyzes image properties
-        to detect spoofing attacks (printed photos, screens).
+        Liveness detector implementation based on LIVENESS_MODE setting:
+        - passive: Texture-based analysis (printed photos, screens)
+        - active: Facial action analysis (smile, blink)
+        - combined: Both methods for highest accuracy
     """
-    logger.info("Creating liveness detector (texture-based)")
-    return TextureLivenessDetector(
-        texture_threshold=100.0,
-        color_threshold=0.3,
-        frequency_threshold=0.5,
-        liveness_threshold=60.0,
-    )
+    mode = settings.LIVENESS_MODE
+    threshold = settings.LIVENESS_THRESHOLD
+
+    if mode == "passive":
+        logger.info("Creating liveness detector (passive/texture-based)")
+        return TextureLivenessDetector(
+            texture_threshold=100.0,
+            color_threshold=0.3,
+            frequency_threshold=0.5,
+            liveness_threshold=60.0,
+        )
+    elif mode == "active":
+        logger.info("Creating liveness detector (active/smile-blink)")
+        return ActiveLivenessDetector(
+            ear_threshold=0.25,
+            mar_threshold=0.6,
+            liveness_threshold=threshold,
+        )
+    else:  # combined (default)
+        logger.info("Creating liveness detector (combined)")
+        return CombinedLivenessDetector(
+            texture_weight=0.4,
+            active_weight=0.6,
+            liveness_threshold=threshold,
+        )
 
 
 # ============================================================================

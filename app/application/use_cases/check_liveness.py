@@ -22,8 +22,8 @@ class CheckLivenessUseCase:
     Dependencies are injected for testability (Dependency Inversion Principle).
 
     Note:
-        Currently uses StubLivenessDetector which always passes.
-        Will be updated in Sprint 3 with real smile/blink detection.
+        Uses TextureLivenessDetector for passive liveness detection.
+        Active liveness (smile/blink) is planned for future implementation.
     """
 
     def __init__(
