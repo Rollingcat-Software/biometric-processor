@@ -299,9 +299,11 @@ node test_manual.js
 | GET | `/api/v1/health` | Health check |
 | POST | `/api/v1/enroll` | Enroll a face |
 | POST | `/api/v1/verify` | Verify a face (1:1) |
+| POST | `/api/v1/search` | Search for similar faces (1:N) |
 | POST | `/api/v1/liveness` | Check liveness |
-| POST | `/api/v1/search` | Search for similar faces |
 | POST | `/api/v1/batch/enroll` | Batch enrollment |
+| POST | `/api/v1/batch/verify` | Batch verification |
+| POST | `/api/v1/card-type/detect-live` | Card type detection |
 
 ---
 
