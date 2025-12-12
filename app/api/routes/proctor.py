@@ -27,10 +27,26 @@ from app.api.schemas.proctor import (
     SubmitFrameRequest,
     SubmitFrameResponse,
 )
+from app.api.dependencies.proctor import (
+    get_proctor_session_repository,
+    get_proctor_incident_repository,
+    get_session_rate_limiter,
+    get_create_session_use_case,
+    get_start_session_use_case,
+    get_submit_frame_use_case,
+    get_end_session_use_case,
+    get_pause_session_use_case,
+    get_resume_session_use_case,
+    get_create_incident_use_case,
+    get_review_incident_use_case,
+    get_session_report_use_case,
+    get_list_incidents_use_case,
+)
+from app.domain.entities.proctor_session import SessionStatus
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/proctor", tags=["proctoring"])
+router = APIRouter(prefix="/proctoring", tags=["proctoring"])
 
 
 def get_tenant_id(x_tenant_id: str = Header(..., alias="X-Tenant-ID")) -> str:
@@ -49,6 +65,7 @@ def get_reviewer_id(x_reviewer_id: str = Header(None, alias="X-Reviewer-ID")) ->
 async def create_session(
     request: CreateSessionRequest,
     tenant_id: str = Depends(get_tenant_id),
+    use_case=Depends(get_create_session_use_case),
 ):
     """Create a new proctoring session.
 
@@ -57,13 +74,8 @@ async def create_session(
     """
     try:
         from app.application.use_cases.proctor.create_session import (
-            CreateProctorSession,
             CreateSessionRequest as UseCaseRequest,
         )
-        from app.api.dependencies import get_session_repository
-
-        repository = await get_session_repository()
-        use_case = CreateProctorSession(repository)
 
         result = await use_case.execute(
             UseCaseRequest(
@@ -98,30 +110,21 @@ async def start_session(
     session_id: UUID,
     request: StartSessionRequest = None,
     tenant_id: str = Depends(get_tenant_id),
+    use_case=Depends(get_start_session_use_case),
 ):
     """Start a proctoring session.
 
     Begins active monitoring. Requires a baseline image or existing user embedding.
     """
     try:
+        import cv2
         from app.application.use_cases.proctor.start_session import (
-            StartProctorSession,
             StartSessionRequest as UseCaseRequest,
-        )
-        from app.api.dependencies import get_session_repository, get_embedding_repository
-
-        session_repo = await get_session_repository()
-        embedding_repo = await get_embedding_repository()
-
-        use_case = StartProctorSession(
-            session_repository=session_repo,
-            embedding_repository=embedding_repo,
         )
 
         # Decode baseline image if provided
         baseline_image = None
         if request and request.baseline_image_base64:
-            import cv2
             image_bytes = base64.b64decode(request.baseline_image_base64)
             nparr = np.frombuffer(image_bytes, np.uint8)
             baseline_image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -155,18 +158,12 @@ async def start_session(
 async def pause_session(
     session_id: UUID,
     tenant_id: str = Depends(get_tenant_id),
+    use_case=Depends(get_pause_session_use_case),
 ):
     """Pause a proctoring session."""
     try:
-        from app.application.use_cases.proctor.end_session import PauseProctorSession
-        from app.api.dependencies import get_session_repository
-
-        repository = await get_session_repository()
-        use_case = PauseProctorSession(repository)
-
         result = await use_case.execute(session_id, tenant_id)
-        return result
-
+        return {"status": "paused", "session_id": str(session_id)}
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -175,18 +172,12 @@ async def pause_session(
 async def resume_session(
     session_id: UUID,
     tenant_id: str = Depends(get_tenant_id),
+    use_case=Depends(get_resume_session_use_case),
 ):
     """Resume a paused proctoring session."""
     try:
-        from app.application.use_cases.proctor.end_session import ResumeProctorSession
-        from app.api.dependencies import get_session_repository
-
-        repository = await get_session_repository()
-        use_case = ResumeProctorSession(repository)
-
         result = await use_case.execute(session_id, tenant_id)
-        return result
-
+        return {"status": "active", "session_id": str(session_id)}
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -196,17 +187,13 @@ async def end_session(
     session_id: UUID,
     request: EndSessionRequest = None,
     tenant_id: str = Depends(get_tenant_id),
+    use_case=Depends(get_end_session_use_case),
 ):
     """End a proctoring session."""
     try:
         from app.application.use_cases.proctor.end_session import (
-            EndProctorSession,
             EndSessionRequest as UseCaseRequest,
         )
-        from app.api.dependencies import get_session_repository
-
-        repository = await get_session_repository()
-        use_case = EndProctorSession(repository)
 
         result = await use_case.execute(
             UseCaseRequest(
@@ -234,12 +221,10 @@ async def end_session(
 async def get_session(
     session_id: UUID,
     tenant_id: str = Depends(get_tenant_id),
+    repository=Depends(get_proctor_session_repository),
 ):
     """Get session details."""
     try:
-        from app.api.dependencies import get_session_repository
-
-        repository = await get_session_repository()
         session = await repository.get_by_id(session_id, tenant_id)
 
         if not session:
@@ -265,17 +250,13 @@ async def list_sessions(
     tenant_id: str = Depends(get_tenant_id),
     exam_id: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
+    session_status: Optional[str] = Query(None, alias="status"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    repository=Depends(get_proctor_session_repository),
 ):
     """List proctoring sessions with optional filters."""
     try:
-        from app.api.dependencies import get_session_repository
-        from app.domain.entities.proctor_session import SessionStatus
-
-        repository = await get_session_repository()
-
         if exam_id:
             sessions = await repository.get_sessions_by_exam(
                 exam_id, tenant_id, limit, offset
@@ -284,16 +265,16 @@ async def list_sessions(
             sessions = await repository.get_sessions_by_user(
                 user_id, tenant_id, limit, offset
             )
-        elif status:
+        elif session_status:
             try:
-                session_status = SessionStatus(status)
+                status_enum = SessionStatus(session_status)
                 sessions = await repository.get_sessions_by_status(
-                    session_status, tenant_id, limit, offset
+                    status_enum, tenant_id, limit, offset
                 )
             except ValueError:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid status: {status}",
+                    detail=f"Invalid status: {session_status}",
                 )
         else:
             sessions = await repository.get_active_sessions(tenant_id, limit, offset)
@@ -322,6 +303,7 @@ async def submit_frame(
     session_id: UUID,
     request: SubmitFrameRequest,
     tenant_id: str = Depends(get_tenant_id),
+    use_case=Depends(get_submit_frame_use_case),
 ):
     """Submit a frame for analysis.
 
@@ -331,13 +313,7 @@ async def submit_frame(
     try:
         import cv2
         from app.application.use_cases.proctor.submit_frame import (
-            SubmitFrame,
             SubmitFrameRequest as UseCaseRequest,
-        )
-        from app.api.dependencies import (
-            get_session_repository,
-            get_incident_repository,
-            get_rate_limiter,
         )
 
         # Decode frame
@@ -354,17 +330,8 @@ async def submit_frame(
         # Decode audio if provided
         audio_data = None
         if request.audio_base64:
-            audio_data = base64.b64decode(request.audio_base64)
-
-        session_repo = await get_session_repository()
-        incident_repo = await get_incident_repository()
-        rate_limiter = await get_rate_limiter()
-
-        use_case = SubmitFrame(
-            session_repository=session_repo,
-            incident_repository=incident_repo,
-            rate_limiter=rate_limiter,
-        )
+            audio_bytes = base64.b64decode(request.audio_base64)
+            audio_data = np.frombuffer(audio_bytes, dtype=np.float32)
 
         result = await use_case.execute(
             UseCaseRequest(
@@ -412,21 +379,12 @@ async def create_incident(
     session_id: UUID,
     request: CreateIncidentRequest,
     tenant_id: str = Depends(get_tenant_id),
+    use_case=Depends(get_create_incident_use_case),
 ):
     """Manually create an incident for a session."""
     try:
         from app.application.use_cases.proctor.create_incident import (
-            CreateIncident,
             CreateIncidentRequest as UseCaseRequest,
-        )
-        from app.api.dependencies import get_session_repository, get_incident_repository
-
-        session_repo = await get_session_repository()
-        incident_repo = await get_incident_repository()
-
-        use_case = CreateIncident(
-            incident_repository=incident_repo,
-            session_repository=session_repo,
         )
 
         result = await use_case.execute(
@@ -460,17 +418,10 @@ async def list_incidents(
     reviewed: Optional[bool] = Query(None),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    use_case=Depends(get_list_incidents_use_case),
 ):
     """List incidents for a session."""
     try:
-        from app.application.use_cases.proctor.get_session_report import (
-            ListSessionIncidents,
-        )
-        from app.api.dependencies import get_incident_repository
-
-        repository = await get_incident_repository()
-        use_case = ListSessionIncidents(repository)
-
         incidents = await use_case.execute(
             session_id=session_id,
             severity=severity,
@@ -480,7 +431,7 @@ async def list_incidents(
         )
 
         return IncidentListResponse(
-            incidents=[IncidentResponse(**i) for i in incidents],
+            incidents=[IncidentResponse(**i.to_dict()) for i in incidents],
             total=len(incidents),
         )
 
@@ -489,12 +440,12 @@ async def list_incidents(
 
 
 @router.get("/incidents/{incident_id}", response_model=IncidentResponse)
-async def get_incident(incident_id: UUID):
+async def get_incident(
+    incident_id: UUID,
+    repository=Depends(get_proctor_incident_repository),
+):
     """Get incident details."""
     try:
-        from app.api.dependencies import get_incident_repository
-
-        repository = await get_incident_repository()
         incident = await repository.get_by_id(incident_id)
 
         if not incident:
@@ -514,6 +465,7 @@ async def review_incident(
     incident_id: UUID,
     request: ReviewIncidentRequest,
     reviewer_id: str = Depends(get_reviewer_id),
+    use_case=Depends(get_review_incident_use_case),
 ):
     """Review an incident and take action."""
     if not reviewer_id:
@@ -524,13 +476,8 @@ async def review_incident(
 
     try:
         from app.application.use_cases.proctor.create_incident import (
-            ReviewIncident,
             ReviewIncidentRequest as UseCaseRequest,
         )
-        from app.api.dependencies import get_incident_repository
-
-        repository = await get_incident_repository()
-        use_case = ReviewIncident(repository)
 
         result = await use_case.execute(
             UseCaseRequest(
@@ -541,7 +488,7 @@ async def review_incident(
             )
         )
 
-        return result
+        return {"status": "reviewed", "incident_id": str(incident_id)}
 
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -553,20 +500,10 @@ async def review_incident(
 async def get_session_report(
     session_id: UUID,
     tenant_id: str = Depends(get_tenant_id),
+    use_case=Depends(get_session_report_use_case),
 ):
     """Get comprehensive session report."""
     try:
-        from app.application.use_cases.proctor.get_session_report import GetSessionReport
-        from app.api.dependencies import get_session_repository, get_incident_repository
-
-        session_repo = await get_session_repository()
-        incident_repo = await get_incident_repository()
-
-        use_case = GetSessionReport(
-            session_repository=session_repo,
-            incident_repository=incident_repo,
-        )
-
         report = await use_case.execute(session_id, tenant_id)
 
         return SessionReportResponse(
@@ -595,12 +532,10 @@ async def get_session_report(
 @router.get("/sessions/{session_id}/rate-limit", response_model=RateLimitStatusResponse)
 async def get_rate_limit_status(
     session_id: UUID,
+    rate_limiter=Depends(get_session_rate_limiter),
 ):
     """Get rate limit status for a session."""
     try:
-        from app.api.dependencies import get_rate_limiter
-
-        rate_limiter = await get_rate_limiter()
         if not rate_limiter:
             return RateLimitStatusResponse(
                 session_id=str(session_id),
