@@ -13,6 +13,14 @@ from app.domain.interfaces.liveness_detector import ILivenessDetector
 from app.domain.interfaces.quality_assessor import IQualityAssessor
 from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
 
+# Proctoring interfaces
+from app.domain.interfaces.proctor_session_repository import IProctorSessionRepository
+from app.domain.interfaces.proctor_incident_repository import IProctorIncidentRepository
+from app.domain.interfaces.gaze_tracker import IGazeTracker
+from app.domain.interfaces.object_detector import IObjectDetector
+from app.domain.interfaces.audio_analyzer import IAudioAnalyzer
+from app.domain.interfaces.deepfake_detector import IDeepfakeDetector
+
 __all__ = [
     "ICardTypeDetector",
     "IFaceDetector",
@@ -22,4 +30,11 @@ __all__ = [
     "IEmbeddingRepository",
     "IFileStorage",
     "ILivenessDetector",
+    # Proctoring
+    "IProctorSessionRepository",
+    "IProctorIncidentRepository",
+    "IGazeTracker",
+    "IObjectDetector",
+    "IAudioAnalyzer",
+    "IDeepfakeDetector",
 ]
