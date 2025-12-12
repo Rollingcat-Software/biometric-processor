@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: biometric-models-pvc
+  namespace: biometric-processor
+  labels:
+    app.kubernetes.io/name: biometric-processor
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadOnlyMany
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 5Gi

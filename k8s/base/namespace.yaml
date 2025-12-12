@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: biometric-processor
+  labels:
+    app.kubernetes.io/name: biometric-processor
+    app.kubernetes.io/component: namespace

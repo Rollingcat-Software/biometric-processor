@@ -34,7 +34,10 @@ class LandmarkDetectorFactory:
             return MediaPipeLandmarkDetector()
 
         elif model == "dlib_68":
-            # Placeholder for dlib implementation
-            raise NotImplementedError("dlib_68 model not yet implemented")
+            from app.infrastructure.ml.landmarks.dlib_landmarks import (
+                DlibLandmarkDetector,
+            )
+
+            return DlibLandmarkDetector()
 
         raise ValueError(f"Unknown landmark model: {model}")
