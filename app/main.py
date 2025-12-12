@@ -22,6 +22,7 @@ from app.api.middleware.metrics import PrometheusMiddleware
 from app.api.routes import batch, enrollment, health, liveness, search, verification, card_type_router
 from app.api.routes import quality, multi_face, demographics, landmarks, comparison, similarity_matrix, embeddings_io, webhooks, metrics
 from app.api.routes import proctor
+from app.api.routes import proctor_ws
 from app.core.config import settings
 from app.core.container import initialize_dependencies
 from app.core.metrics import init_metrics
@@ -155,6 +156,9 @@ app.include_router(webhooks.router, prefix=API_PREFIX)
 
 # Proctoring routes
 app.include_router(proctor.router, prefix=API_PREFIX)
+
+# WebSocket routes (proctoring real-time streaming)
+app.include_router(proctor_ws.router, prefix=API_PREFIX)
 
 # Metrics route (no prefix)
 if settings.METRICS_ENABLED:
