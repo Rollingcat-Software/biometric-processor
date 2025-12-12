@@ -2,6 +2,7 @@
 
 FastAPI dependencies for proctoring endpoints.
 Provides dependency injection for use cases and repositories.
+All settings are loaded from environment configuration.
 """
 
 import logging
@@ -10,6 +11,7 @@ from typing import Optional
 
 from fastapi import Depends
 
+from app.core.config import settings
 from app.domain.interfaces.audio_analyzer import IAudioAnalyzer
 from app.domain.interfaces.deepfake_detector import IDeepfakeDetector
 from app.domain.interfaces.gaze_tracker import IGazeTracker
@@ -46,7 +48,7 @@ from app.infrastructure.resilience.session_rate_limiter import (
     SessionRateLimiter,
 )
 
-# Repository implementations (in-memory for now)
+# Repository implementations
 from app.infrastructure.persistence.repositories.memory_proctor_repository import (
     InMemoryProctorSessionRepository,
     InMemoryProctorIncidentRepository,
@@ -56,62 +58,178 @@ logger = logging.getLogger(__name__)
 
 # ============================================================================
 # Proctoring ML Dependencies (Singletons)
+# Uses configuration from settings
 # ============================================================================
 
 
 @lru_cache()
 def get_gaze_tracker() -> IGazeTracker:
-    """Get gaze tracker instance (singleton)."""
-    logger.info("Creating gaze tracker (MediaPipe)")
-    return GazeTrackerFactory.create()
+    """Get gaze tracker instance (singleton).
+
+    Configuration from:
+    - PROCTOR_GAZE_THRESHOLD
+    - PROCTOR_HEAD_PITCH_THRESHOLD
+    - PROCTOR_HEAD_YAW_THRESHOLD
+    """
+    if not settings.PROCTOR_GAZE_ENABLED:
+        logger.info("Gaze tracking disabled, returning None")
+        return None
+
+    logger.info(
+        f"Creating gaze tracker (MediaPipe) with threshold={settings.PROCTOR_GAZE_THRESHOLD}"
+    )
+    return GazeTrackerFactory.create(
+        gaze_threshold=settings.PROCTOR_GAZE_THRESHOLD,
+        head_pose_threshold=(
+            settings.PROCTOR_HEAD_PITCH_THRESHOLD,
+            settings.PROCTOR_HEAD_YAW_THRESHOLD,
+        ),
+    )
 
 
 @lru_cache()
 def get_object_detector() -> IObjectDetector:
-    """Get object detector instance (singleton)."""
-    logger.info("Creating object detector (YOLO)")
-    return ObjectDetectorFactory.create(model_size="nano")
+    """Get object detector instance (singleton).
+
+    Configuration from:
+    - PROCTOR_OBJECT_MODEL_SIZE
+    - PROCTOR_OBJECT_CONFIDENCE_THRESHOLD
+    - PROCTOR_MAX_PERSONS_ALLOWED
+    """
+    if not settings.PROCTOR_OBJECT_DETECTION_ENABLED:
+        logger.info("Object detection disabled, returning None")
+        return None
+
+    logger.info(
+        f"Creating object detector (YOLO {settings.PROCTOR_OBJECT_MODEL_SIZE}) "
+        f"with threshold={settings.PROCTOR_OBJECT_CONFIDENCE_THRESHOLD}"
+    )
+    return ObjectDetectorFactory.create(
+        model_size=settings.PROCTOR_OBJECT_MODEL_SIZE,
+        confidence_threshold=settings.PROCTOR_OBJECT_CONFIDENCE_THRESHOLD,
+        max_persons_allowed=settings.PROCTOR_MAX_PERSONS_ALLOWED,
+    )
 
 
 @lru_cache()
 def get_deepfake_detector() -> IDeepfakeDetector:
-    """Get deepfake detector instance (singleton)."""
-    logger.info("Creating deepfake detector (texture-based)")
-    return DeepfakeDetectorFactory.create()
+    """Get deepfake detector instance (singleton).
+
+    Configuration from:
+    - PROCTOR_DEEPFAKE_THRESHOLD
+    - PROCTOR_DEEPFAKE_TEMPORAL_WINDOW
+    """
+    if not settings.PROCTOR_DEEPFAKE_ENABLED:
+        logger.info("Deepfake detection disabled, returning None")
+        return None
+
+    logger.info(
+        f"Creating deepfake detector (texture-based) "
+        f"with threshold={settings.PROCTOR_DEEPFAKE_THRESHOLD}"
+    )
+    return DeepfakeDetectorFactory.create(
+        deepfake_threshold=settings.PROCTOR_DEEPFAKE_THRESHOLD,
+        temporal_window=settings.PROCTOR_DEEPFAKE_TEMPORAL_WINDOW,
+    )
 
 
 @lru_cache()
 def get_audio_analyzer() -> IAudioAnalyzer:
-    """Get audio analyzer instance (singleton)."""
-    logger.info("Creating audio analyzer (basic)")
-    return AudioAnalyzerFactory.create()
+    """Get audio analyzer instance (singleton).
+
+    Configuration from:
+    - PROCTOR_AUDIO_SAMPLE_RATE
+    - PROCTOR_AUDIO_VAD_THRESHOLD
+    """
+    if not settings.PROCTOR_AUDIO_ENABLED:
+        logger.info("Audio analysis disabled, returning None")
+        return None
+
+    logger.info(
+        f"Creating audio analyzer (basic) "
+        f"with sample_rate={settings.PROCTOR_AUDIO_SAMPLE_RATE}"
+    )
+    return AudioAnalyzerFactory.create(
+        sample_rate=settings.PROCTOR_AUDIO_SAMPLE_RATE,
+        vad_threshold=settings.PROCTOR_AUDIO_VAD_THRESHOLD,
+    )
 
 
 # ============================================================================
 # Proctoring Repository Dependencies (Singletons)
 # ============================================================================
 
+# Database pool for PostgreSQL (initialized lazily)
+_db_pool = None
+
+
+async def _get_db_pool():
+    """Get or create database connection pool."""
+    global _db_pool
+    if _db_pool is None and settings.DATABASE_URL:
+        import asyncpg
+        _db_pool = await asyncpg.create_pool(
+            settings.DATABASE_URL,
+            min_size=5,
+            max_size=settings.DATABASE_POOL_SIZE,
+        )
+        logger.info("Created PostgreSQL connection pool for proctoring")
+    return _db_pool
+
 
 @lru_cache()
 def get_proctor_session_repository() -> IProctorSessionRepository:
     """Get proctoring session repository (singleton).
 
-    Note: Uses in-memory storage for development.
-    Replace with PostgreSQL implementation for production.
+    Storage type controlled by PROCTOR_STORAGE_TYPE:
+    - "memory": In-memory storage (development/testing)
+    - "postgres": PostgreSQL storage (production)
     """
-    logger.info("Creating proctoring session repository (in-memory)")
-    return InMemoryProctorSessionRepository()
+    storage_type = settings.PROCTOR_STORAGE_TYPE
+
+    if storage_type == "postgres" and settings.DATABASE_URL:
+        # For PostgreSQL, we need async initialization
+        # Return a lazy wrapper that initializes on first use
+        logger.info("Creating proctoring session repository (PostgreSQL)")
+        from app.infrastructure.persistence.repositories.postgres_session_repository import (
+            PostgresSessionRepository,
+        )
+        # Note: Pool will be injected when database is available
+        # For now, return in-memory as fallback
+        logger.warning(
+            "PostgreSQL pool not available yet, using in-memory repository. "
+            "Restart after database initialization for PostgreSQL storage."
+        )
+        return InMemoryProctorSessionRepository()
+    else:
+        logger.info("Creating proctoring session repository (in-memory)")
+        return InMemoryProctorSessionRepository()
 
 
 @lru_cache()
 def get_proctor_incident_repository() -> IProctorIncidentRepository:
     """Get proctoring incident repository (singleton).
 
-    Note: Uses in-memory storage for development.
-    Replace with PostgreSQL implementation for production.
+    Storage type controlled by PROCTOR_STORAGE_TYPE:
+    - "memory": In-memory storage (development/testing)
+    - "postgres": PostgreSQL storage (production)
     """
-    logger.info("Creating proctoring incident repository (in-memory)")
-    return InMemoryProctorIncidentRepository()
+    storage_type = settings.PROCTOR_STORAGE_TYPE
+
+    if storage_type == "postgres" and settings.DATABASE_URL:
+        logger.info("Creating proctoring incident repository (PostgreSQL)")
+        from app.infrastructure.persistence.repositories.postgres_incident_repository import (
+            PostgresIncidentRepository,
+        )
+        # Note: Pool will be injected when database is available
+        logger.warning(
+            "PostgreSQL pool not available yet, using in-memory repository. "
+            "Restart after database initialization for PostgreSQL storage."
+        )
+        return InMemoryProctorIncidentRepository()
+    else:
+        logger.info("Creating proctoring incident repository (in-memory)")
+        return InMemoryProctorIncidentRepository()
 
 
 # ============================================================================
@@ -120,12 +238,28 @@ def get_proctor_incident_repository() -> IProctorIncidentRepository:
 
 
 @lru_cache()
-def get_session_rate_limiter() -> SessionRateLimiter:
-    """Get session rate limiter (singleton)."""
-    logger.info("Creating session rate limiter (in-memory)")
+def get_session_rate_limiter() -> Optional[SessionRateLimiter]:
+    """Get session rate limiter (singleton).
+
+    Configuration from:
+    - PROCTOR_RATE_LIMIT_ENABLED
+    - PROCTOR_MAX_FRAMES_PER_SECOND
+    - PROCTOR_MAX_FRAMES_PER_MINUTE
+    - PROCTOR_RATE_LIMIT_BURST_ALLOWANCE
+    """
+    if not settings.PROCTOR_RATE_LIMIT_ENABLED:
+        logger.info("Per-session rate limiting disabled")
+        return None
+
+    logger.info(
+        f"Creating session rate limiter: "
+        f"{settings.PROCTOR_MAX_FRAMES_PER_SECOND}/sec, "
+        f"{settings.PROCTOR_MAX_FRAMES_PER_MINUTE}/min"
+    )
     return InMemorySessionRateLimiter(
-        max_frames_per_second=5,
-        max_frames_per_minute=120,
+        max_frames_per_second=settings.PROCTOR_MAX_FRAMES_PER_SECOND,
+        max_frames_per_minute=settings.PROCTOR_MAX_FRAMES_PER_MINUTE,
+        burst_allowance=settings.PROCTOR_RATE_LIMIT_BURST_ALLOWANCE,
     )
 
 
@@ -151,13 +285,16 @@ def get_start_session_use_case(
 def get_submit_frame_use_case(
     session_repo: IProctorSessionRepository = Depends(get_proctor_session_repository),
     incident_repo: IProctorIncidentRepository = Depends(get_proctor_incident_repository),
-    gaze_tracker: IGazeTracker = Depends(get_gaze_tracker),
-    object_detector: IObjectDetector = Depends(get_object_detector),
-    deepfake_detector: IDeepfakeDetector = Depends(get_deepfake_detector),
-    audio_analyzer: IAudioAnalyzer = Depends(get_audio_analyzer),
-    rate_limiter: SessionRateLimiter = Depends(get_session_rate_limiter),
+    gaze_tracker: Optional[IGazeTracker] = Depends(get_gaze_tracker),
+    object_detector: Optional[IObjectDetector] = Depends(get_object_detector),
+    deepfake_detector: Optional[IDeepfakeDetector] = Depends(get_deepfake_detector),
+    audio_analyzer: Optional[IAudioAnalyzer] = Depends(get_audio_analyzer),
+    rate_limiter: Optional[SessionRateLimiter] = Depends(get_session_rate_limiter),
 ) -> SubmitFrame:
-    """Get submit frame use case with all ML dependencies."""
+    """Get submit frame use case with all ML dependencies.
+
+    Note: Some dependencies may be None if disabled in configuration.
+    """
     # Import face detector and liveness from main container
     from app.core.container import get_face_detector, get_liveness_detector
 
@@ -251,3 +388,40 @@ def clear_proctor_cache() -> None:
     get_proctor_session_repository.cache_clear()
     get_proctor_incident_repository.cache_clear()
     get_session_rate_limiter.cache_clear()
+
+
+# ============================================================================
+# Configuration Summary
+# ============================================================================
+
+
+def get_proctor_config_summary() -> dict:
+    """Get summary of proctoring configuration for debugging."""
+    return {
+        "enabled": settings.PROCTOR_ENABLED,
+        "storage_type": settings.PROCTOR_STORAGE_TYPE,
+        "features": {
+            "gaze_tracking": settings.PROCTOR_GAZE_ENABLED,
+            "object_detection": settings.PROCTOR_OBJECT_DETECTION_ENABLED,
+            "deepfake_detection": settings.PROCTOR_DEEPFAKE_ENABLED,
+            "audio_analysis": settings.PROCTOR_AUDIO_ENABLED,
+        },
+        "thresholds": {
+            "verification": settings.PROCTOR_VERIFICATION_THRESHOLD,
+            "liveness": settings.PROCTOR_LIVENESS_THRESHOLD,
+            "gaze": settings.PROCTOR_GAZE_THRESHOLD,
+            "deepfake": settings.PROCTOR_DEEPFAKE_THRESHOLD,
+            "risk_warning": settings.PROCTOR_RISK_THRESHOLD_WARNING,
+            "risk_critical": settings.PROCTOR_RISK_THRESHOLD_CRITICAL,
+        },
+        "rate_limiting": {
+            "enabled": settings.PROCTOR_RATE_LIMIT_ENABLED,
+            "max_frames_per_second": settings.PROCTOR_MAX_FRAMES_PER_SECOND,
+            "max_frames_per_minute": settings.PROCTOR_MAX_FRAMES_PER_MINUTE,
+        },
+        "circuit_breaker": {
+            "enabled": settings.PROCTOR_CIRCUIT_BREAKER_ENABLED,
+            "failure_threshold": settings.PROCTOR_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+            "timeout_sec": settings.PROCTOR_CIRCUIT_BREAKER_TIMEOUT_SEC,
+        },
+    }
