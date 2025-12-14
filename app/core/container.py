@@ -45,28 +45,25 @@ from app.domain.interfaces.liveness_detector import ILivenessDetector
 from app.domain.interfaces.quality_assessor import IQualityAssessor
 from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
 
-# Infrastructure implementations
-from app.infrastructure.ml.factories.detector_factory import FaceDetectorFactory
-from app.infrastructure.ml.factories.extractor_factory import EmbeddingExtractorFactory
-from app.infrastructure.ml.factories.liveness_factory import LivenessDetectorFactory
-from app.infrastructure.ml.factories.similarity_factory import SimilarityCalculatorFactory
-<<<<<<< Updated upstream
-from app.infrastructure.ml.factories.demographics_factory import DemographicsAnalyzerFactory
-from app.infrastructure.ml.factories.landmark_factory import LandmarkDetectorFactory
-from app.infrastructure.ml.factories.preprocessor_factory import ImagePreprocessorFactory
-from app.infrastructure.webhooks.webhook_factory import WebhookSenderFactory
-from app.infrastructure.rate_limit.storage_factory import RateLimitStorageFactory
-from app.infrastructure.ml.card_type.yolo_card_type_detector import YOLOCardTypeDetector
-
 # New domain interfaces
 from app.domain.interfaces.demographics_analyzer import IDemographicsAnalyzer
 from app.domain.interfaces.landmark_detector import ILandmarkDetector
 from app.domain.interfaces.image_preprocessor import IImagePreprocessor
 from app.domain.interfaces.webhook_sender import IWebhookSender
 from app.domain.interfaces.rate_limit_storage import IRateLimitStorage
-=======
+
+# Infrastructure implementations
+from app.infrastructure.ml.factories.detector_factory import FaceDetectorFactory
+from app.infrastructure.ml.factories.extractor_factory import EmbeddingExtractorFactory
+from app.infrastructure.ml.factories.liveness_factory import LivenessDetectorFactory
+from app.infrastructure.ml.factories.similarity_factory import SimilarityCalculatorFactory
+from app.infrastructure.ml.factories.demographics_factory import DemographicsAnalyzerFactory
+from app.infrastructure.ml.factories.landmark_factory import LandmarkDetectorFactory
+from app.infrastructure.ml.factories.preprocessor_factory import ImagePreprocessorFactory
+from app.infrastructure.webhooks.webhook_factory import WebhookSenderFactory
+from app.infrastructure.rate_limit.storage_factory import RateLimitStorageFactory
+from app.infrastructure.ml.card_type.yolo_card_type_detector import YOLOCardTypeDetector
 from app.infrastructure.ml.liveness.enhanced_liveness_detector import EnhancedLivenessDetector
->>>>>>> Stashed changes
 from app.infrastructure.ml.quality.quality_assessor import QualityAssessor
 from app.infrastructure.messaging.event_handlers import BiometricEventHandler, EventRouter
 from app.infrastructure.messaging.redis_event_bus import RedisEventBus
@@ -192,8 +189,8 @@ def get_liveness_detector() -> ILivenessDetector:
         - passive: Texture-based analysis (printed photos, screens)
         - active: Facial action analysis (smile, blink)
         - combined: Both methods for highest accuracy
+        - enhanced: Multi-modal detection with LBP, blink, smile detection
 
-<<<<<<< Updated upstream
     Uses LivenessDetectorFactory for Open/Closed Principle compliance.
     """
     logger.info(f"Creating liveness detector: {settings.LIVENESS_MODE}")
@@ -283,23 +280,8 @@ def get_rate_limit_storage() -> IRateLimitStorage:
     """
     logger.info(f"Creating rate limit storage: {settings.RATE_LIMIT_STORAGE}")
     return RateLimitStorageFactory.create(
-        storage_type=settings.RATE_LIMIT_STORAGE,
-=======
-    Note:
-        Uses EnhancedLivenessDetector which combines multiple techniques:
-        - Texture analysis (LBP) to detect print attacks
-        - Blink detection using eye aspect ratio
-        - Smile detection using mouth aspect ratio
-        - Color/frequency analysis for screen detection
-    """
-    logger.info("Creating liveness detector (enhanced multi-modal)")
-    return EnhancedLivenessDetector(
-        texture_threshold=100.0,
-        liveness_threshold=70.0,
-        enable_blink_detection=True,
-        enable_smile_detection=True,
-        blink_frames_required=2,
->>>>>>> Stashed changes
+        backend=settings.RATE_LIMIT_STORAGE,
+        redis_url=settings.redis_url,
     )
 
 
@@ -629,16 +611,13 @@ def clear_cache() -> None:
     get_file_storage.cache_clear()
     get_embedding_repository.cache_clear()
     get_liveness_detector.cache_clear()
-<<<<<<< Updated upstream
     get_card_type_detector.cache_clear()
     get_demographics_analyzer.cache_clear()
     get_landmark_detector.cache_clear()
     get_image_preprocessor.cache_clear()
     get_webhook_sender.cache_clear()
     get_rate_limit_storage.cache_clear()
-=======
     get_event_bus.cache_clear()
     get_event_handler.cache_clear()
     get_event_router.cache_clear()
     get_event_publisher.cache_clear()
->>>>>>> Stashed changes
