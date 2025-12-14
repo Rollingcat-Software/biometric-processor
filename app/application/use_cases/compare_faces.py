@@ -66,28 +66,25 @@ class CompareFacesUseCase:
         """
         logger.info("Starting face comparison")
 
-        # Process first image
-        face1_info = self._process_face(image1, "first")
+        # Process first image - detect face and get info
+        face1_info, face1_region = await self._process_face(image1, "first")
 
-        # Process second image
-        face2_info = self._process_face(image2, "second")
+        # Process second image - detect face and get info
+        face2_info, face2_region = await self._process_face(image2, "second")
 
-        # Extract embeddings
-        embedding1 = self._extractor.extract(image1)
-        embedding2 = self._extractor.extract(image2)
+        # Extract embeddings from face regions
+        embedding1 = await self._extractor.extract(face1_region)
+        embedding2 = await self._extractor.extract(face2_region)
 
-        # Calculate similarity
-        similarity_result = self._similarity_calculator.calculate(
-            embedding1.embedding, embedding2.embedding
-        )
+        # Calculate distance (lower = more similar)
+        distance = self._similarity_calculator.calculate(embedding1, embedding2)
 
-        # Determine match and confidence
-        similarity = similarity_result.similarity
-        match = similarity >= threshold
+        # Convert distance to similarity (higher = more similar)
+        similarity = max(0.0, 1.0 - distance)
+        match = distance < threshold
         confidence = self._get_confidence_level(similarity, threshold)
 
         # Create result
-        distance = 1.0 - similarity
         message = self._get_result_message(match, confidence)
 
         result = FaceComparisonResult(
@@ -107,35 +104,50 @@ class CompareFacesUseCase:
 
         return result
 
-    def _process_face(self, image: np.ndarray, name: str) -> FaceInfo:
-        """Process face and extract info."""
-        detection = self._detector.detect(image)
+    async def _process_face(
+        self, image: np.ndarray, name: str
+    ) -> tuple[FaceInfo, np.ndarray]:
+        """Process face and extract info.
 
-        if not detection.face_detected:
+        Args:
+            image: Input image
+            name: Name for error messages (e.g., "first", "second")
+
+        Returns:
+            Tuple of (FaceInfo, face_region)
+
+        Raises:
+            FaceNotFoundError: When no face is detected
+        """
+        detection = await self._detector.detect(image)
+
+        if not detection.found:
             raise FaceNotFoundError(f"No face detected in {name} image")
 
+        # Extract face region
+        face_region = detection.get_face_region(image)
+
         # Get quality score
+        quality_score = 0.0
         try:
-            quality_result = self._quality_assessor.assess(image)
-            quality_score = (
-                quality_result.overall_score
-                if hasattr(quality_result, "overall_score")
-                else 0.0
-            )
-        except Exception:
-            quality_score = 0.0
+            quality_result = await self._quality_assessor.assess(face_region)
+            quality_score = quality_result.score
+        except Exception as e:
+            logger.warning(f"Quality assessment failed for {name} image: {e}")
 
         # Get bounding box
         bbox = None
-        if detection.face_coordinates:
-            x, y, w, h = detection.face_coordinates
+        if detection.bounding_box:
+            x, y, w, h = detection.bounding_box
             bbox = BoundingBox(x=x, y=y, width=w, height=h)
 
-        return FaceInfo(
+        face_info = FaceInfo(
             detected=True,
             quality_score=quality_score,
             bounding_box=bbox,
         )
+
+        return face_info, face_region
 
     def _get_confidence_level(self, similarity: float, threshold: float) -> str:
         """Determine confidence level from similarity."""

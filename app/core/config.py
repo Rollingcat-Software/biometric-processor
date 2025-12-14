@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     API_WORKERS: int = Field(default=4, ge=1, le=32)
 
     # CORS Settings (NO WILDCARD!)
-    CORS_ORIGINS: List[str] = Field(default=["http://localhost:3000", "http://localhost:8080"])
+    CORS_ORIGINS: List[str] = Field(default=["http://localhost:3000", "http://localhost:3001", "http://localhost:8080"])
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
@@ -229,10 +229,13 @@ class Settings(BaseSettings):
 
     def get_cors_config(self) -> dict:
         """Get CORS configuration."""
+        # In development, allow all origins for easier testing
+        # In production, use the configured CORS_ORIGINS
+        origins = ["*"] if self.is_development() else self.CORS_ORIGINS
         return {
-            "allow_origins": self.CORS_ORIGINS,
-            "allow_credentials": True,
-            "allow_methods": ["GET", "POST", "PUT", "DELETE"],
+            "allow_origins": origins,
+            "allow_credentials": False if origins == ["*"] else True,  # Can't use credentials with wildcard
+            "allow_methods": ["*"],
             "allow_headers": ["*"],
         }
 

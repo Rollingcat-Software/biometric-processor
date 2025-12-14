@@ -94,36 +94,51 @@ class CombinedLivenessDetector(ILivenessDetector):
         """
         logger.info("Starting combined liveness detection")
 
-        # Run both detectors
+        # Run texture detector (always available)
         texture_result = await self._texture_detector.detect(image)
-        active_result = await self._active_detector.detect(image)
 
-        # Calculate combined score
-        combined_score = (
-            texture_result.liveness_score * self._texture_weight +
-            active_result.liveness_score * self._active_weight
-        )
+        # Try active detector, fall back to texture-only if unavailable
+        active_result = None
+        try:
+            active_result = await self._active_detector.detect(image)
+        except Exception as e:
+            logger.warning(f"Active liveness detection failed (possibly MediaPipe unavailable): {e}")
+            logger.info("Falling back to texture-only liveness detection")
+
+        # Calculate score based on available results
+        if active_result is not None:
+            combined_score = (
+                texture_result.liveness_score * self._texture_weight +
+                active_result.liveness_score * self._active_weight
+            )
+            challenge_completed = (
+                texture_result.challenge_completed and
+                active_result.challenge_completed
+            )
+            used_challenge = challenge
+            logger.info(
+                f"Combined liveness detection complete: "
+                f"score={combined_score:.2f}, "
+                f"texture_score={texture_result.liveness_score:.2f}, "
+                f"active_score={active_result.liveness_score:.2f}"
+            )
+        else:
+            # Texture-only fallback
+            combined_score = texture_result.liveness_score
+            challenge_completed = texture_result.challenge_completed
+            used_challenge = "texture"
+            logger.info(
+                f"Texture-only liveness detection complete: "
+                f"score={combined_score:.2f}"
+            )
 
         # Determine liveness
         is_live = combined_score >= self._liveness_threshold
 
-        # Both methods should pass for high confidence
-        challenge_completed = (
-            texture_result.challenge_completed and
-            active_result.challenge_completed
-        )
-
-        logger.info(
-            f"Combined liveness detection complete: "
-            f"score={combined_score:.2f}, is_live={is_live}, "
-            f"texture_score={texture_result.liveness_score:.2f}, "
-            f"active_score={active_result.liveness_score:.2f}"
-        )
-
         return LivenessResult(
             is_live=is_live,
             liveness_score=combined_score,
-            challenge=challenge,
+            challenge=used_challenge,
             challenge_completed=challenge_completed,
         )
 

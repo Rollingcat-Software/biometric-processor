@@ -196,7 +196,7 @@ def get_demographics_analyzer() -> IDemographicsAnalyzer:
     """
     logger.info("Creating demographics analyzer")
     return DemographicsAnalyzerFactory.create(
-        analyzer_type="deepface",
+        backend="deepface",
         include_race=settings.DEMOGRAPHICS_INCLUDE_RACE,
         include_emotion=settings.DEMOGRAPHICS_INCLUDE_EMOTION,
     )
@@ -211,7 +211,7 @@ def get_landmark_detector() -> ILandmarkDetector:
     """
     logger.info(f"Creating landmark detector: {settings.LANDMARK_MODEL}")
     return LandmarkDetectorFactory.create(
-        detector_type=settings.LANDMARK_MODEL,
+        model=settings.LANDMARK_MODEL,
     )
 
 
@@ -417,6 +417,7 @@ def get_compare_faces_use_case() -> CompareFacesUseCase:
         detector=get_face_detector(),
         extractor=get_embedding_extractor(),
         similarity_calculator=get_similarity_calculator(),
+        quality_assessor=get_quality_assessor(),
     )
 
 

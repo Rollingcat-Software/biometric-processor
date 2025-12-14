@@ -23,6 +23,7 @@ from app.api.routes import batch, enrollment, health, liveness, search, verifica
 from app.api.routes import quality, multi_face, demographics, landmarks, comparison, similarity_matrix, embeddings_io, webhooks, metrics
 from app.api.routes import proctor
 from app.api.routes import proctor_ws
+from app.api.routes import admin
 from app.core.config import settings
 from app.core.container import initialize_dependencies
 from app.core.metrics import init_metrics
@@ -87,18 +88,6 @@ app = FastAPI(
 )
 
 # ============================================================================
-# CORS Configuration (SECURITY FIX - No Wildcard!)
-# ============================================================================
-
-cors_config = settings.get_cors_config()
-logger.info(f"CORS allowed origins: {cors_config['allow_origins']}")
-
-app.add_middleware(
-    CORSMiddleware,
-    **cors_config,
-)
-
-# ============================================================================
 # Rate Limiting Middleware
 # ============================================================================
 
@@ -122,6 +111,19 @@ if settings.RATE_LIMIT_ENABLED:
 if settings.METRICS_ENABLED:
     app.add_middleware(PrometheusMiddleware, exclude_paths=["/metrics", "/health"])
     logger.info("Prometheus metrics middleware enabled")
+
+# ============================================================================
+# CORS Configuration (SECURITY FIX - No Wildcard!)
+# IMPORTANT: CORS must be added LAST so it runs FIRST (middleware stack is LIFO)
+# ============================================================================
+
+cors_config = settings.get_cors_config()
+logger.info(f"CORS allowed origins: {cors_config['allow_origins']}")
+
+app.add_middleware(
+    CORSMiddleware,
+    **cors_config,
+)
 
 # ============================================================================
 # Exception Handlers
@@ -159,6 +161,9 @@ app.include_router(proctor.router, prefix=API_PREFIX)
 
 # WebSocket routes (proctoring real-time streaming)
 app.include_router(proctor_ws.router, prefix=API_PREFIX)
+
+# Admin routes
+app.include_router(admin.router, prefix=API_PREFIX)
 
 # Metrics route (no prefix)
 if settings.METRICS_ENABLED:

@@ -74,12 +74,14 @@ class ComputeSimilarityMatrixUseCase:
         # Extract embeddings for all images
         embeddings = []
         for i, image in enumerate(images):
-            detection = self._detector.detect(image)
-            if not detection.face_detected:
+            detection = await self._detector.detect(image)
+            if not detection.found:
                 raise FaceNotFoundError(f"No face detected in image {labels[i]}")
 
-            embedding_result = self._extractor.extract(image)
-            embeddings.append(embedding_result.embedding)
+            # Extract face region and get embedding
+            face_region = detection.get_face_region(image)
+            embedding = await self._extractor.extract(face_region)
+            embeddings.append(embedding)
 
         # Compute similarity matrix
         matrix = self._compute_matrix(embeddings)
@@ -119,10 +121,12 @@ class ComputeSimilarityMatrixUseCase:
                 if i == j:
                     matrix[i][j] = 1.0
                 elif i < j:
-                    result = self._similarity_calculator.calculate(
+                    # calculate() returns distance (lower = more similar)
+                    distance = self._similarity_calculator.calculate(
                         embeddings[i], embeddings[j]
                     )
-                    similarity = round(result.similarity, 4)
+                    # Convert distance to similarity (higher = more similar)
+                    similarity = round(max(0.0, 1.0 - distance), 4)
                     matrix[i][j] = similarity
                     matrix[j][i] = similarity
 

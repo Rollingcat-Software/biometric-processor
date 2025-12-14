@@ -59,7 +59,7 @@ class DetectMultiFaceUseCase:
         height, width = image.shape[:2]
 
         # Detect all faces
-        faces = self._detect_all_faces(image)
+        faces = await self._detect_all_faces(image)
 
         # Limit number of faces
         faces = faces[:max_faces]
@@ -67,7 +67,7 @@ class DetectMultiFaceUseCase:
         # Assess quality for each face
         detected_faces = []
         for idx, face in enumerate(faces):
-            quality_score = self._assess_face_quality(image, face)
+            quality_score = await self._assess_face_quality(image, face)
             detected_face = self._create_detected_face(idx, face, quality_score)
             detected_faces.append(detected_face)
 
@@ -84,7 +84,7 @@ class DetectMultiFaceUseCase:
         logger.info(f"Multi-face detection complete: {len(detected_faces)} faces found")
         return result
 
-    def _detect_all_faces(self, image: np.ndarray) -> List[dict]:
+    async def _detect_all_faces(self, image: np.ndarray) -> List[dict]:
         """Detect all faces in image.
 
         Returns list of face dictionaries with bounding box, confidence, landmarks.
@@ -94,23 +94,26 @@ class DetectMultiFaceUseCase:
 
         # Most detectors return single result - we need to handle multi-face
         # This is a simplified implementation
-        result = self._detector.detect(image)
+        try:
+            result = await self._detector.detect(image)
 
-        if result.face_detected:
-            face_data = {
-                "bbox": result.face_coordinates,
-                "confidence": result.confidence if hasattr(result, "confidence") else 0.95,
-                "landmarks": getattr(result, "landmarks", None),
-            }
-            faces.append(face_data)
+            if result.found:
+                face_data = {
+                    "bbox": result.bounding_box,
+                    "confidence": result.confidence,
+                    "landmarks": result.landmarks,
+                }
+                faces.append(face_data)
 
-            # Try to find additional faces by processing regions
-            # This is a basic approach - production would use batch detection
-            x, y, w, h = result.face_coordinates
+                # Try to find additional faces by processing regions
+                # This is a basic approach - production would use batch detection
+                x, y, w, h = result.bounding_box
 
-            # Mask out detected face and try to find more
-            remaining_faces = self._find_additional_faces(image, [(x, y, w, h)])
-            faces.extend(remaining_faces)
+                # Mask out detected face and try to find more
+                remaining_faces = self._find_additional_faces(image, [(x, y, w, h)])
+                faces.extend(remaining_faces)
+        except Exception as e:
+            logger.warning(f"Face detection failed: {e}")
 
         return faces
 
@@ -125,13 +128,13 @@ class DetectMultiFaceUseCase:
         # Placeholder - would implement region-based detection
         return []
 
-    def _assess_face_quality(self, image: np.ndarray, face: dict) -> float:
+    async def _assess_face_quality(self, image: np.ndarray, face: dict) -> float:
         """Assess quality of detected face."""
         try:
             x, y, w, h = face["bbox"]
             face_region = image[y : y + h, x : x + w]
-            result = self._quality_assessor.assess(face_region)
-            return result.overall_score if hasattr(result, "overall_score") else 75.0
+            result = await self._quality_assessor.assess(face_region)
+            return result.score
         except Exception as e:
             logger.warning(f"Quality assessment failed: {e}")
             return 0.0

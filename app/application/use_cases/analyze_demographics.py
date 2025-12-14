@@ -49,13 +49,13 @@ class AnalyzeDemographicsUseCase:
         logger.info("Starting demographics analysis")
 
         # Detect face first
-        detection_result = self._detector.detect(image)
-        if not detection_result.face_detected:
+        detection_result = await self._detector.detect(image)
+        if not detection_result.found:
             raise FaceNotFoundError("No face detected in image")
 
         # Extract face region
-        if detection_result.face_coordinates:
-            x, y, w, h = detection_result.face_coordinates
+        if detection_result.bounding_box:
+            x, y, w, h = detection_result.bounding_box
             face_image = image[y : y + h, x : x + w]
         else:
             face_image = image

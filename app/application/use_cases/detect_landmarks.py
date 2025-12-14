@@ -52,8 +52,8 @@ class DetectLandmarksUseCase:
         logger.info(f"Starting landmark detection (include_3d={include_3d})")
 
         # Detect face first to validate
-        detection_result = self._detector.detect(image)
-        if not detection_result.face_detected:
+        detection_result = await self._detector.detect(image)
+        if not detection_result.found:
             raise FaceNotFoundError("No face detected in image")
 
         # Detect landmarks
