@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     API_WORKERS: int = Field(default=4, ge=1, le=32)
 
     # CORS Settings (NO WILDCARD!)
-    CORS_ORIGINS: List[str] = Field(default=["http://localhost:3000", "http://localhost:8080"])
+    CORS_ORIGINS: List[str] = Field(default=["http://localhost:3000", "http://localhost:3001", "http://localhost:8080"])
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
@@ -70,8 +70,11 @@ class Settings(BaseSettings):
 
     # Thresholds
     VERIFICATION_THRESHOLD: float = Field(default=0.6, ge=0.0, le=1.0)
-    LIVENESS_THRESHOLD: float = Field(default=80.0, ge=0.0, le=100.0)
+    LIVENESS_THRESHOLD: float = Field(default=70.0, ge=0.0, le=100.0)
     QUALITY_THRESHOLD: float = Field(default=70.0, ge=0.0, le=100.0)
+
+    # Liveness Detection Mode
+    LIVENESS_MODE: Literal["passive", "active", "combined"] = Field(default="combined")
 
     # Quality Assessment
     MIN_IMAGE_SIZE: int = Field(default=100, ge=50, le=1000)
@@ -98,6 +101,110 @@ class Settings(BaseSettings):
     # Rate Limiting
     RATE_LIMIT_ENABLED: bool = Field(default=True)
     RATE_LIMIT_PER_MINUTE: int = Field(default=60, ge=1)
+    RATE_LIMIT_STORAGE: Literal["memory", "redis"] = Field(default="memory")
+    RATE_LIMIT_DEFAULT: int = Field(default=60, ge=1)
+    RATE_LIMIT_PREMIUM: int = Field(default=300, ge=1)
+
+    # Demographics Analysis
+    DEMOGRAPHICS_ENABLED: bool = Field(default=True)
+    DEMOGRAPHICS_INCLUDE_RACE: bool = Field(default=False)  # Privacy consideration
+    DEMOGRAPHICS_INCLUDE_EMOTION: bool = Field(default=True)
+
+    # Landmarks
+    LANDMARK_MODEL: Literal["mediapipe_468", "dlib_68"] = Field(default="mediapipe_468")
+
+    # Image Preprocessing
+    PREPROCESS_AUTO_ROTATE: bool = Field(default=True)
+    PREPROCESS_MAX_SIZE: int = Field(default=1920, ge=640, le=4096)
+    PREPROCESS_NORMALIZE: bool = Field(default=True)
+
+    # Webhooks
+    WEBHOOK_ENABLED: bool = Field(default=False)
+    WEBHOOK_URL: Optional[str] = Field(default=None)
+    WEBHOOK_SECRET: Optional[str] = Field(default=None)
+    WEBHOOK_EVENTS: List[str] = Field(
+        default=["enrollment", "verification", "liveness"]
+    )
+    WEBHOOK_RETRY_COUNT: int = Field(default=3, ge=0, le=10)
+
+    # Export/Import
+    EXPORT_FORMAT: Literal["json", "msgpack"] = Field(default="json")
+    EXPORT_INCLUDE_METADATA: bool = Field(default=True)
+
+    # API Key Authentication
+    API_KEY_ENABLED: bool = Field(default=False)
+    API_KEY_REQUIRE_AUTH: bool = Field(default=False)
+    API_KEY_HEADER: str = Field(default="X-API-Key")
+
+    # Metrics
+    METRICS_ENABLED: bool = Field(default=True)
+    METRICS_PATH: str = Field(default="/metrics")
+
+    # ============================================================================
+    # Proctoring Service Configuration
+    # ============================================================================
+
+    # Feature Flags
+    PROCTOR_ENABLED: bool = Field(default=True)
+    PROCTOR_GAZE_ENABLED: bool = Field(default=True)
+    PROCTOR_OBJECT_DETECTION_ENABLED: bool = Field(default=True)
+    PROCTOR_DEEPFAKE_ENABLED: bool = Field(default=True)
+    PROCTOR_AUDIO_ENABLED: bool = Field(default=False)
+
+    # Session Management
+    PROCTOR_MAX_SESSIONS_PER_USER: int = Field(default=1, ge=1, le=5)
+    PROCTOR_SESSION_TIMEOUT_MINUTES: int = Field(default=180, ge=30, le=480)
+    PROCTOR_STORAGE_TYPE: Literal["memory", "postgres"] = Field(default="memory")
+
+    # Verification Settings
+    PROCTOR_VERIFICATION_INTERVAL_SEC: int = Field(default=60, ge=10, le=300)
+    PROCTOR_VERIFICATION_THRESHOLD: float = Field(default=0.6, ge=0.0, le=1.0)
+    PROCTOR_LIVENESS_THRESHOLD: float = Field(default=0.7, ge=0.0, le=1.0)
+
+    # Gaze Tracking
+    PROCTOR_GAZE_THRESHOLD: float = Field(default=0.3, ge=0.0, le=1.0)
+    PROCTOR_GAZE_AWAY_THRESHOLD_SEC: float = Field(default=5.0, ge=1.0, le=30.0)
+    PROCTOR_HEAD_PITCH_THRESHOLD: float = Field(default=20.0, ge=5.0, le=45.0)
+    PROCTOR_HEAD_YAW_THRESHOLD: float = Field(default=30.0, ge=10.0, le=60.0)
+
+    # Object Detection
+    PROCTOR_OBJECT_MODEL_SIZE: Literal["nano", "small", "medium", "large"] = Field(default="nano")
+    PROCTOR_OBJECT_CONFIDENCE_THRESHOLD: float = Field(default=0.5, ge=0.1, le=0.9)
+    PROCTOR_MAX_PERSONS_ALLOWED: int = Field(default=1, ge=1, le=3)
+
+    # Deepfake Detection
+    PROCTOR_DEEPFAKE_THRESHOLD: float = Field(default=0.6, ge=0.3, le=0.9)
+    PROCTOR_DEEPFAKE_TEMPORAL_WINDOW: int = Field(default=10, ge=3, le=30)
+
+    # Audio Analysis
+    PROCTOR_AUDIO_SAMPLE_RATE: int = Field(default=16000, ge=8000, le=48000)
+    PROCTOR_AUDIO_VAD_THRESHOLD: float = Field(default=0.5, ge=0.1, le=0.9)
+
+    # Risk Management
+    PROCTOR_RISK_THRESHOLD_WARNING: float = Field(default=0.5, ge=0.1, le=0.9)
+    PROCTOR_RISK_THRESHOLD_CRITICAL: float = Field(default=0.8, ge=0.5, le=1.0)
+    PROCTOR_AUTO_TERMINATE_ON_CRITICAL: bool = Field(default=False)
+
+    # Rate Limiting (per-session)
+    PROCTOR_RATE_LIMIT_ENABLED: bool = Field(default=True)
+    PROCTOR_MAX_FRAMES_PER_SECOND: int = Field(default=5, ge=1, le=30)
+    PROCTOR_MAX_FRAMES_PER_MINUTE: int = Field(default=120, ge=30, le=600)
+    PROCTOR_RATE_LIMIT_BURST_ALLOWANCE: int = Field(default=10, ge=0, le=30)
+
+    # Circuit Breaker
+    PROCTOR_CIRCUIT_BREAKER_ENABLED: bool = Field(default=True)
+    PROCTOR_CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = Field(default=3, ge=1, le=10)
+    PROCTOR_CIRCUIT_BREAKER_SUCCESS_THRESHOLD: int = Field(default=2, ge=1, le=5)
+    PROCTOR_CIRCUIT_BREAKER_TIMEOUT_SEC: float = Field(default=30.0, ge=5.0, le=120.0)
+
+    @field_validator("PROCTOR_RISK_THRESHOLD_CRITICAL")
+    @classmethod
+    def validate_risk_thresholds(cls, v, info):
+        """Ensure critical threshold is higher than warning."""
+        warning = info.data.get("PROCTOR_RISK_THRESHOLD_WARNING", 0.5)
+        if v <= warning:
+            raise ValueError("critical threshold must be greater than warning threshold")
+        return v
 
     model_config = {
         "env_file": ".env",
@@ -122,11 +229,60 @@ class Settings(BaseSettings):
 
     def get_cors_config(self) -> dict:
         """Get CORS configuration."""
+        # In development, allow all origins for easier testing
+        # In production, use the configured CORS_ORIGINS
+        origins = ["*"] if self.is_development() else self.CORS_ORIGINS
         return {
-            "allow_origins": self.CORS_ORIGINS,
-            "allow_credentials": True,
-            "allow_methods": ["GET", "POST", "PUT", "DELETE"],
+            "allow_origins": origins,
+            "allow_credentials": False if origins == ["*"] else True,  # Can't use credentials with wildcard
+            "allow_methods": ["*"],
             "allow_headers": ["*"],
+        }
+
+    def get_proctor_session_config(self) -> dict:
+        """Get proctoring session configuration for session creation."""
+        return {
+            "verification_interval_sec": self.PROCTOR_VERIFICATION_INTERVAL_SEC,
+            "verification_threshold": self.PROCTOR_VERIFICATION_THRESHOLD,
+            "liveness_threshold": self.PROCTOR_LIVENESS_THRESHOLD,
+            "gaze_away_threshold_sec": self.PROCTOR_GAZE_AWAY_THRESHOLD_SEC,
+            "risk_threshold_warning": self.PROCTOR_RISK_THRESHOLD_WARNING,
+            "risk_threshold_critical": self.PROCTOR_RISK_THRESHOLD_CRITICAL,
+            "enable_gaze_tracking": self.PROCTOR_GAZE_ENABLED,
+            "enable_object_detection": self.PROCTOR_OBJECT_DETECTION_ENABLED,
+            "enable_audio_monitoring": self.PROCTOR_AUDIO_ENABLED,
+        }
+
+    def get_proctor_ml_config(self) -> dict:
+        """Get proctoring ML component configuration."""
+        return {
+            "gaze_threshold": self.PROCTOR_GAZE_THRESHOLD,
+            "head_pose_threshold": (self.PROCTOR_HEAD_PITCH_THRESHOLD, self.PROCTOR_HEAD_YAW_THRESHOLD),
+            "object_model_size": self.PROCTOR_OBJECT_MODEL_SIZE,
+            "object_confidence_threshold": self.PROCTOR_OBJECT_CONFIDENCE_THRESHOLD,
+            "max_persons_allowed": self.PROCTOR_MAX_PERSONS_ALLOWED,
+            "deepfake_threshold": self.PROCTOR_DEEPFAKE_THRESHOLD,
+            "deepfake_temporal_window": self.PROCTOR_DEEPFAKE_TEMPORAL_WINDOW,
+            "audio_sample_rate": self.PROCTOR_AUDIO_SAMPLE_RATE,
+            "audio_vad_threshold": self.PROCTOR_AUDIO_VAD_THRESHOLD,
+        }
+
+    def get_proctor_rate_limit_config(self) -> dict:
+        """Get proctoring rate limit configuration."""
+        return {
+            "enabled": self.PROCTOR_RATE_LIMIT_ENABLED,
+            "max_frames_per_second": self.PROCTOR_MAX_FRAMES_PER_SECOND,
+            "max_frames_per_minute": self.PROCTOR_MAX_FRAMES_PER_MINUTE,
+            "burst_allowance": self.PROCTOR_RATE_LIMIT_BURST_ALLOWANCE,
+        }
+
+    def get_proctor_circuit_breaker_config(self) -> dict:
+        """Get proctoring circuit breaker configuration."""
+        return {
+            "enabled": self.PROCTOR_CIRCUIT_BREAKER_ENABLED,
+            "failure_threshold": self.PROCTOR_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+            "success_threshold": self.PROCTOR_CIRCUIT_BREAKER_SUCCESS_THRESHOLD,
+            "timeout_seconds": self.PROCTOR_CIRCUIT_BREAKER_TIMEOUT_SEC,
         }
 
 

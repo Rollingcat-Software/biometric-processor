@@ -14,16 +14,29 @@ from functools import lru_cache
 
 from app.application.use_cases.batch_process import BatchEnrollmentUseCase, BatchVerificationUseCase
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
+from app.application.use_cases.detect_card_type import DetectCardTypeUseCase
 
 # Application use cases
 from app.application.use_cases.enroll_face import EnrollFaceUseCase
 from app.application.use_cases.search_face import SearchFaceUseCase
 from app.application.use_cases.verify_face import VerifyFaceUseCase
+
+# New feature use cases
+from app.application.use_cases.analyze_quality import AnalyzeQualityUseCase
+from app.application.use_cases.detect_multi_face import DetectMultiFaceUseCase
+from app.application.use_cases.analyze_demographics import AnalyzeDemographicsUseCase
+from app.application.use_cases.detect_landmarks import DetectLandmarksUseCase
+from app.application.use_cases.compare_faces import CompareFacesUseCase
+from app.application.use_cases.compute_similarity_matrix import ComputeSimilarityMatrixUseCase
+from app.application.use_cases.export_embeddings import ExportEmbeddingsUseCase
+from app.application.use_cases.import_embeddings import ImportEmbeddingsUseCase
+from app.application.use_cases.send_webhook import SendWebhookUseCase
 from app.core.config import settings
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
 
 # Domain interfaces (imported for type hints)
+from app.domain.interfaces.card_type_detector import ICardTypeDetector
 from app.domain.interfaces.face_detector import IFaceDetector
 from app.domain.interfaces.file_storage import IFileStorage
 from app.domain.interfaces.liveness_detector import ILivenessDetector
@@ -33,8 +46,21 @@ from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
 # Infrastructure implementations
 from app.infrastructure.ml.factories.detector_factory import FaceDetectorFactory
 from app.infrastructure.ml.factories.extractor_factory import EmbeddingExtractorFactory
+from app.infrastructure.ml.factories.liveness_factory import LivenessDetectorFactory
 from app.infrastructure.ml.factories.similarity_factory import SimilarityCalculatorFactory
-from app.infrastructure.ml.liveness.texture_liveness_detector import TextureLivenessDetector
+from app.infrastructure.ml.factories.demographics_factory import DemographicsAnalyzerFactory
+from app.infrastructure.ml.factories.landmark_factory import LandmarkDetectorFactory
+from app.infrastructure.ml.factories.preprocessor_factory import ImagePreprocessorFactory
+from app.infrastructure.webhooks.webhook_factory import WebhookSenderFactory
+from app.infrastructure.rate_limit.storage_factory import RateLimitStorageFactory
+from app.infrastructure.ml.card_type.yolo_card_type_detector import YOLOCardTypeDetector
+
+# New domain interfaces
+from app.domain.interfaces.demographics_analyzer import IDemographicsAnalyzer
+from app.domain.interfaces.landmark_detector import ILandmarkDetector
+from app.domain.interfaces.image_preprocessor import IImagePreprocessor
+from app.domain.interfaces.webhook_sender import IWebhookSender
+from app.domain.interfaces.rate_limit_storage import IRateLimitStorage
 from app.infrastructure.ml.quality.quality_assessor import QualityAssessor
 from app.infrastructure.persistence.repositories.memory_embedding_repository import (
     InMemoryEmbeddingRepository,
@@ -134,18 +160,101 @@ def get_liveness_detector() -> ILivenessDetector:
     """Get liveness detector instance (singleton).
 
     Returns:
-        Liveness detector implementation
+        Liveness detector implementation based on LIVENESS_MODE setting:
+        - passive: Texture-based analysis (printed photos, screens)
+        - active: Facial action analysis (smile, blink)
+        - combined: Both methods for highest accuracy
 
-    Note:
-        Uses TextureLivenessDetector which analyzes image properties
-        to detect spoofing attacks (printed photos, screens).
+    Uses LivenessDetectorFactory for Open/Closed Principle compliance.
     """
-    logger.info("Creating liveness detector (texture-based)")
-    return TextureLivenessDetector(
-        texture_threshold=100.0,
-        color_threshold=0.3,
-        frequency_threshold=0.5,
-        liveness_threshold=60.0,
+    logger.info(f"Creating liveness detector: {settings.LIVENESS_MODE}")
+    return LivenessDetectorFactory.create(
+        mode=settings.LIVENESS_MODE,
+        liveness_threshold=settings.LIVENESS_THRESHOLD,
+    )
+
+
+@lru_cache()
+def get_card_type_detector() -> ICardTypeDetector:
+    """Get card type detector instance (singleton).
+
+    Returns:
+        Card type detector implementation
+    """
+    logger.info("Creating card type detector (YOLO)")
+    return YOLOCardTypeDetector(
+        confidence_threshold=0.5,
+    )
+
+
+@lru_cache()
+def get_demographics_analyzer() -> IDemographicsAnalyzer:
+    """Get demographics analyzer instance (singleton).
+
+    Returns:
+        Demographics analyzer implementation
+    """
+    logger.info("Creating demographics analyzer")
+    return DemographicsAnalyzerFactory.create(
+        backend="deepface",
+        include_race=settings.DEMOGRAPHICS_INCLUDE_RACE,
+        include_emotion=settings.DEMOGRAPHICS_INCLUDE_EMOTION,
+    )
+
+
+@lru_cache()
+def get_landmark_detector() -> ILandmarkDetector:
+    """Get landmark detector instance (singleton).
+
+    Returns:
+        Landmark detector implementation
+    """
+    logger.info(f"Creating landmark detector: {settings.LANDMARK_MODEL}")
+    return LandmarkDetectorFactory.create(
+        model=settings.LANDMARK_MODEL,
+    )
+
+
+@lru_cache()
+def get_image_preprocessor() -> IImagePreprocessor:
+    """Get image preprocessor instance (singleton).
+
+    Returns:
+        Image preprocessor implementation
+    """
+    logger.info("Creating image preprocessor")
+    return ImagePreprocessorFactory.create(
+        preprocessor_type="opencv",
+        auto_rotate=settings.PREPROCESS_AUTO_ROTATE,
+        max_size=settings.PREPROCESS_MAX_SIZE,
+        normalize=settings.PREPROCESS_NORMALIZE,
+    )
+
+
+@lru_cache()
+def get_webhook_sender() -> IWebhookSender:
+    """Get webhook sender instance (singleton).
+
+    Returns:
+        Webhook sender implementation
+    """
+    logger.info("Creating webhook sender")
+    return WebhookSenderFactory.create(
+        sender_type="http",
+        retry_count=settings.WEBHOOK_RETRY_COUNT,
+    )
+
+
+@lru_cache()
+def get_rate_limit_storage() -> IRateLimitStorage:
+    """Get rate limit storage instance (singleton).
+
+    Returns:
+        Rate limit storage implementation
+    """
+    logger.info(f"Creating rate limit storage: {settings.RATE_LIMIT_STORAGE}")
+    return RateLimitStorageFactory.create(
+        storage_type=settings.RATE_LIMIT_STORAGE,
     )
 
 
@@ -239,6 +348,125 @@ def get_batch_verification_use_case() -> BatchVerificationUseCase:
     )
 
 
+def get_detect_card_type_use_case() -> DetectCardTypeUseCase:
+    """Get detect card type use case instance.
+
+    Returns:
+        DetectCardTypeUseCase with all dependencies injected
+    """
+    return DetectCardTypeUseCase(
+        detector=get_card_type_detector(),
+    )
+
+
+def get_analyze_quality_use_case() -> AnalyzeQualityUseCase:
+    """Get analyze quality use case instance.
+
+    Returns:
+        AnalyzeQualityUseCase with all dependencies injected
+    """
+    return AnalyzeQualityUseCase(
+        detector=get_face_detector(),
+        quality_assessor=get_quality_assessor(),
+    )
+
+
+def get_detect_multi_face_use_case() -> DetectMultiFaceUseCase:
+    """Get detect multi face use case instance.
+
+    Returns:
+        DetectMultiFaceUseCase with all dependencies injected
+    """
+    return DetectMultiFaceUseCase(
+        detector=get_face_detector(),
+        quality_assessor=get_quality_assessor(),
+    )
+
+
+def get_analyze_demographics_use_case() -> AnalyzeDemographicsUseCase:
+    """Get analyze demographics use case instance.
+
+    Returns:
+        AnalyzeDemographicsUseCase with all dependencies injected
+    """
+    return AnalyzeDemographicsUseCase(
+        detector=get_face_detector(),
+        demographics_analyzer=get_demographics_analyzer(),
+    )
+
+
+def get_detect_landmarks_use_case() -> DetectLandmarksUseCase:
+    """Get detect landmarks use case instance.
+
+    Returns:
+        DetectLandmarksUseCase with all dependencies injected
+    """
+    return DetectLandmarksUseCase(
+        detector=get_face_detector(),
+        landmark_detector=get_landmark_detector(),
+    )
+
+
+def get_compare_faces_use_case() -> CompareFacesUseCase:
+    """Get compare faces use case instance.
+
+    Returns:
+        CompareFacesUseCase with all dependencies injected
+    """
+    return CompareFacesUseCase(
+        detector=get_face_detector(),
+        extractor=get_embedding_extractor(),
+        similarity_calculator=get_similarity_calculator(),
+        quality_assessor=get_quality_assessor(),
+    )
+
+
+def get_compute_similarity_matrix_use_case() -> ComputeSimilarityMatrixUseCase:
+    """Get compute similarity matrix use case instance.
+
+    Returns:
+        ComputeSimilarityMatrixUseCase with all dependencies injected
+    """
+    return ComputeSimilarityMatrixUseCase(
+        detector=get_face_detector(),
+        extractor=get_embedding_extractor(),
+        similarity_calculator=get_similarity_calculator(),
+    )
+
+
+def get_export_embeddings_use_case() -> ExportEmbeddingsUseCase:
+    """Get export embeddings use case instance.
+
+    Returns:
+        ExportEmbeddingsUseCase with all dependencies injected
+    """
+    return ExportEmbeddingsUseCase(
+        repository=get_embedding_repository(),
+    )
+
+
+def get_import_embeddings_use_case() -> ImportEmbeddingsUseCase:
+    """Get import embeddings use case instance.
+
+    Returns:
+        ImportEmbeddingsUseCase with all dependencies injected
+    """
+    return ImportEmbeddingsUseCase(
+        repository=get_embedding_repository(),
+    )
+
+
+def get_send_webhook_use_case() -> SendWebhookUseCase:
+    """Get send webhook use case instance.
+
+    Returns:
+        SendWebhookUseCase with all dependencies injected
+    """
+    return SendWebhookUseCase(
+        webhook_sender=get_webhook_sender(),
+    )
+
+
 # ============================================================================
 # Utility Functions
 # ============================================================================
@@ -282,3 +510,9 @@ def clear_cache() -> None:
     get_file_storage.cache_clear()
     get_embedding_repository.cache_clear()
     get_liveness_detector.cache_clear()
+    get_card_type_detector.cache_clear()
+    get_demographics_analyzer.cache_clear()
+    get_landmark_detector.cache_clear()
+    get_image_preprocessor.cache_clear()
+    get_webhook_sender.cache_clear()
+    get_rate_limit_storage.cache_clear()

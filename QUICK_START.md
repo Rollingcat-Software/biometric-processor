@@ -1,84 +1,95 @@
-# Quick Start - Manual Testing Guide
+# Quick Start Guide
 
-## 🚀 Fastest Way to Test
+## Fastest Way to Test
 
-### Option 1: Browser (Easiest!) ⭐
+### Option 1: Browser (Easiest!)
 ```
 1. Open: http://localhost:8001/docs
-2. Click any endpoint → "Try it out"
+2. Click any endpoint -> "Try it out"
 3. Upload image and test!
 ```
 
 ### Option 2: Python Script
-```powershell
+```bash
 python test_complete_workflow.py
 ```
 
-### Option 3: PowerShell Script
-```powershell
-.\test_api.ps1
+### Option 3: cURL
+```bash
+curl http://localhost:8001/api/v1/health
 ```
 
 ---
 
-## 📋 Prerequisites
+## Prerequisites
 
-✅ Server running on http://localhost:8001  
-✅ Test images in: `C:\Users\ahabg\OneDrive\Belgeler\GitHub\FIVUCSAS\practice-and-test\DeepFacePractice1\images`
+- Python 3.11+ installed
+- Virtual environment activated
+- Test images with clear, front-facing faces
 
 ---
 
-## 🎯 Start Server
+## Start Server
 
-```powershell
+```bash
 # Activate virtual environment
+# Linux/macOS
+source venv/bin/activate
+
+# Windows
 .\.venv\Scripts\activate
 
 # Start server
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
 Server will be available at: **http://localhost:8001**
 
 ---
 
-## 🧪 Run Tests
+## API Endpoints
 
-### Complete Workflow Test ⭐ Recommended
-```powershell
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/health` | GET | Health check |
+| `/api/v1/enroll` | POST | Enroll a face |
+| `/api/v1/verify` | POST | Verify face (1:1) |
+| `/api/v1/search` | POST | Search face (1:N) |
+| `/api/v1/liveness` | POST | Liveness detection |
+| `/api/v1/batch/enroll` | POST | Batch enrollment |
+| `/api/v1/batch/verify` | POST | Batch verification |
+| `/api/v1/card-type/detect-live` | POST | Card type detection |
+
+---
+
+## Run Tests
+
+### Complete Workflow Test (Recommended)
+```bash
 python test_complete_workflow.py
 ```
+
 **Tests:**
 - Health check
-- Enroll 3 users
+- Enroll users
 - Verify same person (should match)
 - Verify different person (should NOT match)
 - Liveness detection
 - Error handling
 
-**Result:** Shows success rate and detailed results
-
 ### Find Good Images
-```powershell
+```bash
 python find_good_images.py
 ```
-**Purpose:** Identifies which images pass quality checks
 
 ### Simple Interactive Test
-```powershell
+```bash
 python test_api_simple.py
 ```
-**Purpose:** Step-by-step interactive testing
-
-### PowerShell Test
-```powershell
-.\test_api.ps1
-```
-**Purpose:** Test with PowerShell, can specify image path
 
 ---
 
-## 🌐 Interactive Testing (Browser)
+## Interactive Testing (Browser)
 
 ### Swagger UI
 **URL:** http://localhost:8001/docs
@@ -100,48 +111,36 @@ python test_api_simple.py
 
 ---
 
-## 📸 Good Test Images
+## Example Workflow
 
-Use these images (they pass quality checks):
-
-```
-person_0001\img_006.jpg  - Quality: 84.73
-person_0002\img_008.jpg  - Quality: 88.68
-person_0003\img_002.jpg  - Quality: 99.92
+### 1. Health Check
+```bash
+curl http://localhost:8001/api/v1/health
 ```
 
-Full path:
-```
-C:\Users\ahabg\OneDrive\Belgeler\GitHub\FIVUCSAS\practice-and-test\DeepFacePractice1\images\person_0001\img_006.jpg
-```
-
----
-
-## 🎬 Example Workflow
-
-### 1. Enroll User
-```powershell
-curl -X POST "http://localhost:8001/api/v1/enroll" `
-  -F "user_id=john_doe" `
-  -F "file=@C:\path\to\image.jpg"
+### 2. Enroll User
+```bash
+curl -X POST "http://localhost:8001/api/v1/enroll" \
+  -F "user_id=john_doe" \
+  -F "file=@/path/to/face.jpg"
 ```
 
-### 2. Verify User
-```powershell
-curl -X POST "http://localhost:8001/api/v1/verify" `
-  -F "user_id=john_doe" `
-  -F "file=@C:\path\to\another_image.jpg"
+### 3. Verify User
+```bash
+curl -X POST "http://localhost:8001/api/v1/verify" \
+  -F "user_id=john_doe" \
+  -F "file=@/path/to/another_face.jpg"
 ```
 
-### 3. Check Liveness
-```powershell
-curl -X POST "http://localhost:8001/api/v1/liveness" `
-  -F "file=@C:\path\to\live_image.jpg"
+### 4. Check Liveness
+```bash
+curl -X POST "http://localhost:8001/api/v1/liveness" \
+  -F "file=@/path/to/live_image.jpg"
 ```
 
 ---
 
-## ✅ Expected Results
+## Expected Results
 
 ### Successful Enrollment
 ```json
@@ -176,9 +175,20 @@ curl -X POST "http://localhost:8001/api/v1/liveness" `
 }
 ```
 
+### Liveness Check Passed
+```json
+{
+  "is_live": true,
+  "liveness_score": 75.8,
+  "challenge": "texture_analysis",
+  "challenge_completed": true,
+  "message": "Liveness check passed"
+}
+```
+
 ---
 
-## ❌ Common Errors
+## Common Errors
 
 ### No Face Detected
 ```json
@@ -193,7 +203,7 @@ curl -X POST "http://localhost:8001/api/v1/liveness" `
 ```json
 {
   "error_code": "POOR_IMAGE_QUALITY",
-  "message": "Image quality too low (score: 65/100, minimum: 70)..."
+  "message": "Image quality too low..."
 }
 ```
 **Solution:** Use higher quality image
@@ -209,46 +219,38 @@ curl -X POST "http://localhost:8001/api/v1/liveness" `
 
 ---
 
-## 🔧 Troubleshooting
+## Troubleshooting
 
 ### Server not responding?
-```powershell
+```bash
 # Check if server is running
 curl http://localhost:8001/api/v1/health
 
 # If not, start it:
-.\.venv\Scripts\activate
-python -m uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 8001
 ```
 
 ### Image quality too low?
-```powershell
+```bash
 # Find images that work:
 python find_good_images.py
 ```
 
-### Want to see what's working?
-```powershell
-# Run complete test:
-python test_complete_workflow.py
-```
-
 ---
 
-## 📚 Documentation
+## Documentation
 
-- **Full Testing Guide:** [MANUAL_TESTING_GUIDE.md](MANUAL_TESTING_GUIDE.md)
-- **Test Results:** [MANUAL_TEST_RESULTS.md](MANUAL_TEST_RESULTS.md)
 - **API Documentation:** http://localhost:8001/docs
-- **Alternative Docs:** http://localhost:8001/redoc
+- **ReDoc:** http://localhost:8001/redoc
+- **Full Testing Guide:** [MANUAL_TESTING_GUIDE.md](MANUAL_TESTING_GUIDE.md)
 
 ---
 
-## 🎯 Quick Commands
+## Quick Commands
 
-```powershell
+```bash
 # Start server
-.\.venv\Scripts\activate && python -m uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 8001
 
 # Test everything
 python test_complete_workflow.py
@@ -256,40 +258,18 @@ python test_complete_workflow.py
 # Find good images
 python find_good_images.py
 
-# Interactive test
-python test_api_simple.py
-
-# PowerShell test
-.\test_api.ps1
-
 # Health check
 curl http://localhost:8001/api/v1/health
 ```
 
 ---
 
-## 📊 Current Test Results
+## Tips for Best Results
 
-**Last Run:** 2025-11-20
-
-- ✅ Health Check: **Working**
-- ✅ Enrollment: **Working** (3/3 users)
-- ✅ Same Person Verification: **100%** (3/3)
-- ✅ Different Person Verification: **100%** (2/2)
-- ✅ Liveness Detection: **Working** ✅
-
-**Overall:** 🟢 **100% Success Rate** ✅
-
----
-
-## 💡 Pro Tips
-
-1. **Use Swagger UI** (http://localhost:8001/docs) for easiest testing
-2. **Run `test_complete_workflow.py`** to verify everything works
-3. **Check test results** in MANUAL_TEST_RESULTS.md
-4. **Use good quality images** (find with `find_good_images.py`)
-5. **Check server logs** if something fails
-
----
-
-**Happy Testing! 🚀**
+### For Face Images:
+- Front-facing face
+- Good lighting
+- Clear, not blurry
+- Only one face in image
+- Face size at least 80x80 pixels
+- Avoid sunglasses, face masks, extreme angles

@@ -1,0 +1,222 @@
+{
+  "common": {
+    "loading": "Loading...",
+    "error": "An error occurred",
+    "success": "Success",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit",
+    "close": "Close",
+    "back": "Back",
+    "next": "Next",
+    "submit": "Submit",
+    "reset": "Reset",
+    "search": "Search",
+    "filter": "Filter",
+    "clear": "Clear",
+    "upload": "Upload",
+    "download": "Download",
+    "retry": "Retry",
+    "processing": "Processing...",
+    "noData": "No data available",
+    "actions": "Actions"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "enrollment": "Enrollment",
+    "verification": "Verification",
+    "search": "Search",
+    "liveness": "Liveness",
+    "quality": "Quality",
+    "demographics": "Demographics",
+    "landmarks": "Landmarks",
+    "comparison": "Comparison",
+    "multiFace": "Multi-Face",
+    "similarity": "Similarity",
+    "cardDetection": "Card Detection",
+    "batch": "Batch",
+    "proctoring": "Proctoring",
+    "session": "Session",
+    "realtime": "Real-time",
+    "admin": "Admin",
+    "webhooks": "Webhooks",
+    "embeddings": "Embeddings",
+    "config": "Configuration",
+    "apiExplorer": "API Explorer",
+    "settings": "Settings"
+  },
+  "dashboard": {
+    "title": "Biometric Processor Demo",
+    "subtitle": "Enterprise-grade facial biometrics solution demonstration",
+    "apiStatus": {
+      "checking": "Checking API...",
+      "connected": "API Connected",
+      "unavailable": "API Unavailable"
+    },
+    "stats": {
+      "apiVersion": "API Version",
+      "status": "Status",
+      "features": "Features",
+      "responseTime": "Response Time",
+      "operational": "Operational",
+      "offline": "Offline"
+    },
+    "sections": {
+      "features": "Available Features",
+      "admin": "Administration"
+    }
+  },
+  "enrollment": {
+    "title": "Face Enrollment",
+    "description": "Register new faces with quality validation and embedding extraction",
+    "personId": "Person ID",
+    "personIdPlaceholder": "Enter unique person identifier",
+    "selectImage": "Select or capture an image",
+    "enrollButton": "Enroll Face",
+    "enrolling": "Enrolling...",
+    "success": "Face enrolled successfully",
+    "error": "Enrollment failed"
+  },
+  "verification": {
+    "title": "1:1 Face Verification",
+    "description": "Compare two faces for identity verification",
+    "image1": "Reference Image",
+    "image2": "Probe Image",
+    "verifyButton": "Verify Identity",
+    "verifying": "Verifying...",
+    "result": {
+      "match": "Match",
+      "noMatch": "No Match",
+      "similarity": "Similarity Score",
+      "threshold": "Threshold"
+    }
+  },
+  "search": {
+    "title": "1:N Face Search",
+    "description": "Search for a face across enrolled database",
+    "searchButton": "Search Database",
+    "searching": "Searching...",
+    "results": "Search Results",
+    "noResults": "No matching faces found",
+    "topMatches": "Top Matches"
+  },
+  "liveness": {
+    "title": "Liveness Detection",
+    "description": "Detect presentation attacks and spoofing attempts",
+    "checkButton": "Check Liveness",
+    "checking": "Analyzing...",
+    "result": {
+      "live": "Live",
+      "spoof": "Spoof Detected",
+      "uncertain": "Uncertain",
+      "score": "Liveness Score"
+    },
+    "challenges": {
+      "blink": "Please blink",
+      "turnLeft": "Turn head left",
+      "turnRight": "Turn head right",
+      "smile": "Please smile"
+    }
+  },
+  "quality": {
+    "title": "Quality Analysis",
+    "description": "Analyze face image quality metrics",
+    "analyzeButton": "Analyze Quality",
+    "analyzing": "Analyzing...",
+    "metrics": {
+      "overall": "Overall Quality",
+      "brightness": "Brightness",
+      "contrast": "Contrast",
+      "sharpness": "Sharpness",
+      "pose": "Pose",
+      "faceSize": "Face Size"
+    },
+    "levels": {
+      "excellent": "Excellent",
+      "good": "Good",
+      "acceptable": "Acceptable",
+      "poor": "Poor",
+      "failed": "Failed"
+    }
+  },
+  "demographics": {
+    "title": "Demographics Analysis",
+    "description": "Estimate age, gender, and emotions",
+    "analyzeButton": "Analyze Demographics",
+    "analyzing": "Analyzing...",
+    "results": {
+      "age": "Estimated Age",
+      "gender": "Gender",
+      "emotion": "Dominant Emotion",
+      "confidence": "Confidence"
+    }
+  },
+  "proctoring": {
+    "title": "Real-time Proctoring",
+    "description": "Continuous face monitoring with WebSocket streaming",
+    "startSession": "Start Session",
+    "endSession": "End Session",
+    "status": {
+      "active": "Session Active",
+      "inactive": "Session Inactive",
+      "connecting": "Connecting..."
+    },
+    "alerts": {
+      "noFace": "No face detected",
+      "multipleFaces": "Multiple faces detected",
+      "lookingAway": "Looking away from screen",
+      "suspiciousActivity": "Suspicious activity detected"
+    }
+  },
+  "camera": {
+    "start": "Start Camera",
+    "stop": "Stop Camera",
+    "capture": "Capture",
+    "retake": "Retake",
+    "permissionDenied": "Camera permission denied",
+    "notSupported": "Camera not supported",
+    "switchCamera": "Switch Camera"
+  },
+  "upload": {
+    "dragDrop": "Drag and drop an image here",
+    "or": "or",
+    "browse": "Browse files",
+    "maxSize": "Maximum file size: {{size}}MB",
+    "supportedFormats": "Supported formats: {{formats}}",
+    "invalidFormat": "Invalid file format",
+    "fileTooLarge": "File is too large"
+  },
+  "errors": {
+    "generic": "Something went wrong. Please try again.",
+    "network": "Network error. Please check your connection.",
+    "timeout": "Request timed out. Please try again.",
+    "serverError": "Server error. Please try again later.",
+    "notFound": "Resource not found",
+    "unauthorized": "Unauthorized access",
+    "validation": "Please check your input"
+  },
+  "settings": {
+    "title": "Settings",
+    "language": "Language",
+    "theme": "Theme",
+    "themes": {
+      "light": "Light",
+      "dark": "Dark",
+      "system": "System"
+    },
+    "api": {
+      "title": "API Configuration",
+      "url": "API URL",
+      "timeout": "Timeout (ms)"
+    },
+    "camera": {
+      "title": "Camera Settings",
+      "resolution": "Resolution",
+      "facingMode": "Camera Type",
+      "front": "Front Camera",
+      "back": "Back Camera"
+    }
+  }
+}
