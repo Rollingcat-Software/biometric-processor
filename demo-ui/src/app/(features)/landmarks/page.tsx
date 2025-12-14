@@ -42,7 +42,7 @@ export default function LandmarksPage() {
       {
         onSuccess: (result) => {
           toast.success('Detection Complete', {
-            description: `Detected ${result.landmarks.points.length} landmarks`,
+            description: `Detected ${result.landmark_count} landmarks`,
           });
         },
         onError: (err) => {
@@ -79,14 +79,13 @@ export default function LandmarksPage() {
 
     // Draw landmarks
     ctx.fillStyle = '#22c55e';
-    data.landmarks.points.forEach((point) => {
+    data.landmarks.forEach((point) => {
       ctx.beginPath();
       ctx.arc(point.x * canvas.width, point.y * canvas.height, 2, 0, Math.PI * 2);
       ctx.fill();
     });
 
     // Draw connections for facial regions
-    const regions = ['left_eye', 'right_eye', 'nose', 'mouth', 'left_eyebrow', 'right_eyebrow', 'face_oval'];
     const regionColors: Record<string, string> = {
       left_eye: '#3b82f6',
       right_eye: '#3b82f6',
@@ -94,17 +93,16 @@ export default function LandmarksPage() {
       mouth: '#ef4444',
       left_eyebrow: '#8b5cf6',
       right_eyebrow: '#8b5cf6',
-      face_oval: '#6b7280',
+      face_contour: '#6b7280',
     };
 
     if (data.regions) {
-      Object.entries(data.regions).forEach(([region, indices]) => {
-        if (indices && Array.isArray(indices)) {
+      Object.entries(data.regions).forEach(([region, points]) => {
+        if (points && Array.isArray(points)) {
           ctx.strokeStyle = regionColors[region] || '#22c55e';
           ctx.lineWidth = 1;
           ctx.beginPath();
-          indices.forEach((idx, i) => {
-            const point = data.landmarks.points[idx];
+          points.forEach((point, i) => {
             if (point) {
               const x = point.x * canvas.width;
               const y = point.y * canvas.height;
@@ -242,7 +240,7 @@ export default function LandmarksPage() {
                   <CardTitle>Landmark Visualization</CardTitle>
                   <CardDescription>
                     {isSuccess && data
-                      ? `${data.landmarks.points.length} landmarks detected`
+                      ? `${data.landmark_count} landmarks detected`
                       : 'Detected points will be displayed here'}
                   </CardDescription>
                 </div>
@@ -290,11 +288,11 @@ export default function LandmarksPage() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="rounded-lg border p-3">
                       <p className="text-sm text-muted-foreground">Model</p>
-                      <p className="font-semibold">{data.landmarks.model || 'MediaPipe'}</p>
+                      <p className="font-semibold">{data.model || 'MediaPipe'}</p>
                     </div>
                     <div className="rounded-lg border p-3">
                       <p className="text-sm text-muted-foreground">Points</p>
-                      <p className="font-semibold">{data.landmarks.points.length}</p>
+                      <p className="font-semibold">{data.landmark_count}</p>
                     </div>
                   </div>
 

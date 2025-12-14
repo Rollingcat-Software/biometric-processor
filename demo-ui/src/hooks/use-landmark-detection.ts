@@ -1,5 +1,8 @@
 import { useMutation } from '@tanstack/react-query';
-import { apiClient } from '@/lib/api/client';
+import { ApiClientError } from '@/lib/api/client';
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const REQUEST_TIMEOUT = 60000;
 
 interface LandmarkRequest {
   image: File | Blob;
@@ -12,9 +15,32 @@ interface LandmarkPoint {
   z?: number;
 }
 
+// Matches actual backend response
+interface BackendLandmarkResponse {
+  landmarks: LandmarkPoint[];
+  landmark_count: number;
+  model: string;
+  regions?: {
+    left_eye?: LandmarkPoint[];
+    right_eye?: LandmarkPoint[];
+    nose?: LandmarkPoint[];
+    mouth?: LandmarkPoint[];
+    face_contour?: LandmarkPoint[];
+    left_eyebrow?: LandmarkPoint[];
+    right_eyebrow?: LandmarkPoint[];
+  };
+  head_pose?: {
+    pitch: number;
+    yaw: number;
+    roll: number;
+  };
+}
+
+// UI-friendly response
 interface LandmarkResponse {
   landmarks: LandmarkPoint[];
   landmark_count: number;
+  model: string;
   regions: {
     left_eye: LandmarkPoint[];
     right_eye: LandmarkPoint[];
@@ -24,7 +50,11 @@ interface LandmarkResponse {
     left_eyebrow: LandmarkPoint[];
     right_eyebrow: LandmarkPoint[];
   };
-  processing_time_ms: number;
+  head_pose?: {
+    pitch: number;
+    yaw: number;
+    roll: number;
+  };
 }
 
 async function detectLandmarks(request: LandmarkRequest): Promise<LandmarkResponse> {
@@ -34,20 +64,63 @@ async function detectLandmarks(request: LandmarkRequest): Promise<LandmarkRespon
     formData.append('include_3d', request.include_3d.toString());
   }
 
-  const response = await fetch(
-    `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'}/api/v1/landmarks/detect`,
-    {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
+  try {
+    const response = await fetch(`${API_URL}/api/v1/landmarks/detect`, {
       method: 'POST',
       body: formData,
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: 'Landmark detection failed' }));
+
+      // Handle specific error for dlib not installed
+      if (error.error_code === 'LANDMARK_ERROR') {
+        throw new ApiClientError(response.status, error.message, {
+          code: error.error_code,
+          details: error,
+          userMessage: 'Landmark detection is not available. The dlib library is not installed on the server.',
+        });
+      }
+
+      throw new ApiClientError(response.status, error.message || error.detail, {
+        code: error.error_code,
+        details: error,
+      });
     }
-  );
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: 'Landmark detection failed' }));
-    throw new Error(error.message || error.detail);
+    const data: BackendLandmarkResponse = await response.json();
+
+    // Transform to UI-friendly format with default empty arrays
+    return {
+      landmarks: data.landmarks,
+      landmark_count: data.landmark_count,
+      model: data.model,
+      regions: {
+        left_eye: data.regions?.left_eye ?? [],
+        right_eye: data.regions?.right_eye ?? [],
+        nose: data.regions?.nose ?? [],
+        mouth: data.regions?.mouth ?? [],
+        face_contour: data.regions?.face_contour ?? [],
+        left_eyebrow: data.regions?.left_eyebrow ?? [],
+        right_eyebrow: data.regions?.right_eyebrow ?? [],
+      },
+      head_pose: data.head_pose,
+    };
+  } catch (error) {
+    if (error instanceof ApiClientError) {
+      throw error;
+    }
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new ApiClientError(408, 'Request timeout - landmark detection took too long');
+    }
+    throw new ApiClientError(0, error instanceof Error ? error.message : 'Unknown error');
+  } finally {
+    clearTimeout(timeoutId);
   }
-
-  return response.json();
 }
 
 export function useLandmarkDetection() {
@@ -56,3 +129,5 @@ export function useLandmarkDetection() {
     mutationKey: ['landmark-detection'],
   });
 }
+
+export type { LandmarkRequest, LandmarkResponse, LandmarkPoint };

@@ -9,13 +9,9 @@ import {
   Pause,
   Square,
   AlertTriangle,
-  Shield,
-  Eye,
   User,
   Clock,
   Activity,
-  CheckCircle2,
-  XCircle,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -58,7 +54,6 @@ export default function ProctoringSessionPage() {
     createSession,
     startSession,
     pauseSession,
-    resumeSession,
     endSession,
     submitFrame,
     isCreating,
@@ -135,10 +130,7 @@ export default function ProctoringSessionPage() {
             const reader = new FileReader();
             reader.onloadend = () => {
               const base64 = (reader.result as string).split(',')[1];
-              submitFrame({
-                frame_base64: base64,
-                frame_number: stats.framesAnalyzed,
-              });
+              submitFrame(base64);
             };
             reader.readAsDataURL(blob);
           }
@@ -147,7 +139,7 @@ export default function ProctoringSessionPage() {
         0.8
       );
     }
-  }, [sessionId, stats.framesAnalyzed, submitFrame]);
+  }, [sessionId, submitFrame]);
 
   // Frame capture interval
   useEffect(() => {
@@ -181,7 +173,7 @@ export default function ProctoringSessionPage() {
   }, [stopCamera]);
 
   const handleCreateSession = async () => {
-    await createSession({ exam_id: examId, user_id: userId });
+    await createSession(userId, examId);
     await startCamera();
   };
 

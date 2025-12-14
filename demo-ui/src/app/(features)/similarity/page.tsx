@@ -3,7 +3,7 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { Grid2X2, Upload, Trash2, Play, AlertCircle } from 'lucide-react';
+import { Grid2X2, Upload, Trash2, AlertCircle } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -25,10 +25,10 @@ export default function SimilarityPage() {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [threshold, setThreshold] = useState(0.6);
 
-  const { mutate: computeMatrix, isPending, isSuccess, isError, data, error, reset } = useSimilarityMatrix();
+  const { mutate: computeMatrix, isPending, isSuccess, isError, data, error } = useSimilarityMatrix();
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
-    const newFiles = acceptedFiles.map((file, i) => ({
+    const newFiles = acceptedFiles.map((file) => ({
       file,
       preview: URL.createObjectURL(file),
       label: file.name.split('.')[0],

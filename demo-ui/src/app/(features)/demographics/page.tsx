@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { Users, Upload, Camera, AlertCircle, User, Smile } from 'lucide-react';
+import { Users, Upload, Camera, AlertCircle, User } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -47,7 +47,7 @@ export default function DemographicsPage() {
       {
         onSuccess: (result) => {
           toast.success('Analysis Complete', {
-            description: `Age: ${result.age.value}, Gender: ${result.gender.value}`,
+            description: `Age: ${result.age}, Gender: ${result.gender}`,
           });
         },
         onError: (err) => {
@@ -183,18 +183,18 @@ export default function DemographicsPage() {
                       <User className="h-8 w-8 text-primary" />
                       <div>
                         <p className="text-sm text-muted-foreground">{t('demographics.results.age')}</p>
-                        <p className="text-2xl font-bold">{data.age.value} years</p>
+                        <p className="text-2xl font-bold">{data.age} years</p>
                         <p className="text-sm text-muted-foreground">
-                          Range: {data.age.range[0]} - {data.age.range[1]}
+                          Range: {data.age_range.min} - {data.age_range.max}
                         </p>
                       </div>
                     </div>
                     <div className="mt-2">
                       <div className="flex justify-between text-xs text-muted-foreground">
                         <span>Confidence</span>
-                        <span>{(data.age.confidence * 100).toFixed(0)}%</span>
+                        <span>{(data.age_confidence * 100).toFixed(0)}%</span>
                       </div>
-                      <Progress value={data.age.confidence * 100} className="h-1 mt-1" />
+                      <Progress value={data.age_confidence * 100} className="h-1 mt-1" />
                     </div>
                   </div>
 
@@ -203,10 +203,10 @@ export default function DemographicsPage() {
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="text-sm text-muted-foreground">{t('demographics.results.gender')}</p>
-                        <p className="text-2xl font-bold capitalize">{data.gender.value}</p>
+                        <p className="text-2xl font-bold capitalize">{data.gender}</p>
                       </div>
-                      <Badge variant={data.gender.value === 'male' ? 'default' : 'secondary'}>
-                        {(data.gender.confidence * 100).toFixed(0)}% confident
+                      <Badge variant={data.gender === 'male' ? 'default' : 'secondary'}>
+                        {(data.gender_confidence * 100).toFixed(0)}% confident
                       </Badge>
                     </div>
                   </div>
@@ -215,19 +215,19 @@ export default function DemographicsPage() {
                   <div className="rounded-lg border p-4">
                     <p className="text-sm text-muted-foreground mb-3">{t('demographics.results.emotion')}</p>
                     <div className="flex items-center gap-3 mb-4">
-                      <span className="text-4xl">{emotionEmojis[data.emotion.dominant] || '😐'}</span>
+                      <span className="text-4xl">{emotionEmojis[data.dominant_emotion] || '😐'}</span>
                       <div>
-                        <p className="text-xl font-bold capitalize">{data.emotion.dominant}</p>
+                        <p className="text-xl font-bold capitalize">{data.dominant_emotion}</p>
                         <p className="text-sm text-muted-foreground">
-                          {(data.emotion.confidence * 100).toFixed(0)}% confident
+                          {(data.emotion_confidence * 100).toFixed(0)}% confident
                         </p>
                       </div>
                     </div>
 
                     {/* Emotion Breakdown */}
-                    {data.emotion.scores && (
+                    {data.emotion_scores && (
                       <div className="space-y-2">
-                        {Object.entries(data.emotion.scores)
+                        {Object.entries(data.emotion_scores)
                           .sort(([, a], [, b]) => (b as number) - (a as number))
                           .map(([emotion, score]) => (
                             <div key={emotion} className="flex items-center gap-2">
@@ -241,11 +241,6 @@ export default function DemographicsPage() {
                           ))}
                       </div>
                     )}
-                  </div>
-
-                  {/* Processing Time */}
-                  <div className="text-sm text-muted-foreground">
-                    Processing time: {data.processing_time_ms}ms
                   </div>
                 </motion.div>
               )}
@@ -268,7 +263,7 @@ export default function DemographicsPage() {
 
               {!isSuccess && !isError && (
                 <div className="flex h-64 flex-col items-center justify-center gap-4 text-muted-foreground">
-                  <Smile className="h-12 w-12" />
+                  <Users className="h-12 w-12" />
                   <p>Upload an image to analyze demographics</p>
                 </div>
               )}

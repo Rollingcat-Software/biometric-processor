@@ -6,7 +6,6 @@ import { motion } from 'framer-motion';
 import { Search, Upload, Camera, Users, AlertCircle } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { ImageUploader } from '@/components/media/image-uploader';
@@ -204,7 +203,7 @@ export default function SearchPage() {
                     <div className="max-h-96 space-y-2 overflow-y-auto">
                       {data.matches.map((match, index) => (
                         <motion.div
-                          key={match.person_id}
+                          key={`${match.user_id}-${index}`}
                           initial={{ opacity: 0, y: 10 }}
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ delay: index * 0.05 }}
@@ -215,9 +214,9 @@ export default function SearchPage() {
                               <Users className="h-5 w-5 text-muted-foreground" />
                             </div>
                             <div>
-                              <p className="font-medium">{match.person_id}</p>
+                              <p className="font-medium">{match.user_id}</p>
                               <p className="text-xs text-muted-foreground">
-                                Face ID: {match.face_id}
+                                Rank: #{match.rank}
                               </p>
                             </div>
                           </div>
@@ -242,9 +241,9 @@ export default function SearchPage() {
                     </div>
                   )}
 
-                  {/* Processing Time */}
+                  {/* Stats */}
                   <div className="pt-2 text-sm text-muted-foreground">
-                    Processing time: {data.processing_time_ms}ms
+                    Searched {data.total_searched} face{data.total_searched !== 1 ? 's' : ''}
                   </div>
                 </motion.div>
               )}

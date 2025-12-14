@@ -1,8 +1,9 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { Settings, Globe, Palette, Camera, Server, Bell } from 'lucide-react';
+import { Settings, Palette, Camera, Server, Bell } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,6 +23,12 @@ import { toast } from 'sonner';
 export default function SettingsPage() {
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+
+  // Prevent hydration mismatch by only rendering theme-dependent content after mount
+  useEffect(() => {
+    setMounted(true);
+  }, []);
   const {
     apiUrl,
     setApiUrl,
@@ -77,16 +84,20 @@ export default function SettingsPage() {
               {/* Theme */}
               <div className="space-y-2">
                 <Label>{t('settings.theme')}</Label>
-                <Select value={theme} onValueChange={setTheme}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="light">{t('settings.themes.light')}</SelectItem>
-                    <SelectItem value="dark">{t('settings.themes.dark')}</SelectItem>
-                    <SelectItem value="system">{t('settings.themes.system')}</SelectItem>
-                  </SelectContent>
-                </Select>
+                {mounted ? (
+                  <Select value={theme} onValueChange={setTheme}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="light">{t('settings.themes.light')}</SelectItem>
+                      <SelectItem value="dark">{t('settings.themes.dark')}</SelectItem>
+                      <SelectItem value="system">{t('settings.themes.system')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <div className="h-10 w-full rounded-md border bg-muted animate-pulse" />
+                )}
               </div>
 
               {/* Language */}

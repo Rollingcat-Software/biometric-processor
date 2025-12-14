@@ -6,7 +6,6 @@ import { motion } from 'framer-motion';
 import { Activity, Upload, Camera, AlertCircle, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { ImageUploader } from '@/components/media/image-uploader';
 import { WebcamCapture } from '@/components/media/webcam-capture';
@@ -45,7 +44,7 @@ export default function QualityPage() {
       {
         onSuccess: (result) => {
           toast.success('Analysis Complete', {
-            description: `Quality Grade: ${result.grade.toUpperCase()}`,
+            description: `Quality Score: ${(result.overall_score * 100).toFixed(1)}%`,
           });
         },
         onError: (err) => {
@@ -63,7 +62,16 @@ export default function QualityPage() {
     reset();
   };
 
-  const gradeConfig = data?.grade ? qualityGradeConfig[data.grade as keyof typeof qualityGradeConfig] : null;
+  const getGradeFromScore = (score: number) => {
+    if (score >= 0.9) return 'excellent';
+    if (score >= 0.75) return 'good';
+    if (score >= 0.6) return 'acceptable';
+    if (score >= 0.4) return 'poor';
+    return 'failed';
+  };
+
+  const grade = data ? getGradeFromScore(data.overall_score) : null;
+  const gradeConfig = grade ? qualityGradeConfig[grade as keyof typeof qualityGradeConfig] : null;
   const GradeIcon = gradeConfig?.icon || CheckCircle2;
 
   return (
@@ -183,7 +191,7 @@ export default function QualityPage() {
                     <GradeIcon className={`h-8 w-8 ${gradeConfig?.color}`} />
                     <div>
                       <p className={`text-lg font-semibold ${gradeConfig?.color}`}>
-                        {t(`quality.levels.${data.grade}`)}
+                        {grade ? t(`quality.levels.${grade}`) : 'Quality Result'}
                       </p>
                       <p className="text-sm text-muted-foreground">
                         Overall Score: {(data.overall_score * 100).toFixed(1)}%

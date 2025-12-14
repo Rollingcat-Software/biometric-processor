@@ -45,7 +45,7 @@ export default function VerificationPage() {
       { user_id: userId, image },
       {
         onSuccess: (result) => {
-          if (result.verified) {
+          if (result.match) {
             toast.success('Identity Verified', {
               description: `Confidence: ${(result.confidence * 100).toFixed(1)}%`,
             });
@@ -199,21 +199,21 @@ export default function VerificationPage() {
                 >
                   {/* Match Status */}
                   <div className={`flex items-center gap-3 rounded-lg p-4 ${
-                    data.verified
+                    data.match
                       ? 'bg-green-500/10 text-green-600'
                       : 'bg-red-500/10 text-red-600'
                   }`}>
-                    {data.verified ? (
+                    {data.match ? (
                       <CheckCircle2 className="h-8 w-8" />
                     ) : (
                       <XCircle className="h-8 w-8" />
                     )}
                     <div>
                       <p className="text-lg font-semibold">
-                        {data.verified ? t('verification.result.match') : t('verification.result.noMatch')}
+                        {data.match ? t('verification.result.match') : t('verification.result.noMatch')}
                       </p>
                       <p className="text-sm opacity-80">
-                        {data.verified
+                        {data.match
                           ? 'Identity successfully verified'
                           : 'Face does not match enrolled user'}
                       </p>
@@ -225,7 +225,6 @@ export default function VerificationPage() {
                     <SimilarityGauge
                       value={data.confidence}
                       threshold={data.threshold}
-                      size={200}
                     />
                   </div>
 
@@ -244,9 +243,9 @@ export default function VerificationPage() {
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">Distance</span>
+                      <span className="text-muted-foreground">User ID</span>
                       <span className="font-mono text-sm">
-                        {data.distance?.toFixed(4) || 'N/A'}
+                        {data.user_id}
                       </span>
                     </div>
                   </div>

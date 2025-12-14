@@ -1,5 +1,4 @@
 import { useMutation } from '@tanstack/react-query';
-import { apiClient } from '@/lib/api/client';
 
 interface VerificationRequest {
   image: File | Blob;

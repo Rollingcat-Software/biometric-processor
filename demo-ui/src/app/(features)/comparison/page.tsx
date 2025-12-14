@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { GitCompare, Upload, AlertCircle, CheckCircle2, XCircle, ArrowLeftRight } from 'lucide-react';
+import { GitCompare, AlertCircle, CheckCircle2, XCircle, ArrowLeftRight } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -149,7 +149,7 @@ export default function ComparisonPage() {
               <SimilarityGauge
                 value={data.similarity}
                 threshold={threshold}
-                size={180}
+                size="lg"
               />
 
               {/* Details */}

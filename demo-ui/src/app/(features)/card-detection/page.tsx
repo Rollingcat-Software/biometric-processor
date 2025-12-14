@@ -1,9 +1,8 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { CreditCard, Camera, Play, Square, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { CreditCard, Play, Square, CheckCircle2 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -20,7 +19,6 @@ const cardTypes: Record<string, { label: string; color: string }> = {
 };
 
 export default function CardDetectionPage() {
-  const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);

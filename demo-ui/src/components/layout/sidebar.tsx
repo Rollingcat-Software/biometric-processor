@@ -28,6 +28,7 @@ import {
   Grid2X2,
   CreditCard,
   Database,
+  Play,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { Button } from '@/components/ui/button';
@@ -40,6 +41,12 @@ const navigationItems = [
     title: 'nav.dashboard',
     href: '/',
     icon: Home,
+    group: 'main',
+  },
+  {
+    title: 'nav.demo',
+    href: '/demo',
+    icon: Play,
     group: 'main',
   },
   {

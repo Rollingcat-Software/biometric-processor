@@ -45,7 +45,9 @@ export default function EnrollmentPage() {
       {
         onSuccess: (result) => {
           toast.success(t('enrollment.success'), {
-            description: `Face enrolled with quality score: ${(result.quality_score * 100).toFixed(1)}%`,
+            description: result.quality_score
+              ? `Face enrolled with quality score: ${(result.quality_score * 100).toFixed(1)}%`
+              : 'Face enrolled successfully',
           });
         },
         onError: (err) => {
@@ -196,19 +198,21 @@ export default function EnrollmentPage() {
                   </div>
                   <div className="space-y-2 rounded-lg bg-muted p-4">
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">Face ID</span>
-                      <span className="font-mono text-sm">{data.face_id}</span>
+                      <span className="text-muted-foreground">Embedding ID</span>
+                      <span className="font-mono text-sm">{data.embedding_id}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">Person ID</span>
-                      <span className="font-mono text-sm">{data.person_id}</span>
+                      <span className="text-muted-foreground">User ID</span>
+                      <span className="font-mono text-sm">{data.user_id}</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Quality Score</span>
-                      <span className="font-semibold">
-                        {(data.quality_score * 100).toFixed(1)}%
-                      </span>
-                    </div>
+                    {data.quality_score && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Quality Score</span>
+                        <span className="font-semibold">
+                          {(data.quality_score * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </motion.div>
               )}

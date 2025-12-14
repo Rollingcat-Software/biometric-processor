@@ -3,7 +3,7 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { Grid3X3, Upload, AlertCircle, CheckCircle2, XCircle, Play, Trash2, FileImage } from 'lucide-react';
+import { Grid3X3, Upload, CheckCircle2, XCircle, Play, Trash2, FileImage } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -32,7 +32,7 @@ export default function BatchPage() {
   const [operation, setOperation] = useState<BatchOperation>('quality');
   const [skipDuplicates, setSkipDuplicates] = useState(true);
 
-  const { mutate: processBatch, isPending, isSuccess, data, reset } = useBatchProcess();
+  const { mutate: processBatch, isPending, reset } = useBatchProcess();
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const newFiles = acceptedFiles.map((file) => ({
@@ -80,7 +80,6 @@ export default function BatchPage() {
       {
         files: files.map((f) => f.file),
         operation,
-        skip_duplicates: skipDuplicates,
       },
       {
         onSuccess: (result) => {
@@ -92,8 +91,8 @@ export default function BatchPage() {
             prev.map((f, i) => ({
               ...f,
               status: result.results?.[i]?.success ? 'success' : 'error',
-              result: result.results?.[i]?.result,
-              error: result.errors?.find((e) => e.index === i)?.error,
+              result: result.results?.[i],
+              error: result.results?.[i]?.error,
             }))
           );
         },

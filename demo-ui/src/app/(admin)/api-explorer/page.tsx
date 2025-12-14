@@ -1,15 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
 import {
   Code,
-  Play,
   Copy,
   Check,
-  ChevronDown,
-  ChevronRight,
   Send,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -96,7 +92,6 @@ const methodColors: Record<string, string> = {
 };
 
 export default function ApiExplorerPage() {
-  const { t } = useTranslation();
   const [selectedEndpoint, setSelectedEndpoint] = useState<any>(null);
   const [method, setMethod] = useState('GET');
   const [url, setUrl] = useState('');

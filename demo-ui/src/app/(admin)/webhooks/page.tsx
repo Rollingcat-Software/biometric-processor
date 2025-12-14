@@ -1,18 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
 import {
   Webhook,
   Plus,
   Trash2,
   Play,
-  CheckCircle2,
-  XCircle,
   Clock,
   Link,
-  AlertCircle,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -29,13 +25,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { useWebhooks, useCreateWebhook, useDeleteWebhook, useTestWebhook } from '@/hooks/use-webhooks';
 import { toast } from 'sonner';
 
@@ -51,7 +40,6 @@ const eventTypes = [
 ];
 
 export default function WebhooksPage() {
-  const { t } = useTranslation();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [newWebhook, setNewWebhook] = useState({
     url: '',
@@ -94,11 +82,11 @@ export default function WebhooksPage() {
       const result = await testWebhook.mutateAsync(id);
       if (result.success) {
         toast.success('Test Successful', {
-          description: `Response time: ${result.response_time}ms`,
+          description: `Response time: ${result.response_time_ms}ms`,
         });
       } else {
         toast.error('Test Failed', {
-          description: result.error || 'Webhook endpoint did not respond correctly',
+          description: 'Webhook endpoint did not respond correctly',
         });
       }
     } catch (err: any) {
@@ -209,7 +197,7 @@ export default function WebhooksPage() {
           <CardHeader>
             <CardTitle>Registered Webhooks</CardTitle>
             <CardDescription>
-              {webhooks?.length || 0} webhook{webhooks?.length !== 1 ? 's' : ''} configured
+              {webhooks?.webhooks?.length || 0} webhook{webhooks?.webhooks?.length !== 1 ? 's' : ''} configured
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -219,9 +207,9 @@ export default function WebhooksPage() {
                   <div key={i} className="h-20 rounded-lg border animate-pulse bg-muted" />
                 ))}
               </div>
-            ) : webhooks && webhooks.length > 0 ? (
+            ) : webhooks && webhooks.webhooks && webhooks.webhooks.length > 0 ? (
               <div className="space-y-3">
-                {webhooks.map((webhook: any) => (
+                {webhooks.webhooks.map((webhook: any) => (
                   <div
                     key={webhook.id}
                     className="flex items-center justify-between rounded-lg border p-4"
@@ -230,8 +218,8 @@ export default function WebhooksPage() {
                       <div className="flex items-center gap-2">
                         <Link className="h-4 w-4 text-muted-foreground" />
                         <span className="font-medium">{webhook.url}</span>
-                        <Badge variant={webhook.active ? 'default' : 'secondary'}>
-                          {webhook.active ? 'Active' : 'Inactive'}
+                        <Badge variant={webhook.is_active ? 'default' : 'secondary'}>
+                          {webhook.is_active ? 'Active' : 'Inactive'}
                         </Badge>
                       </div>
                       <div className="flex flex-wrap gap-1">
@@ -279,7 +267,7 @@ export default function WebhooksPage() {
               <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                 <Webhook className="h-12 w-12 mb-4" />
                 <p>No webhooks configured</p>
-                <p className="text-sm">Click "Add Webhook" to register an endpoint</p>
+                <p className="text-sm">Click &quot;Add Webhook&quot; to register an endpoint</p>
               </div>
             )}
           </CardContent>

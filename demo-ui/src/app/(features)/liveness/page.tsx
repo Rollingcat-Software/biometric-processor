@@ -38,11 +38,11 @@ export default function LivenessPage() {
         onSuccess: (result) => {
           if (result.is_live) {
             toast.success(t('liveness.result.live'), {
-              description: `Liveness score: ${(result.liveness_score * 100).toFixed(1)}%`,
+              description: `Liveness score: ${(result.confidence * 100).toFixed(1)}%`,
             });
           } else {
             toast.warning(t('liveness.result.spoof'), {
-              description: result.spoof_type || 'Potential spoof detected',
+              description: result.message || 'Potential spoof detected',
             });
           }
         },
@@ -190,9 +190,9 @@ export default function LivenessPage() {
                       <p className="text-lg font-semibold">
                         {data.is_live ? t('liveness.result.live') : t('liveness.result.spoof')}
                       </p>
-                      {data.spoof_type && (
+                      {!data.is_live && data.message && (
                         <Badge variant="destructive" className="mt-1">
-                          {data.spoof_type}
+                          {data.message}
                         </Badge>
                       )}
                     </div>
@@ -203,11 +203,11 @@ export default function LivenessPage() {
                     <div className="flex justify-between text-sm">
                       <span>{t('liveness.result.score')}</span>
                       <span className="font-semibold">
-                        {(data.liveness_score * 100).toFixed(1)}%
+                        {(data.confidence * 100).toFixed(1)}%
                       </span>
                     </div>
                     <Progress
-                      value={data.liveness_score * 100}
+                      value={data.confidence * 100}
                       className={data.is_live ? 'bg-green-200' : 'bg-red-200'}
                     />
                   </div>
@@ -239,10 +239,6 @@ export default function LivenessPage() {
                     </div>
                   )}
 
-                  {/* Processing Time */}
-                  <div className="pt-2 text-sm text-muted-foreground">
-                    Processing time: {data.processing_time_ms}ms
-                  </div>
                 </motion.div>
               )}
 
