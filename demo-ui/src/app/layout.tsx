@@ -1,10 +1,12 @@
 import type { Metadata, Viewport } from 'next';
 import { Inter, JetBrains_Mono } from 'next/font/google';
+import { Suspense } from 'react';
 import './globals.css';
 import { Providers } from './providers';
 import { Toaster } from '@/components/ui/sonner';
 import { Header } from '@/components/layout/header';
 import { Sidebar } from '@/components/layout/sidebar';
+import { NavigationProgress } from '@/components/navigation/navigation-progress';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -68,6 +70,9 @@ export default function RootLayout({
         className={`${inter.variable} ${jetbrainsMono.variable} font-sans antialiased`}
       >
         <Providers>
+          <Suspense fallback={null}>
+            <NavigationProgress />
+          </Suspense>
           <div className="flex h-screen overflow-hidden bg-background">
             <Sidebar />
             <div className="flex flex-1 flex-col overflow-hidden">

@@ -1,5 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api/client';
+import { API_CONFIG } from '@/config/api.config';
+
+const API_URL = API_CONFIG.BASE_URL;
 
 interface Embedding {
   id: string;
@@ -28,7 +31,7 @@ async function fetchEmbeddings(params: EmbeddingListParams): Promise<EmbeddingLi
   try {
     // Use the export endpoint and transform the response
     const response = await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'}/api/v1/embeddings/export?tenant_id=default`,
+      `${API_URL}/api/v1/embeddings/export?tenant_id=default`,
       { method: 'GET' }
     );
 

@@ -138,7 +138,7 @@ export default function SettingsPage() {
                   <Input
                     value={apiUrl}
                     onChange={(e) => setApiUrl(e.target.value)}
-                    placeholder="http://localhost:8001"
+                    placeholder="http://localhost:8000"
                   />
                   <Button onClick={handleSaveApiUrl}>Save</Button>
                 </div>

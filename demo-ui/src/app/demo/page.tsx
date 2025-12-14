@@ -249,11 +249,22 @@ export default function DemoPage() {
       { image },
       {
         onSuccess: (data) => {
-          saveResult('quality', data.is_acceptable, data as unknown as Record<string, unknown>);
-          if (data.is_acceptable) {
-            toast.success('Good quality!', { description: `Score: ${data.overall_score.toFixed(1)}%` });
+          // Consider quality good if score >= 70%, even if backend flags some issues
+          const isGoodQuality = data.overall_score >= 70;
+          saveResult('quality', isGoodQuality, data as unknown as Record<string, unknown>);
+
+          // Smarter messaging based on actual score
+          if (data.overall_score >= 90) {
+            toast.success('Excellent quality!', { description: `Score: ${data.overall_score.toFixed(1)}%` });
+          } else if (data.overall_score >= 70) {
+            const suggestion = data.recommendations?.length > 0
+              ? data.recommendations[0]
+              : 'Minor improvements possible';
+            toast.success('Good quality', { description: `Score: ${data.overall_score.toFixed(1)}% - ${suggestion}` });
+          } else if (data.overall_score >= 50) {
+            toast.warning('Acceptable quality', { description: data.recommendations?.join(', ') || 'Some improvements needed' });
           } else {
-            toast.warning('Quality issues detected', { description: data.recommendations?.join(', ') });
+            toast.error('Poor quality', { description: data.recommendations?.join(', ') || 'Please retake the image' });
           }
           if (isAutoMode) setTimeout(() => setCurrentStep(6), 1500);
         },
@@ -824,20 +835,61 @@ export default function DemoPage() {
                         )}
                         {results.quality && (
                           <div className="space-y-4">
+                            {/* Overall Score with Color */}
                             <div className="text-center p-4 border rounded-lg">
-                              <p className="text-4xl font-bold">
-                                {(results.quality.data as { overall_score?: number })?.overall_score?.toFixed(1)}%
-                              </p>
-                              <p className="text-muted-foreground">Overall Quality Score</p>
+                              {(() => {
+                                const score = (results.quality.data as { overall_score?: number })?.overall_score || 0;
+                                const colorClass = score >= 90 ? 'text-green-500' :
+                                                   score >= 70 ? 'text-emerald-500' :
+                                                   score >= 50 ? 'text-yellow-500' : 'text-red-500';
+                                return (
+                                  <>
+                                    <p className={`text-4xl font-bold ${colorClass}`}>
+                                      {score.toFixed(1)}%
+                                    </p>
+                                    <p className="text-muted-foreground">Overall Quality Score</p>
+                                    <Progress value={score} className="mt-2 h-2" />
+                                  </>
+                                );
+                              })()}
                             </div>
-                            <div className="grid grid-cols-2 gap-3">
-                              {Object.entries((results.quality.data as { metrics?: Record<string, number> })?.metrics || {}).map(([key, value]) => (
-                                <div key={key} className="p-3 border rounded-lg">
-                                  <p className="text-sm text-muted-foreground capitalize">{key.replace(/_/g, ' ')}</p>
-                                  <p className="font-semibold">{typeof value === 'number' ? value.toFixed(1) : value}</p>
-                                </div>
-                              ))}
+                            {/* Individual Metrics with Progress Bars */}
+                            <div className="grid gap-3">
+                              {Object.entries((results.quality.data as { metrics?: Record<string, number> })?.metrics || {}).map(([key, value]) => {
+                                const numValue = typeof value === 'number' ? value : 0;
+                                const colorClass = numValue >= 80 ? 'bg-green-500' :
+                                                   numValue >= 60 ? 'bg-yellow-500' :
+                                                   numValue >= 40 ? 'bg-orange-500' : 'bg-red-500';
+                                return (
+                                  <div key={key} className="p-3 border rounded-lg">
+                                    <div className="flex justify-between items-center mb-1">
+                                      <p className="text-sm text-muted-foreground capitalize">{key.replace(/_/g, ' ')}</p>
+                                      <p className="text-sm font-semibold">{numValue.toFixed(1)}</p>
+                                    </div>
+                                    <div className="h-2 bg-muted rounded-full overflow-hidden">
+                                      <div
+                                        className={`h-full ${colorClass} transition-all duration-300`}
+                                        style={{ width: `${Math.min(100, numValue)}%` }}
+                                      />
+                                    </div>
+                                  </div>
+                                );
+                              })}
                             </div>
+                            {/* Recommendations */}
+                            {((results.quality.data as { recommendations?: string[] })?.recommendations?.length ?? 0) > 0 && (
+                              <Alert>
+                                <Info className="h-4 w-4" />
+                                <AlertTitle>Suggestions</AlertTitle>
+                                <AlertDescription>
+                                  <ul className="list-disc list-inside text-sm">
+                                    {(results.quality.data as { recommendations?: string[] })?.recommendations?.map((rec, idx) => (
+                                      <li key={idx}>{rec}</li>
+                                    ))}
+                                  </ul>
+                                </AlertDescription>
+                              </Alert>
+                            )}
                           </div>
                         )}
                         {!qualityMutation.isPending && !results.quality && (
@@ -1043,27 +1095,61 @@ export default function DemoPage() {
                       {DEMO_STEPS.slice(1, -1).map((s) => {
                         const result = results[s.id];
                         const Icon = s.icon;
+
+                        // Determine status and message
+                        const wasExecuted = result !== undefined;
+                        const isSuccess = result?.success === true;
+                        const hasError = result?.error !== undefined;
+
+                        let statusMessage = 'Skipped';
+                        let statusIcon = <AlertCircle className="h-4 w-4 text-muted-foreground" />;
+                        let borderClass = 'border-muted';
+
+                        if (wasExecuted) {
+                          if (isSuccess) {
+                            statusMessage = 'Completed successfully';
+                            statusIcon = <CheckCircle2 className="h-4 w-4 text-green-500" />;
+                            borderClass = 'border-green-500';
+                          } else if (hasError) {
+                            statusMessage = result.error || 'Failed';
+                            statusIcon = <XCircle className="h-4 w-4 text-red-500" />;
+                            borderClass = 'border-red-500';
+                          } else {
+                            // Executed but not marked as success (e.g., quality below threshold)
+                            statusMessage = 'Completed with warnings';
+                            statusIcon = <AlertCircle className="h-4 w-4 text-yellow-500" />;
+                            borderClass = 'border-yellow-500';
+                          }
+                        }
+
+                        // Get additional result info
+                        let resultDetail = '';
+                        if (wasExecuted && result.data) {
+                          const data = result.data as Record<string, unknown>;
+                          if (s.id === 'enroll') resultDetail = `User: ${(data.userId as string)?.slice(-8) || 'N/A'}`;
+                          if (s.id === 'verify') resultDetail = `Similarity: ${(((data.similarity as number) || 0) * 100).toFixed(0)}%`;
+                          if (s.id === 'search') resultDetail = `Found: ${(data.matches as unknown[])?.length || 0} matches`;
+                          if (s.id === 'quality') resultDetail = `Score: ${((data.overall_score as number) || 0).toFixed(0)}%`;
+                          if (s.id === 'liveness') resultDetail = `Confidence: ${(((data.confidence as number) || 0) * 100).toFixed(0)}%`;
+                          if (s.id === 'demographics') resultDetail = `Age: ${data.age || 'N/A'}, ${data.gender || 'N/A'}`;
+                        }
+
                         return (
-                          <Card key={s.id} className={result?.success ? 'border-green-500' : result?.error ? 'border-red-500' : ''}>
+                          <Card key={s.id} className={borderClass}>
                             <CardHeader className="pb-2">
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
                                   <Icon className={`h-4 w-4 text-${s.color}-500`} />
                                   <CardTitle className="text-sm">{s.title.replace(/Step \d+: /, '')}</CardTitle>
                                 </div>
-                                {result?.success ? (
-                                  <CheckCircle2 className="h-4 w-4 text-green-500" />
-                                ) : result?.error ? (
-                                  <XCircle className="h-4 w-4 text-red-500" />
-                                ) : (
-                                  <AlertCircle className="h-4 w-4 text-muted-foreground" />
-                                )}
+                                {statusIcon}
                               </div>
                             </CardHeader>
-                            <CardContent>
-                              <p className="text-xs text-muted-foreground">
-                                {result?.success ? 'Completed successfully' : result?.error || 'Not executed'}
-                              </p>
+                            <CardContent className="space-y-1">
+                              <p className="text-xs text-muted-foreground">{statusMessage}</p>
+                              {resultDetail && (
+                                <p className="text-xs font-medium">{resultDetail}</p>
+                              )}
                             </CardContent>
                           </Card>
                         );

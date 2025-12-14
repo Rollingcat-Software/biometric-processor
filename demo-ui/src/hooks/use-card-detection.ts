@@ -1,4 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
+import { API_CONFIG } from '@/config/api.config';
+
+const API_URL = API_CONFIG.BASE_URL;
 
 interface CardDetectionRequest {
   image: File | Blob;
@@ -22,7 +25,7 @@ async function detectCard(request: CardDetectionRequest): Promise<CardDetectionR
   formData.append('file', request.image);
 
   const response = await fetch(
-    `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'}/api/v1/card-type/detect-live`,
+    `${API_URL}/api/v1/card-type/detect-live`,
     {
       method: 'POST',
       body: formData,

@@ -1,8 +1,9 @@
 import { useMutation } from '@tanstack/react-query';
 import { ApiClientError } from '@/lib/api/client';
+import { API_CONFIG } from '@/config/api.config';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const REQUEST_TIMEOUT = 120000; // 2 minutes for first-time model loading
+const API_URL = API_CONFIG.BASE_URL;
+const REQUEST_TIMEOUT = API_CONFIG.TIMEOUT.LONG; // 2 minutes for first-time model loading
 
 interface DemographicsRequest {
   image: File | Blob;

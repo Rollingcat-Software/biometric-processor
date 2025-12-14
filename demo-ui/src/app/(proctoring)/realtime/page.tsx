@@ -168,7 +168,7 @@ export default function RealtimePage() {
       return;
     }
     await startCamera();
-    const baseUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001';
+    const baseUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
     setWsUrl(`${baseUrl}/api/v1/proctoring/sessions/${sessionId}/stream`);
     connect();
   };

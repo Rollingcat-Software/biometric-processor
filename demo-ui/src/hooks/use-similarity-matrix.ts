@@ -1,4 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
+import { API_CONFIG } from '@/config/api.config';
+
+const API_URL = API_CONFIG.BASE_URL;
 
 interface SimilarityMatrixRequest {
   files: File[];
@@ -22,7 +25,7 @@ async function computeSimilarityMatrix(request: SimilarityMatrixRequest): Promis
     formData.append('labels', request.labels.join(','));
   }
 
-  const url = new URL(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'}/api/v1/similarity/matrix`);
+  const url = new URL(`${API_URL}/api/v1/similarity/matrix`);
   if (request.threshold !== undefined) {
     url.searchParams.set('threshold', request.threshold.toString());
   }

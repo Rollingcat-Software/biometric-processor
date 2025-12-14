@@ -1,7 +1,8 @@
 import { useState, useCallback, useRef } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { API_CONFIG } from '@/config/api.config';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+const API_URL = API_CONFIG.BASE_URL;
 
 interface CreateSessionRequest {
   user_id: string;

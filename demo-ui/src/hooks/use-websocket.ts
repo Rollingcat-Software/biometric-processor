@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { API_CONFIG } from '@/config/api.config';
+
+const WS_URL = API_CONFIG.WS_URL;
 
 type WebSocketStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
@@ -134,7 +137,7 @@ interface ProctoringFrame {
 }
 
 export function useProctoringStream(sessionId: string) {
-  const baseUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001';
+  const baseUrl = WS_URL;
   const [frames, setFrames] = useState<ProctoringFrame[]>([]);
   const [currentFrame, setCurrentFrame] = useState<ProctoringFrame | null>(null);
 

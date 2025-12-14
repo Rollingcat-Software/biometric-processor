@@ -1,8 +1,9 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ApiClientError } from '@/lib/api/client';
+import { API_CONFIG } from '@/config/api.config';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const REQUEST_TIMEOUT = 60000; // 60 seconds for enrollment
+const API_URL = API_CONFIG.BASE_URL;
+const REQUEST_TIMEOUT = API_CONFIG.TIMEOUT.DEFAULT;
 
 interface EnrollmentParams {
   person_id: string;
