@@ -82,13 +82,40 @@ class Settings(BaseSettings):
     MIN_FACE_SIZE: int = Field(default=80, ge=40, le=500)
     BLUR_THRESHOLD: float = Field(default=100.0, ge=0.0)
 
-    # Database (for future use in Sprint 4)
-    DATABASE_URL: Optional[str] = Field(default=None)
-    DATABASE_POOL_SIZE: int = Field(default=10, ge=1, le=100)
+    # Database (PostgreSQL with pgvector)
+    DATABASE_URL: Optional[str] = Field(
+        default="postgresql://postgres:postgres_dev_password@postgres:5432/identity_core_db"
+    )
+    DATABASE_POOL_MIN_SIZE: int = Field(default=10, ge=1, le=100)
+    DATABASE_POOL_MAX_SIZE: int = Field(default=20, ge=1, le=100)
+    USE_PGVECTOR: bool = Field(default=False)  # Set to True to use pgvector, False for in-memory
+    EMBEDDING_DIMENSION: int = Field(default=512, ge=128, le=4096)  # FaceNet: 512, VGG-Face: 2622
 
-    # Redis (for future use in Sprint 4)
-    REDIS_URL: Optional[str] = Field(default=None)
+    # Redis Configuration
+    REDIS_HOST: str = Field(default="localhost")
+    REDIS_PORT: int = Field(default=6379, ge=1024, le=65535)
+    REDIS_PASSWORD: Optional[str] = Field(default=None)
+    REDIS_DB: int = Field(default=0, ge=0, le=15)
     REDIS_MAX_CONNECTIONS: int = Field(default=10, ge=1, le=100)
+    REDIS_SOCKET_TIMEOUT: int = Field(default=5, ge=1, le=60)
+    REDIS_SOCKET_CONNECT_TIMEOUT: int = Field(default=5, ge=1, le=60)
+
+    # Event Bus Configuration
+    EVENT_BUS_ENABLED: bool = Field(default=True)
+    EVENT_BUS_RETRY_ATTEMPTS: int = Field(default=3, ge=1, le=10)
+    EVENT_BUS_RETRY_DELAY: float = Field(default=1.0, ge=0.1, le=10.0)
+
+    @property
+    def redis_url(self) -> str:
+        """Build Redis URL from components.
+
+        Returns:
+            Redis connection URL in the format:
+            redis://:password@host:port/db or redis://host:port/db
+        """
+        if self.REDIS_PASSWORD:
+            return f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+        return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
 
     # Webhook
     WEBHOOK_TIMEOUT: int = Field(default=10, ge=1, le=60)

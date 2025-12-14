@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.api.middleware.error_handler import setup_exception_handlers
 from app.api.middleware.rate_limit import RateLimitMiddleware
@@ -130,6 +131,32 @@ app.add_middleware(
 # ============================================================================
 
 setup_exception_handlers(app)
+
+# ============================================================================
+# Prometheus Metrics
+# ============================================================================
+
+# Configure Prometheus metrics instrumentation
+instrumentator = Instrumentator(
+    should_group_status_codes=True,
+    should_ignore_untemplated=True,
+    should_respect_env_var=True,
+    should_instrument_requests_inprogress=True,
+    excluded_handlers=["/metrics", "/health", "/"],
+    env_var_name="ENABLE_METRICS",
+    inprogress_name="http_requests_inprogress",
+    inprogress_labels=True,
+)
+
+# Add custom metrics
+instrumentator.add(
+    # Default metrics: request count, duration, etc.
+)
+
+# Expose /metrics endpoint
+instrumentator.instrument(app).expose(app, include_in_schema=False)
+
+logger.info("Prometheus metrics enabled at /metrics")
 
 # ============================================================================
 # API Routes
