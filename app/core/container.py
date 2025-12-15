@@ -7,10 +7,18 @@ Following Dependency Inversion Principle:
 - High-level modules (use cases) depend on abstractions (interfaces)
 - Low-level modules (infrastructure) implement abstractions
 - This container wires them together
+
+Performance Optimization:
+- ThreadPoolManager for CPU-bound ML operations
+- ThreadSafeLRUCache for embedding caching
+- Async wrappers for non-blocking detection/extraction
 """
 
 import logging
 from functools import lru_cache
+from typing import TYPE_CHECKING
+
+import numpy as np
 
 from app.application.use_cases.batch_process import BatchEnrollmentUseCase, BatchVerificationUseCase
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
@@ -67,6 +75,13 @@ from app.infrastructure.persistence.repositories.memory_embedding_repository imp
 )
 from app.infrastructure.storage.local_file_storage import LocalFileStorage
 
+# Performance optimization components
+from app.infrastructure.async_execution.thread_pool_manager import ThreadPoolManager
+from app.infrastructure.caching.lru_cache import ThreadSafeLRUCache
+
+if TYPE_CHECKING:
+    from app.domain.interfaces.ml_cache import IMLCache
+
 logger = logging.getLogger(__name__)
 
 
@@ -75,27 +90,116 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
+# ============================================================================
+# Performance Optimization Singletons (Thread Pool, Cache)
+# ============================================================================
+
+
+@lru_cache()
+def get_thread_pool_manager() -> ThreadPoolManager:
+    """Get thread pool manager instance (singleton).
+
+    Used for executing CPU-bound ML operations without blocking
+    the async event loop.
+
+    Returns:
+        ThreadPoolManager instance
+
+    Note:
+        Must be shutdown during application shutdown via shutdown_thread_pool()
+    """
+    logger.info(f"Creating thread pool manager: workers={settings.ML_THREAD_POOL_SIZE}")
+    return ThreadPoolManager(
+        max_workers=settings.ML_THREAD_POOL_SIZE,
+        thread_name_prefix="bio-ml",
+    )
+
+
+@lru_cache()
+def get_embedding_cache() -> ThreadSafeLRUCache[str, np.ndarray]:
+    """Get embedding cache instance (singleton).
+
+    Thread-safe LRU cache for caching extracted embeddings by image hash.
+
+    Returns:
+        ThreadSafeLRUCache instance for embeddings
+
+    Note:
+        Cache hit rate can be monitored via cache.stats()
+    """
+    logger.info(
+        f"Creating embedding cache: size={settings.EMBEDDING_CACHE_SIZE}, "
+        f"ttl={settings.EMBEDDING_CACHE_TTL}s"
+    )
+    return ThreadSafeLRUCache[str, np.ndarray](
+        max_size=settings.EMBEDDING_CACHE_SIZE,
+        ttl_seconds=settings.EMBEDDING_CACHE_TTL,
+    )
+
+
+def shutdown_thread_pool(wait: bool = True) -> None:
+    """Shutdown the thread pool manager gracefully.
+
+    Call this during application shutdown to ensure clean exit.
+
+    Args:
+        wait: If True, wait for pending tasks to complete
+    """
+    try:
+        pool = get_thread_pool_manager()
+        pool.shutdown(wait=wait)
+        logger.info("Thread pool manager shut down successfully")
+    except Exception as e:
+        logger.error(f"Error shutting down thread pool: {e}")
+
+
+# ============================================================================
+# ML Component Singletons (Detector, Extractor, etc.)
+# ============================================================================
+
+
 @lru_cache()
 def get_face_detector() -> IFaceDetector:
     """Get face detector instance (singleton).
 
+    When ASYNC_ML_ENABLED is True, returns AsyncFaceDetector wrapper
+    for non-blocking detection.
+
     Returns:
-        Face detector implementation
+        Face detector implementation (sync or async based on settings)
     """
-    logger.info(f"Creating face detector: {settings.FACE_DETECTION_BACKEND}")
-    return FaceDetectorFactory.create(detector_type=settings.FACE_DETECTION_BACKEND, align=True)
+    logger.info(
+        f"Creating face detector: {settings.FACE_DETECTION_BACKEND} "
+        f"(async={settings.ASYNC_ML_ENABLED})"
+    )
+    return FaceDetectorFactory.create(
+        detector_type=settings.FACE_DETECTION_BACKEND,
+        async_enabled=settings.ASYNC_ML_ENABLED,
+        thread_pool=get_thread_pool_manager() if settings.ASYNC_ML_ENABLED else None,
+        align=True,
+    )
 
 
 @lru_cache()
 def get_embedding_extractor() -> IEmbeddingExtractor:
     """Get embedding extractor instance (singleton).
 
+    When ASYNC_ML_ENABLED is True, returns AsyncEmbeddingExtractor wrapper.
+    When EMBEDDING_CACHE_ENABLED is True, wraps with CachedEmbeddingExtractor.
+
     Returns:
-        Embedding extractor implementation
+        Embedding extractor implementation (with optional async/cache)
     """
-    logger.info(f"Creating embedding extractor: {settings.FACE_RECOGNITION_MODEL}")
+    logger.info(
+        f"Creating embedding extractor: {settings.FACE_RECOGNITION_MODEL} "
+        f"(async={settings.ASYNC_ML_ENABLED}, cache={settings.EMBEDDING_CACHE_ENABLED})"
+    )
     return EmbeddingExtractorFactory.create(
         model_name=settings.FACE_RECOGNITION_MODEL,
+        async_enabled=settings.ASYNC_ML_ENABLED,
+        cache_enabled=settings.EMBEDDING_CACHE_ENABLED,
+        thread_pool=get_thread_pool_manager() if settings.ASYNC_ML_ENABLED else None,
+        cache=get_embedding_cache() if settings.EMBEDDING_CACHE_ENABLED else None,
         detector_backend=settings.FACE_DETECTION_BACKEND,
         enforce_detection=False,
     )
@@ -477,8 +581,17 @@ def initialize_dependencies() -> None:
 
     This pre-loads ML models at application startup for better
     first-request performance.
+
+    Performance Optimization:
+    - Creates thread pool for async ML operations
+    - Creates embedding cache for repeated extractions
+    - Pre-warms all ML models
     """
     logger.info("Initializing dependencies...")
+
+    # Initialize performance optimization components first
+    get_thread_pool_manager()
+    get_embedding_cache()
 
     # Pre-load expensive ML models
     get_face_detector()
@@ -491,6 +604,11 @@ def initialize_dependencies() -> None:
     get_embedding_repository()
     get_liveness_detector()
 
+    # Initialize additional analyzers
+    get_card_type_detector()
+    get_demographics_analyzer()
+    get_landmark_detector()
+
     logger.info("Dependencies initialized successfully")
 
 
@@ -500,9 +618,15 @@ def clear_cache() -> None:
     Warning:
         This will cause all dependencies to be recreated.
         Only use in tests or during development.
+        Ensure shutdown_thread_pool() is called first if needed.
     """
     logger.warning("Clearing dependency cache")
 
+    # Clear performance optimization caches first
+    get_thread_pool_manager.cache_clear()
+    get_embedding_cache.cache_clear()
+
+    # Clear ML component caches
     get_face_detector.cache_clear()
     get_embedding_extractor.cache_clear()
     get_quality_assessor.cache_clear()

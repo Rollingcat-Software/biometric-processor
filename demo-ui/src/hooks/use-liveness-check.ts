@@ -36,7 +36,8 @@ interface LivenessResult {
 
 async function checkLiveness(request: LivenessRequest): Promise<LivenessResult> {
   const formData = new FormData();
-  formData.append('file', request.image);
+  const filename = request.image instanceof File ? request.image.name : 'capture.jpg';
+  formData.append('file', request.image, filename);
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);

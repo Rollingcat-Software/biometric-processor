@@ -53,7 +53,8 @@ interface MultiFaceResponse {
 
 async function detectMultipleFaces(request: MultiFaceRequest): Promise<MultiFaceResponse> {
   const formData = new FormData();
-  formData.append('file', request.image);
+  const filename = request.image instanceof File ? request.image.name : 'capture.jpg';
+  formData.append('file', request.image, filename);
   if (request.max_faces !== undefined) {
     formData.append('max_faces', request.max_faces.toString());
   }

@@ -13,6 +13,7 @@ import { WebcamCapture } from '@/components/media/webcam-capture';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useDemographicsAnalysis } from '@/hooks/use-demographics-analysis';
 import { toast } from 'sonner';
+import { formatPercent, toPercent } from '@/lib/utils/format';
 
 const emotionEmojis: Record<string, string> = {
   happy: '😊',
@@ -192,9 +193,9 @@ export default function DemographicsPage() {
                     <div className="mt-2">
                       <div className="flex justify-between text-xs text-muted-foreground">
                         <span>Confidence</span>
-                        <span>{(data.age_confidence * 100).toFixed(0)}%</span>
+                        <span>{formatPercent(data.age_confidence, 0)}</span>
                       </div>
-                      <Progress value={data.age_confidence * 100} className="h-1 mt-1" />
+                      <Progress value={toPercent(data.age_confidence)} className="h-1 mt-1" />
                     </div>
                   </div>
 
@@ -206,7 +207,7 @@ export default function DemographicsPage() {
                         <p className="text-2xl font-bold capitalize">{data.gender}</p>
                       </div>
                       <Badge variant={data.gender === 'male' ? 'default' : 'secondary'}>
-                        {(data.gender_confidence * 100).toFixed(0)}% confident
+                        {formatPercent(data.gender_confidence, 0)} confident
                       </Badge>
                     </div>
                   </div>
@@ -219,7 +220,7 @@ export default function DemographicsPage() {
                       <div>
                         <p className="text-xl font-bold capitalize">{data.dominant_emotion}</p>
                         <p className="text-sm text-muted-foreground">
-                          {(data.emotion_confidence * 100).toFixed(0)}% confident
+                          {formatPercent(data.emotion_confidence, 0)} confident
                         </p>
                       </div>
                     </div>
@@ -233,9 +234,9 @@ export default function DemographicsPage() {
                             <div key={emotion} className="flex items-center gap-2">
                               <span className="w-6">{emotionEmojis[emotion] || '😐'}</span>
                               <span className="w-20 text-sm capitalize">{emotion}</span>
-                              <Progress value={(score as number) * 100} className="h-2 flex-1" />
+                              <Progress value={toPercent(score as number)} className="h-2 flex-1" />
                               <span className="w-12 text-right text-sm">
-                                {((score as number) * 100).toFixed(0)}%
+                                {formatPercent(score as number, 0)}
                               </span>
                             </div>
                           ))}

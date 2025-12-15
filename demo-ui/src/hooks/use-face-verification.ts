@@ -39,7 +39,8 @@ interface VerificationResponse {
 
 async function verifyFace(request: VerificationRequest): Promise<VerificationResponse> {
   const formData = new FormData();
-  formData.append('file', request.image);
+  const filename = request.image instanceof File ? request.image.name : 'capture.jpg';
+  formData.append('file', request.image, filename);
   formData.append('user_id', request.user_id);
 
   const controller = new AbortController();

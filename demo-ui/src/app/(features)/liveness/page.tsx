@@ -13,6 +13,7 @@ import { WebcamCapture } from '@/components/media/webcam-capture';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useLivenessCheck } from '@/hooks/use-liveness-check';
 import { toast } from 'sonner';
+import { formatPercent, toPercent } from '@/lib/utils/format';
 
 export default function LivenessPage() {
   const { t } = useTranslation();
@@ -38,7 +39,7 @@ export default function LivenessPage() {
         onSuccess: (result) => {
           if (result.is_live) {
             toast.success(t('liveness.result.live'), {
-              description: `Liveness score: ${(result.confidence * 100).toFixed(1)}%`,
+              description: `Liveness score: ${formatPercent(result.confidence)}`,
             });
           } else {
             toast.warning(t('liveness.result.spoof'), {
@@ -203,11 +204,11 @@ export default function LivenessPage() {
                     <div className="flex justify-between text-sm">
                       <span>{t('liveness.result.score')}</span>
                       <span className="font-semibold">
-                        {(data.confidence * 100).toFixed(1)}%
+                        {formatPercent(data.confidence)}
                       </span>
                     </div>
                     <Progress
-                      value={data.confidence * 100}
+                      value={toPercent(data.confidence)}
                       className={data.is_live ? 'bg-green-200' : 'bg-red-200'}
                     />
                   </div>
@@ -231,7 +232,7 @@ export default function LivenessPage() {
                               <span className="text-sm">{check.name}</span>
                             </div>
                             <span className="text-sm font-mono">
-                              {(check.score * 100).toFixed(0)}%
+                              {formatPercent(check.score, 0)}
                             </span>
                           </div>
                         ))}

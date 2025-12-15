@@ -95,12 +95,13 @@ export default function MultiFacePage() {
       ctx.font = '14px sans-serif';
       ctx.fillText(`Face ${index + 1}`, scaledX + 5, scaledY - 8);
 
-      // Confidence
+      // Confidence - backend returns 0-1, convert to percentage
+      const confidencePercent = face.confidence <= 1 ? face.confidence * 100 : face.confidence;
       ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
       ctx.fillRect(scaledX, scaledY + scaledHeight, 80, 20);
       ctx.fillStyle = '#ffffff';
       ctx.font = '12px sans-serif';
-      ctx.fillText(`${(face.confidence * 100).toFixed(0)}%`, scaledX + 5, scaledY + scaledHeight + 15);
+      ctx.fillText(`${confidencePercent.toFixed(0)}%`, scaledX + 5, scaledY + scaledHeight + 15);
     });
   }, [isSuccess, data]);
 
@@ -256,24 +257,29 @@ export default function MultiFacePage() {
                   <div className="space-y-2">
                     <p className="text-sm font-medium">Detected Faces</p>
                     <div className="grid grid-cols-2 gap-2">
-                      {data.faces.map((face: any, index: number) => (
-                        <div
-                          key={index}
-                          className="rounded-lg border p-2 text-sm"
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="font-medium">Face {index + 1}</span>
-                            <Badge variant="outline">
-                              {(face.confidence * 100).toFixed(0)}%
-                            </Badge>
+                      {data.faces.map((face: any, index: number) => {
+                        // Handle both 0-1 and 0-100 ranges from backend
+                        const confidencePercent = face.confidence <= 1 ? face.confidence * 100 : face.confidence;
+                        const qualityPercent = face.quality_score <= 1 ? face.quality_score * 100 : face.quality_score;
+                        return (
+                          <div
+                            key={index}
+                            className="rounded-lg border p-2 text-sm"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium">Face {index + 1}</span>
+                              <Badge variant="outline">
+                                {confidencePercent.toFixed(0)}%
+                              </Badge>
+                            </div>
+                            {face.quality_score !== undefined && (
+                              <p className="text-xs text-muted-foreground">
+                                Quality: {qualityPercent.toFixed(0)}%
+                              </p>
+                            )}
                           </div>
-                          {face.quality_score && (
-                            <p className="text-xs text-muted-foreground">
-                              Quality: {(face.quality_score * 100).toFixed(0)}%
-                            </p>
-                          )}
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 </motion.div>

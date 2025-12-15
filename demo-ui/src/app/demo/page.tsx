@@ -37,6 +37,7 @@ import { useLivenessCheck } from '@/hooks/use-liveness-check';
 import { useDemographicsAnalysis } from '@/hooks/use-demographics-analysis';
 import { useFaceComparison } from '@/hooks/use-face-comparison';
 import { toast } from 'sonner';
+import { toPercent, formatPercent } from '@/lib/utils/format';
 
 // Demo steps configuration
 const DEMO_STEPS = [
@@ -194,7 +195,7 @@ export default function DemoPage() {
         onSuccess: (data) => {
           saveResult('verify', data.match, data as unknown as Record<string, unknown>);
           if (data.match) {
-            toast.success('Identity verified!', { description: `Similarity: ${(data.similarity * 100).toFixed(1)}%` });
+            toast.success('Identity verified!', { description: `Similarity: ${formatPercent(data.similarity)}` });
           } else {
             toast.warning('Verification failed', { description: 'Face does not match enrolled user' });
           }
@@ -290,7 +291,7 @@ export default function DemoPage() {
         onSuccess: (data) => {
           saveResult('liveness', data.is_live, data as unknown as Record<string, unknown>);
           if (data.is_live) {
-            toast.success('Real face detected!', { description: `Confidence: ${(data.confidence * 100).toFixed(1)}%` });
+            toast.success('Real face detected!', { description: `Confidence: ${formatPercent(data.confidence)}` });
           } else {
             toast.warning('Possible spoof detected');
           }
@@ -684,7 +685,7 @@ export default function DemoPage() {
                                 {results.verify.success ? 'Identity Verified!' : 'Verification Failed'}
                               </AlertTitle>
                               <AlertDescription>
-                                Similarity: {(((results.verify.data as { similarity?: number })?.similarity || 0) * 100).toFixed(1)}%
+                                Similarity: {formatPercent((results.verify.data as { similarity?: number })?.similarity || 0)}
                               </AlertDescription>
                             </Alert>
                           </div>
@@ -758,8 +759,8 @@ export default function DemoPage() {
                                   <p className="font-medium">Match #{idx + 1}</p>
                                   <p className="text-sm text-muted-foreground">{match.user_id}</p>
                                 </div>
-                                <Badge variant={match.similarity > 0.8 ? 'default' : 'secondary'}>
-                                  {(match.similarity * 100).toFixed(1)}%
+                                <Badge variant={toPercent(match.similarity) > 80 ? 'default' : 'secondary'}>
+                                  {formatPercent(match.similarity)}
                                 </Badge>
                               </div>
                             ))}
@@ -965,7 +966,7 @@ export default function DemoPage() {
                                 {results.liveness.success ? 'REAL FACE' : 'POSSIBLE SPOOF'}
                               </p>
                               <p className="text-muted-foreground">
-                                Confidence: {(((results.liveness.data as { confidence?: number })?.confidence || 0) * 100).toFixed(1)}%
+                                Confidence: {formatPercent((results.liveness.data as { confidence?: number })?.confidence || 0)}
                               </p>
                             </div>
                           </div>
@@ -1127,10 +1128,10 @@ export default function DemoPage() {
                         if (wasExecuted && result.data) {
                           const data = result.data as Record<string, unknown>;
                           if (s.id === 'enroll') resultDetail = `User: ${(data.userId as string)?.slice(-8) || 'N/A'}`;
-                          if (s.id === 'verify') resultDetail = `Similarity: ${(((data.similarity as number) || 0) * 100).toFixed(0)}%`;
+                          if (s.id === 'verify') resultDetail = `Similarity: ${formatPercent((data.similarity as number) || 0, 0)}`;
                           if (s.id === 'search') resultDetail = `Found: ${(data.matches as unknown[])?.length || 0} matches`;
-                          if (s.id === 'quality') resultDetail = `Score: ${((data.overall_score as number) || 0).toFixed(0)}%`;
-                          if (s.id === 'liveness') resultDetail = `Confidence: ${(((data.confidence as number) || 0) * 100).toFixed(0)}%`;
+                          if (s.id === 'quality') resultDetail = `Score: ${formatPercent((data.overall_score as number) || 0, 0)}`;
+                          if (s.id === 'liveness') resultDetail = `Confidence: ${formatPercent((data.confidence as number) || 0, 0)}`;
                           if (s.id === 'demographics') resultDetail = `Age: ${data.age || 'N/A'}, ${data.gender || 'N/A'}`;
                         }
 

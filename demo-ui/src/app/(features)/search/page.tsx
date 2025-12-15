@@ -13,6 +13,7 @@ import { WebcamCapture } from '@/components/media/webcam-capture';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useFaceSearch } from '@/hooks/use-face-search';
 import { toast } from 'sonner';
+import { formatPercent, toPercent } from '@/lib/utils/format';
 
 export default function SearchPage() {
   const { t } = useTranslation();
@@ -105,7 +106,7 @@ export default function SearchPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Threshold: {(threshold * 100).toFixed(0)}%</Label>
+                  <Label>Threshold: {formatPercent(threshold, 0)}</Label>
                   <Slider
                     value={[threshold]}
                     onValueChange={([v]) => setThreshold(v)}
@@ -222,11 +223,11 @@ export default function SearchPage() {
                           </div>
                           <div className="text-right">
                             <p className={`font-semibold ${
-                              match.similarity >= 0.8 ? 'text-green-600' :
-                              match.similarity >= 0.6 ? 'text-yellow-600' :
+                              toPercent(match.similarity) >= 80 ? 'text-green-600' :
+                              toPercent(match.similarity) >= 60 ? 'text-yellow-600' :
                               'text-red-600'
                             }`}>
-                              {(match.similarity * 100).toFixed(1)}%
+                              {formatPercent(match.similarity)}
                             </p>
                             <p className="text-xs text-muted-foreground">
                               similarity

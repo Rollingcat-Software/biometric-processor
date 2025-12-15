@@ -197,6 +197,35 @@ class Settings(BaseSettings):
     PROCTOR_CIRCUIT_BREAKER_SUCCESS_THRESHOLD: int = Field(default=2, ge=1, le=5)
     PROCTOR_CIRCUIT_BREAKER_TIMEOUT_SEC: float = Field(default=30.0, ge=5.0, le=120.0)
 
+    # ============================================================================
+    # Performance Optimization Settings
+    # ============================================================================
+
+    # Async Execution (Thread Pool for CPU-bound ML operations)
+    ASYNC_ML_ENABLED: bool = Field(default=True)
+    ML_THREAD_POOL_SIZE: int = Field(default=4, ge=1, le=32)
+
+    # Embedding Cache Settings
+    EMBEDDING_CACHE_ENABLED: bool = Field(default=True)
+    EMBEDDING_CACHE_SIZE: int = Field(default=10000, ge=100, le=1000000)
+    EMBEDDING_CACHE_TTL: Optional[int] = Field(default=3600, ge=60)  # 1 hour default
+
+    # Repository Settings
+    REPOSITORY_MAX_CAPACITY: int = Field(default=100000, ge=1000, le=10000000)
+    REPOSITORY_ENABLE_VECTORIZED_SEARCH: bool = Field(default=True)
+
+    # Rate Limit Memory Cleanup
+    RATE_LIMIT_MAX_ENTRIES: int = Field(default=100000, ge=1000, le=1000000)
+    RATE_LIMIT_CLEANUP_INTERVAL: int = Field(default=60, ge=10, le=3600)
+
+    # Liveness Detection Optimization
+    LIVENESS_ENABLE_OPTIMIZED: bool = Field(default=True)
+    LIVENESS_FFT_DOWNSAMPLE_SIZE: int = Field(default=192, ge=64, le=512)
+
+    # Batch Processing
+    BATCH_MAX_CONCURRENT: int = Field(default=5, ge=1, le=20)
+    BATCH_ADAPTIVE_CONCURRENCY: bool = Field(default=False)
+
     @field_validator("PROCTOR_RISK_THRESHOLD_CRITICAL")
     @classmethod
     def validate_risk_thresholds(cls, v, info):

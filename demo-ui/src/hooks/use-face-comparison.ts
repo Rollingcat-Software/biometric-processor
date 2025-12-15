@@ -57,8 +57,10 @@ interface ComparisonResponse {
 
 async function compareFaces(request: ComparisonRequest): Promise<ComparisonResponse> {
   const formData = new FormData();
-  formData.append('file1', request.image1);
-  formData.append('file2', request.image2);
+  const filename1 = request.image1 instanceof File ? request.image1.name : 'capture1.jpg';
+  const filename2 = request.image2 instanceof File ? request.image2.name : 'capture2.jpg';
+  formData.append('file1', request.image1, filename1);
+  formData.append('file2', request.image2, filename2);
   if (request.threshold !== undefined) {
     formData.append('threshold', request.threshold.toString());
   }

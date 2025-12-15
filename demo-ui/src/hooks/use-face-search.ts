@@ -59,7 +59,8 @@ interface SearchResponse {
 
 async function searchFace(request: SearchRequest): Promise<SearchResponse> {
   const formData = new FormData();
-  formData.append('file', request.image);
+  const filename = request.image instanceof File ? request.image.name : 'capture.jpg';
+  formData.append('file', request.image, filename);
   if (request.threshold !== undefined) {
     formData.append('threshold', request.threshold.toString());
   }

@@ -7,22 +7,25 @@ interface CardDetectionRequest {
   image: File | Blob;
 }
 
+// Backend response format
+interface BackendCardDetectionResponse {
+  detected: boolean;
+  class_id?: number;
+  class_name?: string;
+  confidence?: number;
+}
+
+// Frontend expected format
 interface CardDetectionResponse {
   card_type: 'tc_kimlik' | 'ehliyet' | 'pasaport' | 'ogrenci_karti' | 'unknown';
   confidence: number;
-  bounding_box?: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
-  extracted_fields?: Record<string, string>;
-  processing_time_ms: number;
+  detected: boolean;
 }
 
 async function detectCard(request: CardDetectionRequest): Promise<CardDetectionResponse> {
   const formData = new FormData();
-  formData.append('file', request.image);
+  const filename = request.image instanceof File ? request.image.name : 'capture.jpg';
+  formData.append('file', request.image, filename);
 
   const response = await fetch(
     `${API_URL}/api/v1/card-type/detect-live`,
@@ -37,7 +40,14 @@ async function detectCard(request: CardDetectionRequest): Promise<CardDetectionR
     throw new Error(error.message || error.detail);
   }
 
-  return response.json();
+  const data: BackendCardDetectionResponse = await response.json();
+
+  // Map backend response to frontend format
+  return {
+    card_type: (data.class_name as CardDetectionResponse['card_type']) || 'unknown',
+    confidence: data.confidence || 0,
+    detected: data.detected,
+  };
 }
 
 export function useCardDetection() {

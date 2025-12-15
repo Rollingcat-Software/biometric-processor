@@ -11,8 +11,9 @@ interface LandmarkRequest {
 }
 
 interface LandmarkPoint {
-  x: number;
-  y: number;
+  id: number;
+  x: number;  // Pixel coordinate
+  y: number;  // Pixel coordinate
   z?: number;
 }
 
@@ -21,15 +22,7 @@ interface BackendLandmarkResponse {
   landmarks: LandmarkPoint[];
   landmark_count: number;
   model: string;
-  regions?: {
-    left_eye?: LandmarkPoint[];
-    right_eye?: LandmarkPoint[];
-    nose?: LandmarkPoint[];
-    mouth?: LandmarkPoint[];
-    face_contour?: LandmarkPoint[];
-    left_eyebrow?: LandmarkPoint[];
-    right_eyebrow?: LandmarkPoint[];
-  };
+  regions?: Record<string, number[]>;  // Maps region name to landmark indices
   head_pose?: {
     pitch: number;
     yaw: number;
@@ -37,20 +30,13 @@ interface BackendLandmarkResponse {
   };
 }
 
-// UI-friendly response
+// UI-friendly response with resolved region points
 interface LandmarkResponse {
   landmarks: LandmarkPoint[];
   landmark_count: number;
   model: string;
-  regions: {
-    left_eye: LandmarkPoint[];
-    right_eye: LandmarkPoint[];
-    nose: LandmarkPoint[];
-    mouth: LandmarkPoint[];
-    face_contour: LandmarkPoint[];
-    left_eyebrow: LandmarkPoint[];
-    right_eyebrow: LandmarkPoint[];
-  };
+  regionIndices: Record<string, number[]>;  // Original indices for reference
+  regions: Record<string, LandmarkPoint[]>; // Resolved points for drawing
   head_pose?: {
     pitch: number;
     yaw: number;
@@ -60,7 +46,8 @@ interface LandmarkResponse {
 
 async function detectLandmarks(request: LandmarkRequest): Promise<LandmarkResponse> {
   const formData = new FormData();
-  formData.append('file', request.image);
+  const filename = request.image instanceof File ? request.image.name : 'capture.jpg';
+  formData.append('file', request.image, filename);
   if (request.include_3d !== undefined) {
     formData.append('include_3d', request.include_3d.toString());
   }
@@ -95,20 +82,29 @@ async function detectLandmarks(request: LandmarkRequest): Promise<LandmarkRespon
 
     const data: BackendLandmarkResponse = await response.json();
 
-    // Transform to UI-friendly format with default empty arrays
+    // Create a lookup map for landmarks by id
+    const landmarkById = new Map<number, LandmarkPoint>();
+    data.landmarks.forEach((lm) => {
+      landmarkById.set(lm.id, lm);
+    });
+
+    // Transform region indices to actual points
+    const resolvedRegions: Record<string, LandmarkPoint[]> = {};
+    const regionIndices = data.regions || {};
+
+    Object.entries(regionIndices).forEach(([regionName, indices]) => {
+      resolvedRegions[regionName] = indices
+        .map((idx) => landmarkById.get(idx))
+        .filter((point): point is LandmarkPoint => point !== undefined);
+    });
+
+    // Transform to UI-friendly format
     return {
       landmarks: data.landmarks,
       landmark_count: data.landmark_count,
       model: data.model,
-      regions: {
-        left_eye: data.regions?.left_eye ?? [],
-        right_eye: data.regions?.right_eye ?? [],
-        nose: data.regions?.nose ?? [],
-        mouth: data.regions?.mouth ?? [],
-        face_contour: data.regions?.face_contour ?? [],
-        left_eyebrow: data.regions?.left_eyebrow ?? [],
-        right_eyebrow: data.regions?.right_eyebrow ?? [],
-      },
+      regionIndices: regionIndices,
+      regions: resolvedRegions,
       head_pose: data.head_pose,
     };
   } catch (error) {

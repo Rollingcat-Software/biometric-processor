@@ -45,6 +45,7 @@ from app.infrastructure.ml.proctoring.factories import (
 # Resilience
 from app.infrastructure.resilience.session_rate_limiter import (
     InMemorySessionRateLimiter,
+    SessionRateLimitConfig,
     SessionRateLimiter,
 )
 
@@ -256,11 +257,10 @@ def get_session_rate_limiter() -> Optional[SessionRateLimiter]:
         f"{settings.PROCTOR_MAX_FRAMES_PER_SECOND}/sec, "
         f"{settings.PROCTOR_MAX_FRAMES_PER_MINUTE}/min"
     )
-    return InMemorySessionRateLimiter(
+    return InMemorySessionRateLimiter(config=SessionRateLimitConfig(
         max_frames_per_second=settings.PROCTOR_MAX_FRAMES_PER_SECOND,
         max_frames_per_minute=settings.PROCTOR_MAX_FRAMES_PER_MINUTE,
-        burst_allowance=settings.PROCTOR_RATE_LIMIT_BURST_ALLOWANCE,
-    )
+        burst_allowance=settings.PROCTOR_RATE_LIMIT_BURST_ALLOWANCE))
 
 
 # ============================================================================
@@ -279,7 +279,14 @@ def get_start_session_use_case(
     session_repo: IProctorSessionRepository = Depends(get_proctor_session_repository),
 ) -> StartProctorSession:
     """Get start session use case."""
-    return StartProctorSession(session_repository=session_repo)
+    # Import embedding dependencies from main container
+    from app.core.container import get_embedding_repository, get_embedding_extractor
+
+    return StartProctorSession(
+        session_repository=session_repo,
+        embedding_repository=get_embedding_repository(),
+        embedding_extractor=get_embedding_extractor(),
+    )
 
 
 def get_submit_frame_use_case(
@@ -295,14 +302,21 @@ def get_submit_frame_use_case(
 
     Note: Some dependencies may be None if disabled in configuration.
     """
-    # Import face detector and liveness from main container
-    from app.core.container import get_face_detector, get_liveness_detector
+    # Import face detector, liveness, embedding extractor and similarity calculator from main container
+    from app.core.container import (
+        get_face_detector,
+        get_liveness_detector,
+        get_embedding_extractor,
+        get_similarity_calculator,
+    )
 
     return SubmitFrame(
         session_repository=session_repo,
         incident_repository=incident_repo,
-        face_detector=get_face_detector(),
+        face_verifier=get_face_detector(),
         liveness_detector=get_liveness_detector(),
+        embedding_extractor=get_embedding_extractor(),
+        similarity_calculator=get_similarity_calculator(),
         gaze_tracker=gaze_tracker,
         object_detector=object_detector,
         deepfake_detector=deepfake_detector,
@@ -313,12 +327,10 @@ def get_submit_frame_use_case(
 
 def get_end_session_use_case(
     session_repo: IProctorSessionRepository = Depends(get_proctor_session_repository),
-    incident_repo: IProctorIncidentRepository = Depends(get_proctor_incident_repository),
 ) -> EndProctorSession:
     """Get end session use case."""
     return EndProctorSession(
         session_repository=session_repo,
-        incident_repository=incident_repo,
     )
 
 

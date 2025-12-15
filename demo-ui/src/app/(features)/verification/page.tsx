@@ -14,6 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { SimilarityGauge } from '@/components/biometric/similarity-gauge';
 import { useFaceVerification } from '@/hooks/use-face-verification';
 import { toast } from 'sonner';
+import { formatPercent } from '@/lib/utils/format';
 
 export default function VerificationPage() {
   const { t } = useTranslation();
@@ -47,7 +48,7 @@ export default function VerificationPage() {
         onSuccess: (result) => {
           if (result.match) {
             toast.success('Identity Verified', {
-              description: `Confidence: ${(result.confidence * 100).toFixed(1)}%`,
+              description: `Confidence: ${formatPercent(result.confidence)}`,
             });
           } else {
             toast.warning('Verification Failed', {
@@ -233,13 +234,13 @@ export default function VerificationPage() {
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">{t('verification.result.similarity')}</span>
                       <span className="font-semibold">
-                        {(data.confidence * 100).toFixed(1)}%
+                        {formatPercent(data.confidence)}
                       </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">{t('verification.result.threshold')}</span>
                       <span className="font-mono text-sm">
-                        {(data.threshold * 100).toFixed(1)}%
+                        {formatPercent(data.threshold)}
                       </span>
                     </div>
                     <div className="flex justify-between">

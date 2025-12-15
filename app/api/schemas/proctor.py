@@ -130,6 +130,16 @@ class SubmitFrameRequest(BaseModel):
     audio_sample_rate: int = Field(16000, ge=8000, le=48000)
 
 
+class IncidentInfoSchema(BaseModel):
+    """Basic incident info returned with frame submission."""
+
+    id: str
+    type: str
+    severity: str
+    timestamp: str
+    message: str
+
+
 class FrameAnalysisResponse(BaseModel):
     """Frame analysis result."""
 
@@ -163,6 +173,7 @@ class SubmitFrameResponse(BaseModel):
     processing_time_ms: float
     analysis: FrameAnalysisResponse
     rate_limit: Optional[Dict[str, Any]]
+    incidents: Optional[List[IncidentInfoSchema]] = None
 
 
 # Incident schemas

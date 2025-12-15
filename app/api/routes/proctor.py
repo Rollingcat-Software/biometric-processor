@@ -15,6 +15,7 @@ from app.api.schemas.proctor import (
     CreateSessionResponse,
     EndSessionRequest,
     EndSessionResponse,
+    IncidentInfoSchema,
     IncidentListResponse,
     IncidentResponse,
     RateLimitStatusResponse,
@@ -344,6 +345,20 @@ async def submit_frame(
             )
         )
 
+        # Convert incidents from use case dataclass to schema
+        incidents = None
+        if result.incidents:
+            incidents = [
+                IncidentInfoSchema(
+                    id=inc.id,
+                    type=inc.type,
+                    severity=inc.severity,
+                    timestamp=inc.timestamp,
+                    message=inc.message,
+                )
+                for inc in result.incidents
+            ]
+
         return SubmitFrameResponse(
             session_id=result.session_id,
             frame_number=result.frame_number,
@@ -354,6 +369,7 @@ async def submit_frame(
             processing_time_ms=result.processing_time_ms,
             analysis=result.analysis,
             rate_limit=result.rate_limit,
+            incidents=incidents,
         )
 
     except ValueError as e:

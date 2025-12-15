@@ -97,10 +97,17 @@ export function useWebSocket({
     setStatus('disconnected');
   }, [reconnectAttempts]);
 
-  const send = useCallback((data: any) => {
+  const send = useCallback((data: string | ArrayBuffer | Blob | object) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      const message = typeof data === 'string' ? data : JSON.stringify(data);
-      wsRef.current.send(message);
+      // Handle binary data (ArrayBuffer, Blob) directly
+      if (data instanceof ArrayBuffer || data instanceof Blob) {
+        wsRef.current.send(data);
+      } else if (typeof data === 'string') {
+        wsRef.current.send(data);
+      } else {
+        // Objects get JSON serialized
+        wsRef.current.send(JSON.stringify(data));
+      }
     }
   }, []);
 

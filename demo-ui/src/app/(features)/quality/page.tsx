@@ -12,6 +12,7 @@ import { WebcamCapture } from '@/components/media/webcam-capture';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useQualityAnalysis } from '@/hooks/use-quality-analysis';
 import { toast } from 'sonner';
+import { formatPercent, toPercent } from '@/lib/utils/format';
 
 const qualityGradeConfig = {
   excellent: { color: 'text-green-600', bg: 'bg-green-500/10', icon: CheckCircle2 },
@@ -44,7 +45,7 @@ export default function QualityPage() {
       {
         onSuccess: (result) => {
           toast.success('Analysis Complete', {
-            description: `Quality Score: ${(result.overall_score * 100).toFixed(1)}%`,
+            description: `Quality Score: ${formatPercent(result.overall_score)}`,
           });
         },
         onError: (err) => {
@@ -194,7 +195,7 @@ export default function QualityPage() {
                         {grade ? t(`quality.levels.${grade}`) : 'Quality Result'}
                       </p>
                       <p className="text-sm text-muted-foreground">
-                        Overall Score: {(data.overall_score * 100).toFixed(1)}%
+                        Overall Score: {formatPercent(data.overall_score)}
                       </p>
                     </div>
                   </div>
@@ -206,9 +207,9 @@ export default function QualityPage() {
                       <div key={key} className="space-y-1">
                         <div className="flex justify-between text-sm">
                           <span className="capitalize">{t(`quality.metrics.${key}`) || key.replace(/_/g, ' ')}</span>
-                          <span className="font-mono">{((value as number) * 100).toFixed(0)}%</span>
+                          <span className="font-mono">{formatPercent(value as number, 0)}</span>
                         </div>
-                        <Progress value={(value as number) * 100} className="h-2" />
+                        <Progress value={toPercent(value as number)} className="h-2" />
                       </div>
                     ))}
                   </div>

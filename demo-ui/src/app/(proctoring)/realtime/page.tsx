@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useWebSocket } from '@/hooks/use-websocket';
 import { toast } from 'sonner';
+import { formatPercent } from '@/lib/utils/format';
 
 interface FrameResult {
   timestamp: string;
@@ -269,7 +270,7 @@ export default function RealtimePage() {
                   <div className="absolute bottom-2 left-2 right-2 flex justify-between text-white text-xs bg-black/50 rounded p-2">
                     <span>Face: {latestResult.face_detected ? 'Yes' : 'No'}</span>
                     <span>Verified: {latestResult.face_verified ? 'Yes' : 'No'}</span>
-                    <span>Risk: {(latestResult.risk_score * 100).toFixed(0)}%</span>
+                    <span>Risk: {formatPercent(latestResult.risk_score, 0)}</span>
                     <span>{latestResult.processing_time_ms}ms</span>
                   </div>
                 )}

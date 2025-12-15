@@ -34,7 +34,10 @@ interface EnrollmentResponse {
 async function enrollFace(params: EnrollmentParams): Promise<EnrollmentResponse> {
   const formData = new FormData();
   formData.append('user_id', params.person_id);
-  formData.append('file', params.image);
+
+  // Ensure Blob has a proper filename with extension for backend validation
+  const filename = params.image instanceof File ? params.image.name : 'capture.jpg';
+  formData.append('file', params.image, filename);
 
   if (params.metadata?.tenant_id) {
     formData.append('tenant_id', params.metadata.tenant_id as string);
