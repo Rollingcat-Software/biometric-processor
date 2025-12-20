@@ -1,13 +1,21 @@
-# app/api/routes/card_type_router.py
-from fastapi import APIRouter, UploadFile, File
+"""Card type detection API routes."""
 
-from app.application.use_cases.detect_card_type import detect_card_type_use_case
+import os
+import tempfile
+from io import BytesIO
+
+import numpy as np
+from fastapi import APIRouter, File, UploadFile
+from PIL import Image
+
+from app.core.container import get_detect_card_type_use_case
 from app.domain.entities.card_type_result import CardTypeResponse
 
 router = APIRouter(
     prefix="/card-type",
     tags=["Card Type"],
 )
+
 
 @router.post(
     "/detect-live",
@@ -20,7 +28,13 @@ router = APIRouter(
     ),
 )
 
-async def detect_live(file: UploadFile = File(...)):
+
+async def detect_live(file: UploadFile = File(...)) -> CardTypeResponse:
+    """Detect card type from uploaded image.
+
+    Supported classes: tc_kimlik, ehliyet, pasaport, ogrenci_karti, akademisyen_karti.
+    Designed for real-time mobile preview (0.5–1s frame intervals).
+    """
     return await detect_card_type_use_case(file)
 
 

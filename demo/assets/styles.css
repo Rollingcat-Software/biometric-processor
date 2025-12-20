@@ -1,0 +1,414 @@
+/* Biometric Processor Demo - Custom Styles
+ * Enterprise-grade styling for professional demonstrations
+ * Version: 1.0.0
+ */
+
+/* ============================================
+ * CSS Variables - Design Tokens
+ * ============================================ */
+:root {
+    /* Primary Colors */
+    --primary-50: #EFF6FF;
+    --primary-100: #DBEAFE;
+    --primary-200: #BFDBFE;
+    --primary-500: #3B82F6;
+    --primary-600: #2563EB;
+    --primary-700: #1D4ED8;
+    --primary-800: #1E40AF;
+    --primary-900: #1E3A8A;
+
+    /* Secondary Colors */
+    --secondary-500: #0D9488;
+    --secondary-600: #0F766E;
+    --secondary-700: #115E59;
+
+    /* Semantic Colors */
+    --success-50: #F0FDF4;
+    --success-500: #22C55E;
+    --success-600: #16A34A;
+    --success-700: #15803D;
+
+    --warning-50: #FFFBEB;
+    --warning-500: #F59E0B;
+    --warning-600: #D97706;
+    --warning-700: #B45309;
+
+    --danger-50: #FEF2F2;
+    --danger-500: #EF4444;
+    --danger-600: #DC2626;
+    --danger-700: #B91C1C;
+
+    /* Neutral Colors */
+    --gray-50: #F8FAFC;
+    --gray-100: #F1F5F9;
+    --gray-200: #E2E8F0;
+    --gray-300: #CBD5E1;
+    --gray-400: #94A3B8;
+    --gray-500: #64748B;
+    --gray-600: #475569;
+    --gray-700: #334155;
+    --gray-800: #1E293B;
+    --gray-900: #0F172A;
+
+    /* Background Colors */
+    --background: var(--gray-50);
+    --surface: #FFFFFF;
+    --surface-elevated: #FFFFFF;
+
+    /* Text Colors */
+    --text-primary: var(--gray-800);
+    --text-secondary: var(--gray-500);
+    --text-muted: var(--gray-400);
+    --text-inverse: #FFFFFF;
+
+    /* Border Colors */
+    --border-light: var(--gray-200);
+    --border-default: var(--gray-300);
+    --border-dark: var(--gray-400);
+
+    /* Spacing */
+    --space-1: 0.25rem;
+    --space-2: 0.5rem;
+    --space-3: 0.75rem;
+    --space-4: 1rem;
+    --space-5: 1.25rem;
+    --space-6: 1.5rem;
+    --space-8: 2rem;
+    --space-10: 2.5rem;
+
+    /* Border Radius */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 12px;
+    --radius-2xl: 16px;
+    --radius-full: 9999px;
+
+    /* Shadows */
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+
+    /* Transitions */
+    --transition-fast: 150ms ease;
+    --transition-normal: 200ms ease;
+    --transition-slow: 300ms ease;
+
+    /* Typography */
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+
+    --text-xs: 0.75rem;
+    --text-sm: 0.875rem;
+    --text-base: 1rem;
+    --text-lg: 1.125rem;
+    --text-xl: 1.25rem;
+    --text-2xl: 1.5rem;
+    --text-3xl: 1.875rem;
+    --text-4xl: 2.25rem;
+
+    --font-normal: 400;
+    --font-medium: 500;
+    --font-semibold: 600;
+    --font-bold: 700;
+}
+
+/* ============================================
+ * Base Styles
+ * ============================================ */
+body {
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+    background-color: var(--background);
+    line-height: 1.6;
+}
+
+/* ============================================
+ * Card Styles
+ * ============================================ */
+.demo-card {
+    background: var(--surface);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-sm);
+    padding: var(--space-6);
+    border: 1px solid var(--border-light);
+    transition: box-shadow var(--transition-normal);
+}
+
+.demo-card:hover {
+    box-shadow: var(--shadow-md);
+}
+
+.demo-card-header {
+    font-size: var(--text-lg);
+    font-weight: var(--font-semibold);
+    color: var(--text-primary);
+    margin-bottom: var(--space-4);
+}
+
+/* ============================================
+ * Metric Card Styles
+ * ============================================ */
+.metric-card {
+    text-align: center;
+    padding: var(--space-5);
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-light);
+}
+
+.metric-value {
+    font-size: var(--text-3xl);
+    font-weight: var(--font-bold);
+    color: var(--primary-700);
+    line-height: 1.2;
+}
+
+.metric-label {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    margin-top: var(--space-1);
+}
+
+.metric-delta {
+    font-size: var(--text-xs);
+    font-weight: var(--font-medium);
+    margin-top: var(--space-2);
+}
+
+.metric-delta-positive {
+    color: var(--success-600);
+}
+
+.metric-delta-negative {
+    color: var(--danger-600);
+}
+
+/* ============================================
+ * Status Badge Styles
+ * ============================================ */
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-full);
+    font-size: var(--text-xs);
+    font-weight: var(--font-medium);
+}
+
+.status-success {
+    background-color: var(--success-50);
+    color: var(--success-700);
+}
+
+.status-warning {
+    background-color: var(--warning-50);
+    color: var(--warning-700);
+}
+
+.status-danger {
+    background-color: var(--danger-50);
+    color: var(--danger-700);
+}
+
+.status-info {
+    background-color: var(--primary-50);
+    color: var(--primary-700);
+}
+
+/* ============================================
+ * Button Styles
+ * ============================================ */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    font-weight: var(--font-medium);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    border: none;
+}
+
+.btn-primary {
+    background-color: var(--primary-600);
+    color: var(--text-inverse);
+}
+
+.btn-primary:hover {
+    background-color: var(--primary-700);
+}
+
+.btn-secondary {
+    background-color: var(--gray-100);
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+}
+
+.btn-secondary:hover {
+    background-color: var(--gray-200);
+}
+
+.btn-danger {
+    background-color: var(--danger-600);
+    color: var(--text-inverse);
+}
+
+.btn-danger:hover {
+    background-color: var(--danger-700);
+}
+
+/* ============================================
+ * Form Styles
+ * ============================================ */
+.form-label {
+    font-size: var(--text-sm);
+    font-weight: var(--font-medium);
+    color: var(--text-primary);
+    margin-bottom: var(--space-1);
+}
+
+.form-input {
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    transition: border-color var(--transition-fast);
+}
+
+.form-input:focus {
+    outline: none;
+    border-color: var(--primary-500);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+/* ============================================
+ * Table Styles
+ * ============================================ */
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+}
+
+.data-table th {
+    background-color: var(--gray-50);
+    padding: var(--space-3) var(--space-4);
+    text-align: left;
+    font-weight: var(--font-semibold);
+    color: var(--text-secondary);
+    border-bottom: 2px solid var(--border-light);
+}
+
+.data-table td {
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--border-light);
+}
+
+.data-table tr:hover {
+    background-color: var(--gray-50);
+}
+
+/* ============================================
+ * Progress Bar Styles
+ * ============================================ */
+.progress-bar {
+    width: 100%;
+    height: 8px;
+    background-color: var(--gray-200);
+    border-radius: var(--radius-full);
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background-color: var(--primary-600);
+    border-radius: var(--radius-full);
+    transition: width var(--transition-slow);
+}
+
+.progress-bar-fill.success {
+    background-color: var(--success-500);
+}
+
+.progress-bar-fill.warning {
+    background-color: var(--warning-500);
+}
+
+.progress-bar-fill.danger {
+    background-color: var(--danger-500);
+}
+
+/* ============================================
+ * Alert Styles
+ * ============================================ */
+.alert {
+    padding: var(--space-4);
+    border-radius: var(--radius-lg);
+    margin-bottom: var(--space-4);
+}
+
+.alert-success {
+    background-color: var(--success-50);
+    border: 1px solid var(--success-500);
+    color: var(--success-700);
+}
+
+.alert-warning {
+    background-color: var(--warning-50);
+    border: 1px solid var(--warning-500);
+    color: var(--warning-700);
+}
+
+.alert-danger {
+    background-color: var(--danger-50);
+    border: 1px solid var(--danger-500);
+    color: var(--danger-700);
+}
+
+.alert-info {
+    background-color: var(--primary-50);
+    border: 1px solid var(--primary-500);
+    color: var(--primary-700);
+}
+
+/* ============================================
+ * Utility Classes
+ * ============================================ */
+.text-center { text-align: center; }
+.text-left { text-align: left; }
+.text-right { text-align: right; }
+
+.font-bold { font-weight: var(--font-bold); }
+.font-semibold { font-weight: var(--font-semibold); }
+.font-medium { font-weight: var(--font-medium); }
+
+.text-sm { font-size: var(--text-sm); }
+.text-lg { font-size: var(--text-lg); }
+.text-xl { font-size: var(--text-xl); }
+
+.text-primary { color: var(--primary-600); }
+.text-secondary { color: var(--text-secondary); }
+.text-muted { color: var(--text-muted); }
+
+.mt-4 { margin-top: var(--space-4); }
+.mb-4 { margin-bottom: var(--space-4); }
+.my-4 { margin-top: var(--space-4); margin-bottom: var(--space-4); }
+
+.p-4 { padding: var(--space-4); }
+.px-4 { padding-left: var(--space-4); padding-right: var(--space-4); }
+.py-4 { padding-top: var(--space-4); padding-bottom: var(--space-4); }
+
+.rounded { border-radius: var(--radius-md); }
+.rounded-lg { border-radius: var(--radius-lg); }
+.rounded-xl { border-radius: var(--radius-xl); }
+
+.shadow { box-shadow: var(--shadow-md); }
+.shadow-lg { box-shadow: var(--shadow-lg); }
+
+.border { border: 1px solid var(--border-default); }
+.border-light { border: 1px solid var(--border-light); }

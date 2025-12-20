@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: biometric-processor-config
+  namespace: biometric-processor
+  labels:
+    app.kubernetes.io/name: biometric-processor
+    app.kubernetes.io/component: config
+data:
+  # Application settings
+  LOG_LEVEL: "INFO"
+  LOG_FORMAT: "json"
+
+  # Server settings
+  HOST: "0.0.0.0"
+  PORT: "8001"
+  WORKERS: "4"
+
+  # CORS settings
+  CORS_ORIGINS: "https://app.example.com,https://admin.example.com"
+
+  # ML model settings
+  FACE_DETECTOR: "opencv_dnn"
+  EMBEDDING_MODEL: "facenet"
+  SIMILARITY_THRESHOLD: "0.6"
+  LIVENESS_THRESHOLD: "60.0"
+
+  # Proctoring settings
+  PROCTOR_GAZE_THRESHOLD: "3.0"
+  PROCTOR_RISK_THRESHOLD: "0.7"
+  PROCTOR_MAX_INCIDENTS: "10"
+
+  # Metrics
+  METRICS_ENABLED: "true"
+  METRICS_PATH: "/metrics"

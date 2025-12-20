@@ -1,0 +1,33 @@
+# Prometheus configuration for Biometric Processor
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Alerting configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093
+
+# Load alerting rules
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # Biometric Processor API metrics
+  - job_name: 'biometric-processor'
+    static_configs:
+      - targets: ['biometric-api:8001']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Redis metrics (if redis_exporter is added)
+  # - job_name: 'redis'
+  #   static_configs:
+  #     - targets: ['redis-exporter:9121']

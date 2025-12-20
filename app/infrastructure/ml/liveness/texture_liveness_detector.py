@@ -55,6 +55,17 @@ class TextureLivenessDetector(ILivenessDetector):
             f"frequency={frequency_threshold}, liveness={liveness_threshold}"
         )
 
+    async def check_liveness(self, image: np.ndarray) -> LivenessResult:
+        """Check if image shows a live person using texture analysis.
+
+        Args:
+            image: Face image as numpy array (BGR format)
+
+        Returns:
+            LivenessResult with liveness determination
+        """
+        return await self.detect(image)
+
     async def detect(
         self,
         image: np.ndarray,
@@ -155,11 +166,9 @@ class TextureLivenessDetector(ILivenessDetector):
         # Analyze saturation distribution
         saturation = hsv[:, :, 1]
         sat_mean = np.mean(saturation)
-        sat_std = np.std(saturation)
 
         # Analyze value (brightness) distribution
         value = hsv[:, :, 2]
-        val_mean = np.mean(value)
         val_std = np.std(value)
 
         # Real faces have moderate saturation and varied brightness
@@ -303,3 +312,19 @@ class TextureLivenessDetector(ILivenessDetector):
             raise ValueError(f"Threshold must be between 0 and 100, got {threshold}")
         self._liveness_threshold = threshold
         logger.info(f"Liveness threshold updated to {threshold}")
+
+    def get_challenge_type(self) -> str:
+        """Get the type of liveness challenge used.
+
+        Returns:
+            Challenge type
+        """
+        return "texture_analysis"
+
+    def get_liveness_threshold(self) -> float:
+        """Get the threshold for considering result as live.
+
+        Returns:
+            Liveness score threshold (0-100)
+        """
+        return self._liveness_threshold

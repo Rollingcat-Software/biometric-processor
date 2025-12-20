@@ -95,13 +95,15 @@ class EnrollFaceUseCase:
         quality = await self._quality_assessor.assess(face_region)
 
         if not quality.is_acceptable:
+            issues = quality.get_issues()
             logger.warning(
                 f"Quality check failed: score={quality.score:.1f}, "
-                f"issues={quality.get_issues()}"
+                f"issues={issues}"
             )
             raise PoorImageQualityError(
                 quality_score=quality.score,
                 min_threshold=self._quality_assessor.get_minimum_acceptable_score(),
+                issues=issues,
             )
 
         logger.info(f"Quality check passed: score={quality.score:.1f}")

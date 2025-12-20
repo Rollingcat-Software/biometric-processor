@@ -1,0 +1,564 @@
+openapi: 3.1.0
+info:
+  title: Biometric Processor API
+  description: |
+    Production-ready biometric processing API with face enrollment, verification,
+    liveness detection, and real-time proctoring capabilities.
+  version: 1.0.0
+  contact:
+    name: API Support
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8001/api/v1
+    description: Development
+  - url: https://api.example.com/api/v1
+    description: Production
+
+tags:
+  - name: health
+    description: Health and readiness checks
+  - name: enrollment
+    description: Face enrollment operations
+  - name: verification
+    description: Face verification operations
+  - name: liveness
+    description: Liveness detection
+  - name: search
+    description: Face search operations
+  - name: batch
+    description: Batch processing operations
+  - name: proctoring
+    description: Real-time proctoring
+  - name: admin
+    description: Admin dashboard API
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Health check
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /enroll:
+    post:
+      tags: [enrollment]
+      summary: Enroll a face
+      operationId: enrollFace
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/EnrollRequest'
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollRequestJson'
+      responses:
+        '200':
+          description: Face enrolled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /verify:
+    post:
+      tags: [verification]
+      summary: Verify a face
+      operationId: verifyFace
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VerifyRequest'
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyResponse'
+
+  /liveness:
+    post:
+      tags: [liveness]
+      summary: Check liveness
+      operationId: checkLiveness
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LivenessRequest'
+      responses:
+        '200':
+          description: Liveness check result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivenessResponse'
+
+  /search:
+    post:
+      tags: [search]
+      summary: Search for similar faces
+      operationId: searchFaces
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+
+  /batch/enroll:
+    post:
+      tags: [batch]
+      summary: Batch face enrollment
+      operationId: batchEnroll
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchEnrollRequest'
+      responses:
+        '202':
+          description: Batch job accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchJobResponse'
+
+  /batch/verify:
+    post:
+      tags: [batch]
+      summary: Batch face verification
+      operationId: batchVerify
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchVerifyRequest'
+      responses:
+        '202':
+          description: Batch job accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchJobResponse'
+
+  /proctor/sessions:
+    post:
+      tags: [proctoring]
+      summary: Create proctoring session
+      operationId: createSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+      responses:
+        '200':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+
+  /proctor/sessions/{session_id}:
+    get:
+      tags: [proctoring]
+      summary: Get session status
+      operationId: getSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Session details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+
+  /proctor/sessions/{session_id}/start:
+    post:
+      tags: [proctoring]
+      summary: Start proctoring session
+      operationId: startSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartSessionRequest'
+      responses:
+        '200':
+          description: Session started
+
+  /proctor/sessions/{session_id}/frames:
+    post:
+      tags: [proctoring]
+      summary: Submit frame for analysis
+      operationId: analyzeFrame
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FrameRequest'
+      responses:
+        '200':
+          description: Frame analysis result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FrameResponse'
+
+  /proctor/sessions/{session_id}/end:
+    post:
+      tags: [proctoring]
+      summary: End proctoring session
+      operationId: endSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Session ended
+
+  /proctor/sessions/{session_id}/incidents:
+    get:
+      tags: [proctoring]
+      summary: Get session incidents
+      operationId: getIncidents
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: List of incidents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IncidentsResponse'
+
+components:
+  parameters:
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        timestamp:
+          type: string
+          format: date-time
+        version:
+          type: string
+
+    EnrollRequest:
+      type: object
+      properties:
+        image:
+          type: string
+          format: binary
+        user_id:
+          type: string
+        tenant_id:
+          type: string
+
+    EnrollRequestJson:
+      type: object
+      required: [image, user_id]
+      properties:
+        image:
+          type: string
+          description: Base64 encoded image
+        user_id:
+          type: string
+        tenant_id:
+          type: string
+        metadata:
+          type: object
+
+    EnrollResponse:
+      type: object
+      properties:
+        enrollment_id:
+          type: string
+        user_id:
+          type: string
+        quality_score:
+          type: number
+        created_at:
+          type: string
+          format: date-time
+
+    VerifyRequest:
+      type: object
+      properties:
+        image:
+          type: string
+          format: binary
+        user_id:
+          type: string
+
+    VerifyResponse:
+      type: object
+      properties:
+        verified:
+          type: boolean
+        confidence:
+          type: number
+        similarity_score:
+          type: number
+        threshold:
+          type: number
+
+    LivenessRequest:
+      type: object
+      properties:
+        image:
+          type: string
+          format: binary
+
+    LivenessResponse:
+      type: object
+      properties:
+        is_live:
+          type: boolean
+        liveness_score:
+          type: number
+        challenge:
+          type: string
+        challenge_completed:
+          type: boolean
+
+    SearchRequest:
+      type: object
+      properties:
+        image:
+          type: string
+          format: binary
+        max_results:
+          type: integer
+          default: 10
+        threshold:
+          type: number
+          default: 0.6
+
+    SearchResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+
+    SearchResult:
+      type: object
+      properties:
+        user_id:
+          type: string
+        similarity:
+          type: number
+        enrollment_id:
+          type: string
+
+    BatchEnrollRequest:
+      type: object
+      properties:
+        images:
+          type: array
+          items:
+            type: object
+            properties:
+              image:
+                type: string
+              user_id:
+                type: string
+        callback_url:
+          type: string
+          format: uri
+
+    BatchVerifyRequest:
+      type: object
+      properties:
+        verifications:
+          type: array
+          items:
+            type: object
+            properties:
+              image:
+                type: string
+              user_id:
+                type: string
+        callback_url:
+          type: string
+          format: uri
+
+    BatchJobResponse:
+      type: object
+      properties:
+        batch_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, processing, completed, failed]
+        total:
+          type: integer
+
+    CreateSessionRequest:
+      type: object
+      required: [exam_id, user_id, tenant_id]
+      properties:
+        exam_id:
+          type: string
+        user_id:
+          type: string
+        tenant_id:
+          type: string
+        config:
+          $ref: '#/components/schemas/SessionConfig'
+
+    SessionConfig:
+      type: object
+      properties:
+        gaze_threshold_seconds:
+          type: number
+          default: 3.0
+        risk_threshold:
+          type: number
+          default: 0.7
+        max_incidents:
+          type: integer
+          default: 10
+
+    StartSessionRequest:
+      type: object
+      properties:
+        baseline_image:
+          type: string
+          description: Base64 encoded baseline image
+
+    SessionResponse:
+      type: object
+      properties:
+        session_id:
+          type: string
+        exam_id:
+          type: string
+        user_id:
+          type: string
+        status:
+          type: string
+          enum: [created, started, paused, completed, terminated, flagged]
+        risk_score:
+          type: number
+        incident_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    FrameRequest:
+      type: object
+      required: [image]
+      properties:
+        image:
+          type: string
+          description: Base64 encoded frame
+        timestamp:
+          type: string
+
+    FrameResponse:
+      type: object
+      properties:
+        frame_number:
+          type: integer
+        face_detected:
+          type: boolean
+        gaze_direction:
+          type: string
+        risk_score:
+          type: number
+        incidents:
+          type: array
+          items:
+            $ref: '#/components/schemas/Incident'
+
+    Incident:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        detected_at:
+          type: string
+          format: date-time
+        description:
+          type: string
+
+    IncidentsResponse:
+      type: object
+      properties:
+        session_id:
+          type: string
+        incidents:
+          type: array
+          items:
+            $ref: '#/components/schemas/Incident'
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+        details:
+          type: object

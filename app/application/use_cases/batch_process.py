@@ -376,11 +376,11 @@ class BatchVerificationUseCase:
                     )
 
                 # Get stored embedding
-                stored = await self._repository.find_by_user_id(
+                stored_embedding = await self._repository.find_by_user_id(
                     item.user_id,
                     item.tenant_id,
                 )
-                if not stored:
+                if stored_embedding is None:
                     return BatchItemResult(
                         item_id=item.item_id,
                         status=BatchOperationStatus.FAILED,
@@ -390,6 +390,13 @@ class BatchVerificationUseCase:
 
                 # Detect face
                 detection = await self._detector.detect(image)
+                if not detection.found:
+                    return BatchItemResult(
+                        item_id=item.item_id,
+                        status=BatchOperationStatus.FAILED,
+                        error="No face detected in image",
+                        error_code="NO_FACE_DETECTED",
+                    )
 
                 # Extract face region
                 face_region = detection.get_face_region(image)
@@ -400,14 +407,14 @@ class BatchVerificationUseCase:
                 # Calculate similarity
                 distance = self._similarity_calculator.calculate(
                     probe_embedding,
-                    stored.embedding,
+                    stored_embedding,
                 )
                 is_match = distance < threshold
-                confidence = max(0.0, min(100.0, (1 - distance) * 100))
+                confidence = max(0.0, min(1.0, 1 - distance))
 
                 logger.debug(
                     f"Verification {item.item_id}: "
-                    f"match={is_match}, distance={distance:.4f}, confidence={confidence:.1f}"
+                    f"match={is_match}, distance={distance:.4f}, confidence={confidence:.4f}"
                 )
 
                 return BatchItemResult(

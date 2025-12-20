@@ -1,0 +1,222 @@
+{
+  "common": {
+    "loading": "Yükleniyor...",
+    "error": "Bir hata oluştu",
+    "success": "Başarılı",
+    "cancel": "İptal",
+    "confirm": "Onayla",
+    "save": "Kaydet",
+    "delete": "Sil",
+    "edit": "Düzenle",
+    "close": "Kapat",
+    "back": "Geri",
+    "next": "İleri",
+    "submit": "Gönder",
+    "reset": "Sıfırla",
+    "search": "Ara",
+    "filter": "Filtrele",
+    "clear": "Temizle",
+    "upload": "Yükle",
+    "download": "İndir",
+    "retry": "Tekrar Dene",
+    "processing": "İşleniyor...",
+    "noData": "Veri bulunamadı",
+    "actions": "İşlemler"
+  },
+  "nav": {
+    "dashboard": "Ana Panel",
+    "enrollment": "Kayıt",
+    "verification": "Doğrulama",
+    "search": "Arama",
+    "liveness": "Canlılık",
+    "quality": "Kalite",
+    "demographics": "Demografi",
+    "landmarks": "Yüz Noktaları",
+    "comparison": "Karşılaştırma",
+    "multiFace": "Çoklu Yüz",
+    "similarity": "Benzerlik",
+    "cardDetection": "Kart Tespiti",
+    "batch": "Toplu İşlem",
+    "proctoring": "Gözetim",
+    "session": "Oturum",
+    "realtime": "Gerçek Zamanlı",
+    "admin": "Yönetim",
+    "webhooks": "Webhook'lar",
+    "embeddings": "Gömmeler",
+    "config": "Yapılandırma",
+    "apiExplorer": "API Gezgini",
+    "settings": "Ayarlar"
+  },
+  "dashboard": {
+    "title": "Biyometrik İşlemci Demo",
+    "subtitle": "Kurumsal düzeyde yüz biyometrik çözümü gösterimi",
+    "apiStatus": {
+      "checking": "API kontrol ediliyor...",
+      "connected": "API Bağlı",
+      "unavailable": "API Kullanılamıyor"
+    },
+    "stats": {
+      "apiVersion": "API Sürümü",
+      "status": "Durum",
+      "features": "Özellikler",
+      "responseTime": "Yanıt Süresi",
+      "operational": "Çalışıyor",
+      "offline": "Çevrimdışı"
+    },
+    "sections": {
+      "features": "Mevcut Özellikler",
+      "admin": "Yönetim"
+    }
+  },
+  "enrollment": {
+    "title": "Yüz Kaydı",
+    "description": "Kalite doğrulaması ve gömme çıkarma ile yeni yüzler kaydedin",
+    "personId": "Kişi Kimliği",
+    "personIdPlaceholder": "Benzersiz kişi tanımlayıcısı girin",
+    "selectImage": "Bir görüntü seçin veya çekin",
+    "enrollButton": "Yüzü Kaydet",
+    "enrolling": "Kaydediliyor...",
+    "success": "Yüz başarıyla kaydedildi",
+    "error": "Kayıt başarısız"
+  },
+  "verification": {
+    "title": "1:1 Yüz Doğrulama",
+    "description": "Kimlik doğrulaması için iki yüzü karşılaştırın",
+    "image1": "Referans Görüntü",
+    "image2": "Sorgu Görüntüsü",
+    "verifyButton": "Kimliği Doğrula",
+    "verifying": "Doğrulanıyor...",
+    "result": {
+      "match": "Eşleşme",
+      "noMatch": "Eşleşme Yok",
+      "similarity": "Benzerlik Skoru",
+      "threshold": "Eşik Değeri"
+    }
+  },
+  "search": {
+    "title": "1:N Yüz Arama",
+    "description": "Kayıtlı veritabanında yüz arayın",
+    "searchButton": "Veritabanında Ara",
+    "searching": "Aranıyor...",
+    "results": "Arama Sonuçları",
+    "noResults": "Eşleşen yüz bulunamadı",
+    "topMatches": "En İyi Eşleşmeler"
+  },
+  "liveness": {
+    "title": "Canlılık Tespiti",
+    "description": "Sunum saldırılarını ve sahtecilik girişimlerini tespit edin",
+    "checkButton": "Canlılığı Kontrol Et",
+    "checking": "Analiz ediliyor...",
+    "result": {
+      "live": "Canlı",
+      "spoof": "Sahtecilik Tespit Edildi",
+      "uncertain": "Belirsiz",
+      "score": "Canlılık Skoru"
+    },
+    "challenges": {
+      "blink": "Lütfen göz kırpın",
+      "turnLeft": "Başınızı sola çevirin",
+      "turnRight": "Başınızı sağa çevirin",
+      "smile": "Lütfen gülümseyin"
+    }
+  },
+  "quality": {
+    "title": "Kalite Analizi",
+    "description": "Yüz görüntüsü kalite metriklerini analiz edin",
+    "analyzeButton": "Kaliteyi Analiz Et",
+    "analyzing": "Analiz ediliyor...",
+    "metrics": {
+      "overall": "Genel Kalite",
+      "brightness": "Parlaklık",
+      "contrast": "Kontrast",
+      "sharpness": "Netlik",
+      "pose": "Poz",
+      "faceSize": "Yüz Boyutu"
+    },
+    "levels": {
+      "excellent": "Mükemmel",
+      "good": "İyi",
+      "acceptable": "Kabul Edilebilir",
+      "poor": "Zayıf",
+      "failed": "Başarısız"
+    }
+  },
+  "demographics": {
+    "title": "Demografi Analizi",
+    "description": "Yaş, cinsiyet ve duyguları tahmin edin",
+    "analyzeButton": "Demografiyi Analiz Et",
+    "analyzing": "Analiz ediliyor...",
+    "results": {
+      "age": "Tahmini Yaş",
+      "gender": "Cinsiyet",
+      "emotion": "Baskın Duygu",
+      "confidence": "Güven"
+    }
+  },
+  "proctoring": {
+    "title": "Gerçek Zamanlı Gözetim",
+    "description": "WebSocket akışı ile sürekli yüz izleme",
+    "startSession": "Oturumu Başlat",
+    "endSession": "Oturumu Sonlandır",
+    "status": {
+      "active": "Oturum Aktif",
+      "inactive": "Oturum Pasif",
+      "connecting": "Bağlanıyor..."
+    },
+    "alerts": {
+      "noFace": "Yüz algılanmadı",
+      "multipleFaces": "Birden fazla yüz algılandı",
+      "lookingAway": "Ekrandan bakıyor",
+      "suspiciousActivity": "Şüpheli aktivite tespit edildi"
+    }
+  },
+  "camera": {
+    "start": "Kamerayı Başlat",
+    "stop": "Kamerayı Durdur",
+    "capture": "Çek",
+    "retake": "Tekrar Çek",
+    "permissionDenied": "Kamera izni reddedildi",
+    "notSupported": "Kamera desteklenmiyor",
+    "switchCamera": "Kamerayı Değiştir"
+  },
+  "upload": {
+    "dragDrop": "Bir görüntüyü buraya sürükleyip bırakın",
+    "or": "veya",
+    "browse": "Dosya seçin",
+    "maxSize": "Maksimum dosya boyutu: {{size}}MB",
+    "supportedFormats": "Desteklenen formatlar: {{formats}}",
+    "invalidFormat": "Geçersiz dosya formatı",
+    "fileTooLarge": "Dosya çok büyük"
+  },
+  "errors": {
+    "generic": "Bir şeyler yanlış gitti. Lütfen tekrar deneyin.",
+    "network": "Ağ hatası. Lütfen bağlantınızı kontrol edin.",
+    "timeout": "İstek zaman aşımına uğradı. Lütfen tekrar deneyin.",
+    "serverError": "Sunucu hatası. Lütfen daha sonra tekrar deneyin.",
+    "notFound": "Kaynak bulunamadı",
+    "unauthorized": "Yetkisiz erişim",
+    "validation": "Lütfen girişinizi kontrol edin"
+  },
+  "settings": {
+    "title": "Ayarlar",
+    "language": "Dil",
+    "theme": "Tema",
+    "themes": {
+      "light": "Açık",
+      "dark": "Koyu",
+      "system": "Sistem"
+    },
+    "api": {
+      "title": "API Yapılandırması",
+      "url": "API URL",
+      "timeout": "Zaman Aşımı (ms)"
+    },
+    "camera": {
+      "title": "Kamera Ayarları",
+      "resolution": "Çözünürlük",
+      "facingMode": "Kamera Tipi",
+      "front": "Ön Kamera",
+      "back": "Arka Kamera"
+    }
+  }
+}

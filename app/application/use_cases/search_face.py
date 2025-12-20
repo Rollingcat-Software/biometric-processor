@@ -158,8 +158,8 @@ class SearchFaceUseCase:
         # Convert to SearchMatch objects with confidence scores
         matches = []
         for user_id, distance in similar:
-            # Calculate confidence as inverse of distance (higher is better)
-            confidence = max(0.0, min(100.0, (1 - distance) * 100))
+            # Calculate confidence as inverse of distance (higher is better, 0-1 range)
+            confidence = max(0.0, min(1.0, 1 - distance))
             matches.append(
                 SearchMatch(
                     user_id=user_id,
