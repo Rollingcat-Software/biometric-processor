@@ -14,11 +14,12 @@ router = APIRouter(
     response_model=CardTypeResponse,
     summary="Detect card type from image",
     description=(
-        "Detects the card type from the provided image. "
-        "Supported classes: tc_kimlik, ehliyet, pasaport, ogrenci_karti. "
+        "Detects the card type from the provided image."
+        "Supported classes: tc_kimlik, ehliyet, pasaport, ogrenci_karti,akademisyen_karti."
         "Designed for real-time mobile camera preview (0.5–1 second intervals)."
     ),
 )
+
 async def detect_live(file: UploadFile = File(...)):
     return await detect_card_type_use_case(file)
 
