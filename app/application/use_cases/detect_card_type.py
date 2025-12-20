@@ -1,5 +1,6 @@
 """Card type detection use case."""
 
+import asyncio
 import logging
 
 import cv2
@@ -75,7 +76,7 @@ class DetectCardTypeUseCase:
         """
         logger.info("Starting card type detection from array")
 
-        result = self._detector.detect(image)
+        result = await asyncio.to_thread(self._detector.detect, image)
 
         logger.info(
             f"Card type detection completed: "

@@ -95,7 +95,7 @@ app = FastAPI(
 if settings.RATE_LIMIT_ENABLED:
     rate_limit_storage = RateLimitStorageFactory.create(
         backend=settings.RATE_LIMIT_STORAGE,
-        redis_url=settings.REDIS_URL,
+        redis_url=settings.redis_url,
     )
     app.add_middleware(
         RateLimitMiddleware,
