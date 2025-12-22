@@ -23,14 +23,14 @@ class CardDetectionResult:
 
 @lru_cache
 def get_yolo_model() -> YOLO:
-    """YOLO modelini bir kez yükleyip cache'ler."""
+    # Load the YOLO model from the 'best.pt' file located in the same directory as this script
     model_path = Path(__file__).with_name("best.pt")
     return YOLO(model_path.as_posix())
 
 
 def detect_card_type(image: np.ndarray, conf_threshold: float = 0.5) -> CardDetectionResult:
     """
-    image: RGB (H, W, 3) numpy array
+    Detects the card type in the given image using a YOLO model.
     """
     model = get_yolo_model()
     results = model(image, conf=conf_threshold, verbose=False)
