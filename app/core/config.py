@@ -137,6 +137,13 @@ class Settings(BaseSettings):
     DEMOGRAPHICS_INCLUDE_RACE: bool = Field(default=False)  # Privacy consideration
     DEMOGRAPHICS_INCLUDE_EMOTION: bool = Field(default=True)
 
+    # Demographics Quality Settings
+    # DeepFace age estimation has MAE ~10 years, these settings help manage expectations
+    DEMOGRAPHICS_MIN_IMAGE_SIZE: int = Field(default=224, ge=128, le=1024)  # Minimum image size for accuracy
+    DEMOGRAPHICS_MIN_CONFIDENCE: float = Field(default=0.5, ge=0.0, le=1.0)  # Minimum confidence threshold
+    DEMOGRAPHICS_AGE_MARGIN: int = Field(default=10, ge=5, le=30)  # Age range margin (±years) based on known MAE
+    DEMOGRAPHICS_AGE_CONFIDENCE: float = Field(default=0.65, ge=0.1, le=0.95)  # Age estimation confidence (conservative)
+
     # Landmarks
     LANDMARK_MODEL: Literal["mediapipe_468", "dlib_68"] = Field(default="mediapipe_468")
 

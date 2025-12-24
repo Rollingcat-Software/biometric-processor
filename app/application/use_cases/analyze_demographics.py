@@ -48,24 +48,28 @@ class AnalyzeDemographicsUseCase:
         """
         logger.info("Starting demographics analysis")
 
-        # Detect face first
+        # Validate that a face exists first (quick check)
         detection_result = await self._detector.detect(image)
         if not detection_result.found:
             raise FaceNotFoundError("No face detected in image")
 
-        # Extract face region
-        if detection_result.bounding_box:
-            x, y, w, h = detection_result.bounding_box
-            face_image = image[y : y + h, x : x + w]
-        else:
-            face_image = image
-
-        # Analyze demographics
-        result = self._demographics_analyzer.analyze(face_image)
+        # IMPORTANT: Don't crop the face before demographics analysis!
+        # Cropping can degrade image quality and reduce resolution below optimal 224x224.
+        # DeepFace.analyze() handles face detection internally and performs better
+        # with the full image rather than a pre-cropped face region.
+        #
+        # Research shows DeepFace performs best at 224x224 resolution.
+        # Cropping a small face from a larger image can result in a face region
+        # smaller than 224x224, significantly degrading accuracy (MAE increases).
+        #
+        # Therefore, we send the full image to the demographics analyzer.
+        result = self._demographics_analyzer.analyze(image)
 
         logger.info(
             f"Demographics analysis complete: "
-            f"age={result.age.value}, gender={result.gender.value}"
+            f"age={result.age.value} (±{(result.age.range[1] - result.age.value)} years, "
+            f"confidence={result.age.confidence:.2f}), "
+            f"gender={result.gender.value} (confidence={result.gender.confidence:.2f})"
         )
 
         return result
