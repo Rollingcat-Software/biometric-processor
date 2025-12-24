@@ -476,7 +476,7 @@ Server → Client: (final result)
 - [ ] Create docker-compose.yml (app + worker + redis + postgres)
 
 **Acceptance Criteria**:
-- ✅ FastAPI app runs on port 8000
+- ✅ FastAPI app runs on port 8001 (STANDARD PORT)
 - ✅ Can connect to PostgreSQL and Redis
 - ✅ Celery worker starts successfully
 - ✅ Health endpoint returns 200 OK
@@ -754,7 +754,7 @@ POST /identify - 100 req/s - p95 < 1s
 # Application
 APP_NAME=biometric-processor
 APP_VERSION=1.0.0
-APP_PORT=8000
+APP_PORT=8001  # STANDARD PORT
 LOG_LEVEL=INFO
 
 # Database
@@ -790,7 +790,7 @@ services:
   biometric-api:
     build: .
     ports:
-      - "8000:8000"
+      - "8001:8001"  # STANDARD PORT
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/biometric
       - REDIS_URL=redis://redis:6379/0

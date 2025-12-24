@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from app.application.services.event_publisher import EventPublisher
 from app.application.use_cases.batch_process import BatchEnrollmentUseCase, BatchVerificationUseCase
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
 from app.application.use_cases.detect_card_type import DetectCardTypeUseCase
@@ -42,6 +43,7 @@ from app.application.use_cases.send_webhook import SendWebhookUseCase
 from app.core.config import settings
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
+from app.domain.interfaces.event_bus import IEventBus
 
 # Domain interfaces (imported for type hints)
 from app.domain.interfaces.card_type_detector import ICardTypeDetector
@@ -70,8 +72,13 @@ from app.domain.interfaces.image_preprocessor import IImagePreprocessor
 from app.domain.interfaces.webhook_sender import IWebhookSender
 from app.domain.interfaces.rate_limit_storage import IRateLimitStorage
 from app.infrastructure.ml.quality.quality_assessor import QualityAssessor
+from app.infrastructure.messaging.event_handlers import BiometricEventHandler, EventRouter
+from app.infrastructure.messaging.redis_event_bus import RedisEventBus
 from app.infrastructure.persistence.repositories.memory_embedding_repository import (
     InMemoryEmbeddingRepository,
+)
+from app.infrastructure.persistence.repositories.pgvector_embedding_repository import (
+    PgVectorEmbeddingRepository,
 )
 from app.infrastructure.storage.local_file_storage import LocalFileStorage
 
@@ -249,14 +256,31 @@ def get_embedding_repository() -> IEmbeddingRepository:
     """Get embedding repository instance (singleton).
 
     Returns:
-        Embedding repository implementation
+        Embedding repository implementation based on configuration
 
     Note:
-        Currently returns InMemoryEmbeddingRepository for MVP.
-        Will be replaced with PostgreSQL repository in Sprint 4.
+        - If USE_PGVECTOR=True: Returns PgVectorEmbeddingRepository (production)
+        - If USE_PGVECTOR=False: Returns InMemoryEmbeddingRepository (development/testing)
+
+        Set USE_PGVECTOR environment variable to control which implementation is used.
     """
-    logger.info("Creating embedding repository (in-memory)")
-    return InMemoryEmbeddingRepository()
+    if settings.USE_PGVECTOR:
+        if not settings.DATABASE_URL:
+            raise ValueError("DATABASE_URL must be set when USE_PGVECTOR=True")
+
+        logger.info(
+            f"Creating embedding repository (pgvector) - "
+            f"dimension={settings.EMBEDDING_DIMENSION}"
+        )
+        return PgVectorEmbeddingRepository(
+            database_url=settings.DATABASE_URL,
+            pool_min_size=settings.DATABASE_POOL_MIN_SIZE,
+            pool_max_size=settings.DATABASE_POOL_MAX_SIZE,
+            embedding_dimension=settings.EMBEDDING_DIMENSION,
+        )
+    else:
+        logger.info("Creating embedding repository (in-memory)")
+        return InMemoryEmbeddingRepository()
 
 
 @lru_cache()
@@ -303,6 +327,9 @@ def get_demographics_analyzer() -> IDemographicsAnalyzer:
         backend="deepface",
         include_race=settings.DEMOGRAPHICS_INCLUDE_RACE,
         include_emotion=settings.DEMOGRAPHICS_INCLUDE_EMOTION,
+        min_image_size=settings.DEMOGRAPHICS_MIN_IMAGE_SIZE,
+        age_margin=settings.DEMOGRAPHICS_AGE_MARGIN,
+        age_confidence=settings.DEMOGRAPHICS_AGE_CONFIDENCE,
     )
 
 
@@ -360,6 +387,73 @@ def get_rate_limit_storage() -> IRateLimitStorage:
     return RateLimitStorageFactory.create(
         storage_type=settings.RATE_LIMIT_STORAGE,
     )
+
+
+@lru_cache()
+def get_event_bus() -> IEventBus:
+    """Get event bus instance (singleton).
+
+    Returns:
+        Event bus implementation (Redis-based)
+
+    Note:
+        - Uses Redis Pub/Sub for real-time event distribution
+        - Async/non-blocking operations
+        - Automatic reconnection handling
+        - Configurable via environment variables
+    """
+    if not settings.EVENT_BUS_ENABLED:
+        logger.warning("Event bus is disabled in configuration")
+        # Return a null/no-op implementation if needed
+        # For now, we'll still create it but won't use it
+
+    logger.info(f"Creating Redis event bus: {settings.REDIS_HOST}:{settings.REDIS_PORT}")
+    return RedisEventBus(
+        redis_url=settings.redis_url,
+        max_connections=settings.REDIS_MAX_CONNECTIONS,
+        retry_attempts=settings.EVENT_BUS_RETRY_ATTEMPTS,
+        retry_delay=settings.EVENT_BUS_RETRY_DELAY,
+    )
+
+
+@lru_cache()
+def get_event_handler() -> BiometricEventHandler:
+    """Get event handler instance (singleton).
+
+    Returns:
+        Biometric event handler for processing incoming events
+    """
+    logger.info("Creating biometric event handler")
+    return BiometricEventHandler()
+
+
+@lru_cache()
+def get_event_router() -> EventRouter:
+    """Get event router instance (singleton).
+
+    Returns:
+        Event router for dispatching events to handlers
+    """
+    logger.info("Creating event router")
+    return EventRouter(handler=get_event_handler())
+
+
+@lru_cache()
+def get_event_publisher() -> EventPublisher:
+    """Get event publisher instance (singleton).
+
+    Returns:
+        Event publisher for use cases to publish events
+
+    Note:
+        Returns publisher with or without event bus depending on configuration
+    """
+    if settings.EVENT_BUS_ENABLED:
+        logger.info("Creating event publisher (enabled)")
+        return EventPublisher(event_bus=get_event_bus())
+    else:
+        logger.info("Creating event publisher (disabled)")
+        return EventPublisher(event_bus=None)
 
 
 # ============================================================================
@@ -609,6 +703,13 @@ def initialize_dependencies() -> None:
     get_demographics_analyzer()
     get_landmark_detector()
 
+    # Initialize event bus and handlers (if enabled)
+    if settings.EVENT_BUS_ENABLED:
+        get_event_bus()
+        get_event_handler()
+        get_event_router()
+        get_event_publisher()
+
     logger.info("Dependencies initialized successfully")
 
 
@@ -640,3 +741,9 @@ def clear_cache() -> None:
     get_image_preprocessor.cache_clear()
     get_webhook_sender.cache_clear()
     get_rate_limit_storage.cache_clear()
+
+    # Clear event bus caches
+    get_event_bus.cache_clear()
+    get_event_handler.cache_clear()
+    get_event_router.cache_clear()
+    get_event_publisher.cache_clear()
