@@ -1,15 +1,15 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { CreditCard, Camera, Play, Square, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { CreditCard, Play, Square, CheckCircle2 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { useCardDetection } from '@/hooks/use-card-detection';
 import { toast } from 'sonner';
+import { formatPercent, toPercent } from '@/lib/utils/format';
 
 const cardTypes: Record<string, { label: string; color: string }> = {
   tc_kimlik: { label: 'TR National ID', color: 'bg-blue-500' },
@@ -20,7 +20,6 @@ const cardTypes: Record<string, { label: string; color: string }> = {
 };
 
 export default function CardDetectionPage() {
-  const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -83,7 +82,7 @@ export default function CardDetectionPage() {
                   if (result.card_type !== 'unknown' && result.confidence > 0.7) {
                     setLastDetected(result);
                     toast.success('Card Detected', {
-                      description: `${cardTypes[result.card_type]?.label || result.card_type} (${(result.confidence * 100).toFixed(0)}%)`,
+                      description: `${cardTypes[result.card_type]?.label || result.card_type} (${formatPercent(result.confidence, 0)})`,
                     });
                   }
                 },
@@ -248,10 +247,10 @@ export default function CardDetectionPage() {
                     <div className="flex justify-between text-sm">
                       <span>Confidence</span>
                       <span className="font-mono">
-                        {(lastDetected.confidence * 100).toFixed(1)}%
+                        {formatPercent(lastDetected.confidence)}
                       </span>
                     </div>
-                    <Progress value={lastDetected.confidence * 100} />
+                    <Progress value={toPercent(lastDetected.confidence)} />
                   </div>
                 </div>
               )}
@@ -288,7 +287,7 @@ export default function CardDetectionPage() {
                           {cardTypes[result.card_type]?.label || result.card_type}
                         </span>
                         <span className="ml-2 text-muted-foreground">
-                          {(result.confidence * 100).toFixed(0)}%
+                          {formatPercent(result.confidence, 0)}
                         </span>
                       </div>
                     ))}

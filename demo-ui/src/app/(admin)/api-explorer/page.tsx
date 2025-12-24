@@ -1,15 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
 import {
   Code,
-  Play,
   Copy,
   Check,
-  ChevronDown,
-  ChevronRight,
   Send,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -96,7 +92,6 @@ const methodColors: Record<string, string> = {
 };
 
 export default function ApiExplorerPage() {
-  const { t } = useTranslation();
   const [selectedEndpoint, setSelectedEndpoint] = useState<any>(null);
   const [method, setMethod] = useState('GET');
   const [url, setUrl] = useState('');
@@ -105,7 +100,7 @@ export default function ApiExplorerPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+  const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
   const handleSelectEndpoint = (endpoint: any) => {
     setSelectedEndpoint(endpoint);

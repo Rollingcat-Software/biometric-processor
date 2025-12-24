@@ -1,5 +1,6 @@
 /**
  * API Response Types for Biometric Processor
+ * Updated to match actual backend response formats
  */
 
 // Base response wrapper
@@ -24,14 +25,7 @@ export interface ServiceHealth {
   message?: string;
 }
 
-// Face detection
-export interface FaceDetectionResult {
-  face_id: string;
-  bounding_box: BoundingBox;
-  confidence: number;
-  landmarks?: FacialLandmarks;
-}
-
+// Bounding box - used across multiple endpoints
 export interface BoundingBox {
   x: number;
   y: number;
@@ -39,16 +33,60 @@ export interface BoundingBox {
   height: number;
 }
 
-export interface FacialLandmarks {
-  points: LandmarkPoint[];
-  model: string;
-}
-
+// Landmark point
 export interface LandmarkPoint {
   x: number;
   y: number;
   z?: number;
   label?: string;
+}
+
+// Face detection - single face
+export interface FaceDetectionResult {
+  face_detected: boolean;
+  confidence: number;
+  quality_score: number;
+  bounding_box: BoundingBox;
+  face_id?: number;
+}
+
+// Multi-face detection
+export interface MultiFaceDetectionResponse {
+  face_count: number;
+  faces: DetectedFace[];
+  image_dimensions: {
+    width: number;
+    height: number;
+  };
+}
+
+export interface DetectedFace {
+  face_id: number;
+  bounding_box: BoundingBox;
+  confidence: number;
+  quality_score: number;
+  landmarks?: Array<{ x: number; y: number }>;
+}
+
+// Facial landmarks detection
+export interface LandmarkDetectionResponse {
+  landmarks: LandmarkPoint[];
+  landmark_count: number;
+  model: string;
+  regions?: {
+    left_eye?: LandmarkPoint[];
+    right_eye?: LandmarkPoint[];
+    nose?: LandmarkPoint[];
+    mouth?: LandmarkPoint[];
+    face_contour?: LandmarkPoint[];
+    left_eyebrow?: LandmarkPoint[];
+    right_eyebrow?: LandmarkPoint[];
+  };
+  head_pose?: {
+    pitch: number;
+    yaw: number;
+    roll: number;
+  };
 }
 
 // Face enrollment
@@ -59,28 +97,38 @@ export interface EnrollmentRequest {
 }
 
 export interface EnrollmentResponse {
-  success: boolean;
-  face_id: string;
-  person_id: string;
-  quality_score: number;
+  user_id: string;
   embedding_id: string;
-  message?: string;
+  success: boolean;
+  message: string;
+  quality_score?: number;
+  created_at?: string;
 }
 
-// Face verification
-export interface VerificationRequest {
+// Face comparison/verification
+export interface ComparisonRequest {
   image1: File | Blob;
   image2: File | Blob;
   threshold?: number;
 }
 
-export interface VerificationResponse {
+export interface ComparisonResponse {
   match: boolean;
   similarity: number;
+  distance: number;
   threshold: number;
-  processing_time_ms: number;
-  face1: FaceDetectionResult;
-  face2: FaceDetectionResult;
+  confidence: string;
+  face1: {
+    detected: boolean;
+    quality_score: number;
+    bounding_box: BoundingBox;
+  };
+  face2: {
+    detected: boolean;
+    quality_score: number;
+    bounding_box: BoundingBox;
+  };
+  message: string;
 }
 
 // Face search
@@ -92,15 +140,14 @@ export interface SearchRequest {
 
 export interface SearchResponse {
   matches: SearchMatch[];
-  processing_time_ms: number;
-  query_face: FaceDetectionResult;
+  total_searched: number;
+  query_embedding_id?: string;
 }
 
 export interface SearchMatch {
-  person_id: string;
-  face_id: string;
+  user_id: string;
   similarity: number;
-  metadata?: Record<string, unknown>;
+  embedding_id: string;
 }
 
 // Liveness detection
@@ -112,9 +159,9 @@ export interface LivenessRequest {
 export interface LivenessResponse {
   is_live: boolean;
   liveness_score: number;
-  spoof_type?: string;
-  processing_time_ms: number;
-  checks: LivenessCheck[];
+  challenge?: string;
+  challenge_completed?: boolean;
+  message?: string;
 }
 
 export interface LivenessCheck {
@@ -131,33 +178,55 @@ export interface QualityAnalysisRequest {
 
 export interface QualityAnalysisResponse {
   overall_score: number;
-  grade: QualityGrade;
+  passed: boolean;
+  issues: QualityIssue[];
   metrics: QualityMetrics;
-  recommendations?: string[];
+}
+
+export interface QualityIssue {
+  code: string;
+  severity: string;
+  message: string;
+  value: number;
+  threshold: number;
+  suggestion: string;
+}
+
+export interface QualityMetrics {
+  blur_score: number;
+  brightness: number;
+  face_size: number;
+  face_angle: number;
+  occlusion: number;
 }
 
 export type QualityGrade = 'excellent' | 'good' | 'acceptable' | 'poor' | 'failed';
 
-export interface QualityMetrics {
-  brightness: number;
-  contrast: number;
-  sharpness: number;
-  pose_deviation: number;
-  face_size: number;
-  occlusion: number;
-  expression_neutrality: number;
-}
-
-// Demographics
+// Demographics analysis
 export interface DemographicsRequest {
   image: File | Blob;
 }
 
 export interface DemographicsResponse {
-  age: AgeEstimate;
-  gender: GenderEstimate;
-  emotion: EmotionEstimate;
-  processing_time_ms: number;
+  age: {
+    value: number;
+    range: [number, number];
+    confidence: number;
+  };
+  gender: {
+    value: 'male' | 'female';
+    confidence: number;
+  };
+  race: {
+    dominant: string;
+    confidence: number;
+    all: Record<string, number>;
+  } | null;
+  emotion: {
+    dominant: string;
+    confidence: number;
+    all: Record<string, number>;
+  } | null;
 }
 
 export interface AgeEstimate {
@@ -173,7 +242,7 @@ export interface GenderEstimate {
 
 export interface EmotionEstimate {
   dominant: string;
-  scores: Record<string, number>;
+  all: Record<string, number>;
   confidence: number;
 }
 
@@ -205,24 +274,52 @@ export type ProctoringAlertType =
 
 // Batch processing
 export interface BatchRequest {
-  images: File[];
+  files: File[];
+  items?: string; // JSON string of items
   operation: 'enroll' | 'verify' | 'quality' | 'demographics';
-  options?: Record<string, unknown>;
+  threshold?: number;
 }
 
-export interface BatchResponse {
-  job_id: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed';
-  total_items: number;
-  processed_items: number;
-  results?: BatchResult[];
-  errors?: BatchError[];
+export interface BatchEnrollResponse {
+  results: BatchEnrollResult[];
+  total_processed: number;
+  successful: number;
+  failed: number;
+  processing_time_ms: number;
+}
+
+export interface BatchEnrollResult {
+  user_id: string;
+  success: boolean;
+  embedding_id?: string;
+  error?: string;
+}
+
+export interface BatchVerifyResponse {
+  results: BatchVerifyResult[];
+  total_processed: number;
+  matched: number;
+  unmatched: number;
+  failed: number;
+  processing_time_ms: number;
+}
+
+export interface BatchVerifyResult {
+  user_id: string;
+  success: boolean;
+  match?: boolean;
+  similarity?: number;
+  error?: string;
 }
 
 export interface BatchResult {
   index: number;
   success: boolean;
-  result: unknown;
+  user_id?: string;
+  error?: string;
+  similarity?: number;
+  match?: boolean;
+  embedding_id?: string;
 }
 
 export interface BatchError {
@@ -249,4 +346,12 @@ export interface WebhookEvent {
   status: 'pending' | 'delivered' | 'failed';
   attempts: number;
   created_at: string;
+}
+
+// Error response
+export interface ApiErrorResponse {
+  error_code: string;
+  message: string;
+  detail?: string;
+  errors?: Record<string, string[]>;
 }

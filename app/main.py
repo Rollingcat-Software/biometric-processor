@@ -26,7 +26,7 @@ from app.api.routes import proctor
 from app.api.routes import proctor_ws
 from app.api.routes import admin
 from app.core.config import settings
-from app.core.container import initialize_dependencies
+from app.core.container import initialize_dependencies, shutdown_thread_pool
 from app.core.metrics import init_metrics
 from app.infrastructure.rate_limit.storage_factory import RateLimitStorageFactory
 
@@ -54,20 +54,25 @@ else:
 async def lifespan(app: FastAPI):
     """Application lifespan manager.
 
-    Handles startup and shutdown events.
+    Handles startup and shutdown events including:
+    - ML model pre-loading at startup
+    - Thread pool shutdown at exit
+    - Rate limit storage cleanup
     """
     # Startup
     logger.info(f"Starting {settings.APP_NAME} v{settings.VERSION}")
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"Face Detection: {settings.FACE_DETECTION_BACKEND}")
     logger.info(f"Face Recognition Model: {settings.FACE_RECOGNITION_MODEL}")
+    logger.info(f"Async ML: {settings.ASYNC_ML_ENABLED}")
+    logger.info(f"Embedding Cache: {settings.EMBEDDING_CACHE_ENABLED}")
 
     # Initialize metrics
     if settings.METRICS_ENABLED:
         init_metrics(settings.APP_NAME, settings.VERSION, settings.ENVIRONMENT)
         logger.info("Metrics initialized")
 
-    # Initialize dependencies (pre-load ML models)
+    # Initialize dependencies (pre-load ML models, create thread pool, etc.)
     logger.info("Initializing dependencies...")
     initialize_dependencies()
     logger.info("Dependencies initialized")
@@ -76,6 +81,12 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down application...")
+
+    # Shutdown thread pool gracefully
+    logger.info("Shutting down thread pool manager...")
+    shutdown_thread_pool(wait=True)
+
+    logger.info("Application shutdown complete")
 
 
 # Create FastAPI application

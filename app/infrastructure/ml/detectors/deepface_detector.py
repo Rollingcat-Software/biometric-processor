@@ -43,8 +43,11 @@ class DeepFaceDetector:
             f"Initialized DeepFaceDetector with backend: {detector_backend}, align: {align}"
         )
 
-    async def detect(self, image: np.ndarray) -> FaceDetectionResult:
-        """Detect face in image.
+    def detect_sync(self, image: np.ndarray) -> FaceDetectionResult:
+        """Synchronous face detection for thread pool execution.
+
+        This method contains the actual blocking DeepFace call.
+        Called by AsyncFaceDetector via thread pool for non-blocking execution.
 
         Args:
             image: Input image as numpy array (H, W, C) in BGR format
@@ -57,7 +60,7 @@ class DeepFaceDetector:
             MultipleFacesError: When multiple faces are detected
         """
         try:
-            # Extract faces using DeepFace
+            # Extract faces using DeepFace (blocking operation)
             face_objs = DeepFace.extract_faces(
                 img_path=image,
                 detector_backend=self._detector_backend,
@@ -114,6 +117,24 @@ class DeepFaceDetector:
         except Exception as e:
             logger.error(f"Unexpected error during face detection: {e}", exc_info=True)
             raise
+
+    async def detect(self, image: np.ndarray) -> FaceDetectionResult:
+        """Detect face in image (async wrapper).
+
+        This method delegates to detect_sync for backward compatibility.
+        For truly non-blocking execution, use AsyncFaceDetector wrapper.
+
+        Args:
+            image: Input image as numpy array (H, W, C) in BGR format
+
+        Returns:
+            FaceDetectionResult with detection information
+
+        Raises:
+            FaceNotDetectedError: When no face is detected
+            MultipleFacesError: When multiple faces are detected
+        """
+        return self.detect_sync(image)
 
     def get_detector_name(self) -> str:
         """Get the name of the detector backend.

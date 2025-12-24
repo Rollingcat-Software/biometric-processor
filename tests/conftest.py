@@ -264,3 +264,90 @@ def create_test_user_id():
         counter += 1
         return f"{prefix}_{counter}"
     return _create
+
+
+# ============================================================================
+# Real Image Fixtures (from tests/fixtures/images/)
+# ============================================================================
+
+
+@pytest.fixture
+def fixtures_images_path() -> Path:
+    """Get the path to test fixture images."""
+    return Path(__file__).parent / "fixtures" / "images"
+
+
+@pytest.fixture
+def real_face_images(fixtures_images_path) -> dict:
+    """Load real face images from test fixtures.
+
+    Returns:
+        Dictionary with user_id as key and list of image paths as value.
+    """
+    import cv2
+
+    images = {}
+    for user_dir in fixtures_images_path.iterdir():
+        if user_dir.is_dir():
+            user_images = []
+            for img_path in user_dir.glob("*"):
+                if img_path.suffix.lower() in [".jpg", ".jpeg", ".png"]:
+                    img = cv2.imread(str(img_path))
+                    if img is not None:
+                        user_images.append({
+                            "path": str(img_path),
+                            "image": img,
+                            "name": img_path.name,
+                        })
+            if user_images:
+                images[user_dir.name] = user_images
+    return images
+
+
+@pytest.fixture
+def sample_real_image(real_face_images) -> np.ndarray:
+    """Get a single real face image for testing."""
+    for user_id, images in real_face_images.items():
+        if images:
+            return images[0]["image"]
+    # Fallback to random image
+    return np.random.randint(0, 255, (200, 200, 3), dtype=np.uint8)
+
+
+# ============================================================================
+# Performance Optimization Fixtures
+# ============================================================================
+
+
+@pytest.fixture
+def thread_pool_manager():
+    """Create a thread pool manager for tests."""
+    from app.infrastructure.async_execution.thread_pool_manager import ThreadPoolManager
+    pool = ThreadPoolManager(max_workers=2, thread_name_prefix="test-pool")
+    yield pool
+    pool.shutdown(wait=True)
+
+
+@pytest.fixture
+def embedding_cache():
+    """Create an embedding cache for tests."""
+    from app.infrastructure.caching.lru_cache import ThreadSafeLRUCache
+    return ThreadSafeLRUCache[str, np.ndarray](max_size=100, ttl_seconds=300)
+
+
+@pytest.fixture
+def thread_safe_repository():
+    """Create a thread-safe repository for tests."""
+    from app.infrastructure.persistence.repositories.thread_safe_memory_repository import (
+        ThreadSafeInMemoryEmbeddingRepository,
+    )
+    return ThreadSafeInMemoryEmbeddingRepository(max_capacity=100)
+
+
+@pytest.fixture
+def auto_cleaning_storage():
+    """Create auto-cleaning rate limit storage for tests."""
+    from app.infrastructure.rate_limit.auto_cleaning_memory_storage import (
+        AutoCleaningMemoryStorage,
+    )
+    return AutoCleaningMemoryStorage(max_entries=100, cleanup_interval_seconds=60)

@@ -25,6 +25,7 @@
   },
   "nav": {
     "dashboard": "Ana Panel",
+    "demo": "Etkileşimli Demo",
     "enrollment": "Kayıt",
     "verification": "Doğrulama",
     "search": "Arama",

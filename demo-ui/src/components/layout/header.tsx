@@ -13,7 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { useAppStore } from '@/lib/store/app-store';
 
 export function Header() {
-  const { theme, setTheme } = useTheme();
+  const { setTheme } = useTheme();
   const { i18n, t } = useTranslation();
   const toggleSidebar = useAppStore((state) => state.toggleSidebar);
 

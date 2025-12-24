@@ -22,6 +22,7 @@ export default function LandmarksPage() {
   const [inputMode, setInputMode] = useState<'upload' | 'camera'>('upload');
   const [include3D, setInclude3D] = useState(false);
   const [showOverlay, setShowOverlay] = useState(true);
+  const [imageLoaded, setImageLoaded] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
 
@@ -37,12 +38,15 @@ export default function LandmarksPage() {
       return;
     }
 
+    // Reset image loaded state for new detection
+    setImageLoaded(false);
+
     detectLandmarks(
       { image, include_3d: include3D },
       {
         onSuccess: (result) => {
           toast.success('Detection Complete', {
-            description: `Detected ${result.landmarks.points.length} landmarks`,
+            description: `Detected ${result.landmark_count} landmarks`,
           });
         },
         onError: (err) => {
@@ -57,36 +61,40 @@ export default function LandmarksPage() {
   const handleReset = () => {
     setSelectedImage(null);
     setCapturedImage(null);
+    setImageLoaded(false);
     reset();
   };
 
   // Draw landmarks on canvas
   useEffect(() => {
-    if (!isSuccess || !data || !canvasRef.current || !imageRef.current || !showOverlay) return;
+    if (!isSuccess || !data || !canvasRef.current || !imageRef.current || !showOverlay || !imageLoaded) return;
 
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     const img = imageRef.current;
 
-    if (!ctx) return;
+    if (!ctx || img.naturalWidth === 0 || img.naturalHeight === 0) return;
 
-    // Set canvas size to match image
+    // Set canvas size to match image natural dimensions
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
 
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw landmarks
+    // Scale factor for landmark point size based on image size
+    const pointRadius = Math.max(2, Math.min(canvas.width, canvas.height) / 200);
+
+    // Draw all landmarks as points - coordinates are already in pixels
     ctx.fillStyle = '#22c55e';
-    data.landmarks.points.forEach((point) => {
+    data.landmarks.forEach((point) => {
       ctx.beginPath();
-      ctx.arc(point.x * canvas.width, point.y * canvas.height, 2, 0, Math.PI * 2);
+      // Use pixel coordinates directly (backend returns pixel coords, not normalized)
+      ctx.arc(point.x, point.y, pointRadius, 0, Math.PI * 2);
       ctx.fill();
     });
 
-    // Draw connections for facial regions
-    const regions = ['left_eye', 'right_eye', 'nose', 'mouth', 'left_eyebrow', 'right_eyebrow', 'face_oval'];
+    // Draw connections for facial regions with color coding
     const regionColors: Record<string, string> = {
       left_eye: '#3b82f6',
       right_eye: '#3b82f6',
@@ -94,29 +102,57 @@ export default function LandmarksPage() {
       mouth: '#ef4444',
       left_eyebrow: '#8b5cf6',
       right_eyebrow: '#8b5cf6',
-      face_oval: '#6b7280',
+      face_contour: '#06b6d4',
     };
 
     if (data.regions) {
-      Object.entries(data.regions).forEach(([region, indices]) => {
-        if (indices && Array.isArray(indices)) {
-          ctx.strokeStyle = regionColors[region] || '#22c55e';
-          ctx.lineWidth = 1;
+      Object.entries(data.regions).forEach(([region, points]) => {
+        if (points && Array.isArray(points) && points.length > 0) {
+          const color = regionColors[region] || '#22c55e';
+
+          // Draw region points with specific color
+          ctx.fillStyle = color;
+          points.forEach((point) => {
+            if (point && typeof point.x === 'number' && typeof point.y === 'number') {
+              ctx.beginPath();
+              // Use pixel coordinates directly
+              ctx.arc(point.x, point.y, pointRadius * 1.5, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          });
+
+          // Draw connecting lines for the region
+          ctx.strokeStyle = color;
+          ctx.lineWidth = Math.max(1, pointRadius / 2);
           ctx.beginPath();
-          indices.forEach((idx, i) => {
-            const point = data.landmarks.points[idx];
-            if (point) {
-              const x = point.x * canvas.width;
-              const y = point.y * canvas.height;
-              if (i === 0) ctx.moveTo(x, y);
-              else ctx.lineTo(x, y);
+          let started = false;
+          points.forEach((point) => {
+            if (point && typeof point.x === 'number' && typeof point.y === 'number') {
+              // Use pixel coordinates directly
+              if (!started) {
+                ctx.moveTo(point.x, point.y);
+                started = true;
+              } else {
+                ctx.lineTo(point.x, point.y);
+              }
             }
           });
           ctx.stroke();
         }
       });
     }
-  }, [isSuccess, data, showOverlay]);
+  }, [isSuccess, data, showOverlay, imageLoaded]);
+
+  // Clear canvas when overlay is toggled off
+  useEffect(() => {
+    if (!showOverlay && canvasRef.current) {
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+  }, [showOverlay]);
 
   const imageUrl = selectedImage
     ? URL.createObjectURL(selectedImage)
@@ -242,7 +278,7 @@ export default function LandmarksPage() {
                   <CardTitle>Landmark Visualization</CardTitle>
                   <CardDescription>
                     {isSuccess && data
-                      ? `${data.landmarks.points.length} landmarks detected`
+                      ? `${data.landmark_count} landmarks detected`
                       : 'Detected points will be displayed here'}
                   </CardDescription>
                 </div>
@@ -266,23 +302,21 @@ export default function LandmarksPage() {
                   className="space-y-4"
                 >
                   {/* Image with overlay */}
-                  <div className="relative overflow-hidden rounded-lg border">
+                  <div className="relative overflow-hidden rounded-lg border bg-black">
                     <img
                       ref={imageRef}
                       src={imageUrl}
                       alt="Analyzed"
                       className="w-full"
                       onLoad={() => {
-                        // Trigger re-render for canvas
-                        if (canvasRef.current) {
-                          const event = new Event('load');
-                          canvasRef.current.dispatchEvent(event);
-                        }
+                        // Trigger canvas redraw when image loads
+                        setImageLoaded(true);
                       }}
                     />
                     <canvas
                       ref={canvasRef}
-                      className={`absolute inset-0 w-full h-full ${showOverlay ? '' : 'hidden'}`}
+                      className={`absolute inset-0 w-full h-full pointer-events-none ${showOverlay ? '' : 'hidden'}`}
+                      style={{ imageRendering: 'pixelated' }}
                     />
                   </div>
 
@@ -290,11 +324,11 @@ export default function LandmarksPage() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="rounded-lg border p-3">
                       <p className="text-sm text-muted-foreground">Model</p>
-                      <p className="font-semibold">{data.landmarks.model || 'MediaPipe'}</p>
+                      <p className="font-semibold">{data.model || 'MediaPipe'}</p>
                     </div>
                     <div className="rounded-lg border p-3">
                       <p className="text-sm text-muted-foreground">Points</p>
-                      <p className="font-semibold">{data.landmarks.points.length}</p>
+                      <p className="font-semibold">{data.landmark_count}</p>
                     </div>
                   </div>
 

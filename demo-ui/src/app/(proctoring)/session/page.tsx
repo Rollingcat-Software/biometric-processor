@@ -9,13 +9,9 @@ import {
   Pause,
   Square,
   AlertTriangle,
-  Shield,
-  Eye,
   User,
   Clock,
   Activity,
-  CheckCircle2,
-  XCircle,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -26,6 +22,7 @@ import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useProctoringSession } from '@/hooks/use-proctoring-session';
 import { toast } from 'sonner';
+import { formatPercent } from '@/lib/utils/format';
 
 interface Incident {
   id: string;
@@ -41,9 +38,11 @@ export default function ProctoringSessionPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  const [examId, setExamId] = useState('EXAM-001');
-  const [userId, setUserId] = useState('USER-001');
+  // Generate unique IDs for demo to avoid "session already exists" errors
+  const [examId, setExamId] = useState(() => `EXAM-${Date.now().toString(36).toUpperCase()}`);
+  const [userId, setUserId] = useState(() => `USER-${Math.random().toString(36).slice(2, 8).toUpperCase()}`);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isVideoReady, setIsVideoReady] = useState(false);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [stats, setStats] = useState({
     framesAnalyzed: 0,
@@ -58,12 +57,13 @@ export default function ProctoringSessionPage() {
     createSession,
     startSession,
     pauseSession,
-    resumeSession,
     endSession,
     submitFrame,
     isCreating,
     isStarting,
     isEnding,
+    createError,
+    startError,
   } = useProctoringSession({
     onIncident: (incident) => {
       setIncidents((prev) => [incident, ...prev].slice(0, 50));
@@ -77,13 +77,30 @@ export default function ProctoringSessionPage() {
       setStats((prev) => ({
         ...prev,
         framesAnalyzed: prev.framesAnalyzed + 1,
-        verificationSuccess: result.face_verified
+        verificationSuccess: (result.face_verified || result.face_matched)
           ? prev.verificationSuccess + 1
           : prev.verificationSuccess,
         riskScore: result.risk_score,
       }));
     },
   });
+
+  // Show errors via toast
+  useEffect(() => {
+    if (createError) {
+      toast.error('Failed to create session', {
+        description: createError instanceof Error ? createError.message : 'Unknown error',
+      });
+    }
+  }, [createError]);
+
+  useEffect(() => {
+    if (startError) {
+      toast.error('Failed to start session', {
+        description: startError instanceof Error ? startError.message : 'Unknown error',
+      });
+    }
+  }, [startError]);
 
   // Start camera
   const startCamera = useCallback(async () => {
@@ -95,6 +112,11 @@ export default function ProctoringSessionPage() {
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        // Wait for video metadata to load before marking as ready
+        videoRef.current.onloadedmetadata = () => {
+          console.log('Video metadata loaded:', videoRef.current?.videoWidth, 'x', videoRef.current?.videoHeight);
+          setIsVideoReady(true);
+        };
         await videoRef.current.play();
         setIsStreaming(true);
       }
@@ -113,8 +135,10 @@ export default function ProctoringSessionPage() {
     }
     if (videoRef.current) {
       videoRef.current.srcObject = null;
+      videoRef.current.onloadedmetadata = null;
     }
     setIsStreaming(false);
+    setIsVideoReady(false);
   }, []);
 
   // Capture and submit frame
@@ -135,10 +159,7 @@ export default function ProctoringSessionPage() {
             const reader = new FileReader();
             reader.onloadend = () => {
               const base64 = (reader.result as string).split(',')[1];
-              submitFrame({
-                frame_base64: base64,
-                frame_number: stats.framesAnalyzed,
-              });
+              submitFrame(base64);
             };
             reader.readAsDataURL(blob);
           }
@@ -147,7 +168,7 @@ export default function ProctoringSessionPage() {
         0.8
       );
     }
-  }, [sessionId, stats.framesAnalyzed, submitFrame]);
+  }, [sessionId, submitFrame]);
 
   // Frame capture interval
   useEffect(() => {
@@ -181,17 +202,108 @@ export default function ProctoringSessionPage() {
   }, [stopCamera]);
 
   const handleCreateSession = async () => {
-    await createSession({ exam_id: examId, user_id: userId });
-    await startCamera();
+    if (!examId.trim()) {
+      toast.error('Error', { description: 'Exam ID is required' });
+      return;
+    }
+    if (!userId.trim()) {
+      toast.error('Error', { description: 'User ID is required' });
+      return;
+    }
+    try {
+      await createSession(userId, examId);
+      await startCamera();
+    } catch (err) {
+      toast.error('Failed to create session', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      });
+    }
   };
 
   const handleStartSession = async () => {
-    await startSession();
+    try {
+      // Capture baseline image from camera if available
+      let baselineImage: string | undefined;
+      if (videoRef.current && canvasRef.current) {
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+
+        // Ensure video has valid dimensions (is fully loaded)
+        if (video.videoWidth > 0 && video.videoHeight > 0) {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(video, 0, 0);
+            baselineImage = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+            console.log('Captured baseline image:', baselineImage.length, 'chars');
+          }
+        } else {
+          console.warn('Video not ready, dimensions:', video.videoWidth, 'x', video.videoHeight);
+          toast.warning('Camera not ready', {
+            description: 'Please wait for the camera to fully load before starting the session.',
+          });
+          return;
+        }
+      } else {
+        console.warn('Video or canvas ref not available');
+        toast.warning('Camera not available', {
+          description: 'Please ensure the camera is active before starting the session.',
+        });
+        return;
+      }
+
+      if (!baselineImage) {
+        console.error('Failed to capture baseline image');
+        toast.error('Capture failed', {
+          description: 'Could not capture baseline image from camera.',
+        });
+        return;
+      }
+
+      await startSession(baselineImage);
+    } catch (err) {
+      toast.error('Failed to start session', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      });
+    }
+  };
+
+  const handlePauseSession = async () => {
+    console.log('handlePauseSession called, sessionId:', sessionId, 'status:', sessionStatus);
+    // Stop frame capture immediately to prevent race conditions
+    setIsStreaming(false);
+    try {
+      await pauseSession();
+      console.log('Pause successful');
+      toast.success('Session paused');
+    } catch (err) {
+      console.error('Pause failed:', err);
+      // Re-enable streaming if pause failed and session is still active
+      if (sessionStatus === 'active') {
+        setIsStreaming(true);
+      }
+      toast.error('Failed to pause session', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      });
+    }
   };
 
   const handleEndSession = async () => {
-    await endSession();
-    stopCamera();
+    console.log('handleEndSession called, sessionId:', sessionId, 'status:', sessionStatus);
+    // Stop frame capture immediately to prevent race conditions
+    setIsStreaming(false);
+    try {
+      await endSession();
+      console.log('End successful');
+      stopCamera();
+      toast.success('Session ended');
+    } catch (err) {
+      console.error('End failed:', err);
+      toast.error('Failed to end session', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      });
+    }
   };
 
   const formatDuration = (seconds: number) => {
@@ -292,7 +404,7 @@ export default function ProctoringSessionPage() {
                           : 'destructive'
                       }
                     >
-                      Risk: {(stats.riskScore * 100).toFixed(0)}%
+                      Risk: {formatPercent(stats.riskScore, 0)}
                     </Badge>
                   </div>
                 )}
@@ -338,38 +450,81 @@ export default function ProctoringSessionPage() {
                       </>
                     )}
                   </Button>
+                  {createError && (
+                    <div className="rounded-lg bg-red-50 p-3 text-red-800 dark:bg-red-950/50 dark:text-red-200 text-sm">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="h-4 w-4" />
+                        <span className="font-medium">Error creating session</span>
+                      </div>
+                      <p className="mt-1 text-xs">
+                        {createError instanceof Error ? createError.message : 'Unknown error'}
+                      </p>
+                      {createError instanceof Error && createError.message.includes('already exists') && (
+                        <p className="mt-2 text-xs font-medium">
+                          Tip: Change the Exam ID or User ID to create a new session, or use unique identifiers.
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
               ) : (
-                <div className="flex gap-2">
-                  {sessionStatus !== 'active' ? (
-                    <Button
-                      onClick={handleStartSession}
-                      disabled={isStarting}
-                      className="flex-1"
-                    >
-                      <Play className="mr-2 h-4 w-4" />
-                      {t('proctoring.startSession')}
-                    </Button>
-                  ) : (
-                    <>
+                <div className="space-y-3">
+                  <div className="flex gap-2">
+                    {sessionStatus !== 'active' ? (
                       <Button
-                        variant="outline"
-                        onClick={pauseSession}
+                        onClick={handleStartSession}
+                        disabled={isStarting || !isVideoReady}
                         className="flex-1"
                       >
-                        <Pause className="mr-2 h-4 w-4" />
-                        Pause
+                        {isStarting ? (
+                          <>
+                            <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                            Starting...
+                          </>
+                        ) : !isVideoReady ? (
+                          <>
+                            <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                            Waiting for camera...
+                          </>
+                        ) : (
+                          <>
+                            <Play className="mr-2 h-4 w-4" />
+                            {t('proctoring.startSession')}
+                          </>
+                        )}
                       </Button>
-                      <Button
-                        variant="destructive"
-                        onClick={handleEndSession}
-                        disabled={isEnding}
-                        className="flex-1"
-                      >
-                        <Square className="mr-2 h-4 w-4" />
-                        {t('proctoring.endSession')}
-                      </Button>
-                    </>
+                    ) : (
+                      <>
+                        <Button
+                          variant="outline"
+                          onClick={handlePauseSession}
+                          className="flex-1"
+                        >
+                          <Pause className="mr-2 h-4 w-4" />
+                          Pause
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          onClick={handleEndSession}
+                          disabled={isEnding}
+                          className="flex-1"
+                        >
+                          <Square className="mr-2 h-4 w-4" />
+                          {t('proctoring.endSession')}
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                  {startError && (
+                    <div className="rounded-lg bg-red-50 p-3 text-red-800 dark:bg-red-950/50 dark:text-red-200 text-sm">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="h-4 w-4" />
+                        <span className="font-medium">Error starting session</span>
+                      </div>
+                      <p className="mt-1 text-xs">
+                        {startError instanceof Error ? startError.message : 'Unknown error'}
+                      </p>
+                    </div>
                   )}
                 </div>
               )}
@@ -414,9 +569,8 @@ export default function ProctoringSessionPage() {
                   </div>
                   <p className="text-lg font-semibold">
                     {stats.framesAnalyzed > 0
-                      ? ((stats.verificationSuccess / stats.framesAnalyzed) * 100).toFixed(0)
-                      : 0}
-                    %
+                      ? formatPercent(stats.verificationSuccess / stats.framesAnalyzed, 0)
+                      : '0%'}
                   </p>
                 </div>
                 <div className="rounded-lg border p-3">
@@ -432,7 +586,7 @@ export default function ProctoringSessionPage() {
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
                   <span>Risk Score</span>
-                  <span className="font-semibold">{(stats.riskScore * 100).toFixed(0)}%</span>
+                  <span className="font-semibold">{formatPercent(stats.riskScore, 0)}</span>
                 </div>
                 <Progress
                   value={stats.riskScore * 100}

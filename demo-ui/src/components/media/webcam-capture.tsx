@@ -42,16 +42,34 @@ export function WebcamCapture({
 
   const startCamera = useCallback(async () => {
     setError(null);
+
+    // Check if mediaDevices is available
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setError('Camera API not available. Please use a modern browser with HTTPS.');
+      return;
+    }
+
     try {
       const { width, height } = getResolutionConstraints();
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: cameraFacingMode,
-          width: { ideal: width },
-          height: { ideal: height },
-        },
-        audio: false,
-      });
+
+      // Try with ideal resolution first, fallback to basic constraints
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: cameraFacingMode,
+            width: { ideal: width },
+            height: { ideal: height },
+          },
+          audio: false,
+        });
+      } catch {
+        // Fallback to basic video constraints if specific resolution fails
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
+      }
 
       streamRef.current = stream;
 
@@ -66,8 +84,12 @@ export function WebcamCapture({
           setError(t('camera.permissionDenied'));
         } else if (err.name === 'NotFoundError') {
           setError(t('camera.notSupported'));
+        } else if (err.name === 'NotReadableError' || err.message.includes('video source')) {
+          setError('Camera is in use by another application. Please close other apps using the camera and try again.');
+        } else if (err.name === 'OverconstrainedError') {
+          setError('Camera does not support requested resolution. Please try different camera settings.');
         } else {
-          setError(err.message);
+          setError(`Camera error: ${err.message}`);
         }
       }
     }

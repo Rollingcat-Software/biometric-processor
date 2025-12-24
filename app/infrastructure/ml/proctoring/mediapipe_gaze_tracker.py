@@ -78,7 +78,8 @@ class MediaPipeGazeTracker(IGazeTracker):
         self._gaze_threshold = gaze_threshold
         self._pitch_threshold, self._yaw_threshold = head_pose_threshold
         self._face_mesh = None
-        self._off_screen_start: Optional[datetime] = None
+        # Track off-screen start per session to avoid accumulating across sessions
+        self._off_screen_start: Dict[str, Optional[datetime]] = {}
 
         logger.info(
             f"MediaPipeGazeTracker initialized: "
@@ -131,7 +132,7 @@ class MediaPipeGazeTracker(IGazeTracker):
 
         if not results.multi_face_landmarks:
             logger.debug("No face detected for gaze tracking")
-            duration = self._get_off_screen_duration(timestamp, is_off_screen=True)
+            duration = self._get_off_screen_duration(timestamp, is_off_screen=True, session_id=session_id)
             return GazeAnalysisResult(
                 session_id=session_id,
                 timestamp=timestamp,
@@ -157,7 +158,7 @@ class MediaPipeGazeTracker(IGazeTracker):
         is_on_screen = self._is_on_screen(head_pose, gaze_direction)
         confidence = self._calculate_confidence(landmarks)
 
-        duration = self._get_off_screen_duration(timestamp, is_off_screen=not is_on_screen)
+        duration = self._get_off_screen_duration(timestamp, is_off_screen=not is_on_screen, session_id=session_id)
 
         logger.debug(
             f"Gaze analysis: on_screen={is_on_screen}, "
@@ -449,14 +450,17 @@ class MediaPipeGazeTracker(IGazeTracker):
         self,
         current_time: datetime,
         is_off_screen: bool,
+        session_id: str = None,
     ) -> float:
-        """Track duration of continuous off-screen gaze."""
+        """Track duration of continuous off-screen gaze per session."""
+        session_key = str(session_id) if session_id else "default"
+
         if not is_off_screen:
-            self._off_screen_start = None
+            self._off_screen_start[session_key] = None
             return 0.0
 
-        if self._off_screen_start is None:
-            self._off_screen_start = current_time
+        if self._off_screen_start.get(session_key) is None:
+            self._off_screen_start[session_key] = current_time
             return 0.0
 
-        return (current_time - self._off_screen_start).total_seconds()
+        return (current_time - self._off_screen_start[session_key]).total_seconds()

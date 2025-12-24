@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { API_CONFIG } from '@/config/api.config';
+
+const WS_URL = API_CONFIG.WS_URL;
 
 type WebSocketStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
@@ -94,10 +97,17 @@ export function useWebSocket({
     setStatus('disconnected');
   }, [reconnectAttempts]);
 
-  const send = useCallback((data: any) => {
+  const send = useCallback((data: string | ArrayBuffer | Blob | object) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      const message = typeof data === 'string' ? data : JSON.stringify(data);
-      wsRef.current.send(message);
+      // Handle binary data (ArrayBuffer, Blob) directly
+      if (data instanceof ArrayBuffer || data instanceof Blob) {
+        wsRef.current.send(data);
+      } else if (typeof data === 'string') {
+        wsRef.current.send(data);
+      } else {
+        // Objects get JSON serialized
+        wsRef.current.send(JSON.stringify(data));
+      }
     }
   }, []);
 
@@ -134,7 +144,7 @@ interface ProctoringFrame {
 }
 
 export function useProctoringStream(sessionId: string) {
-  const baseUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001';
+  const baseUrl = WS_URL;
   const [frames, setFrames] = useState<ProctoringFrame[]>([]);
   const [currentFrame, setCurrentFrame] = useState<ProctoringFrame | null>(null);
 

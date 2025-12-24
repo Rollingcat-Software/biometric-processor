@@ -86,7 +86,7 @@ class StartProctorSession:
         baseline_embedding = None
 
         # Try to get existing embedding for user
-        existing_embedding = await self._embedding_repo.get(
+        existing_embedding = await self._embedding_repo.find_by_user_id(
             user_id=session.user_id,
             tenant_id=session.tenant_id,
         )

@@ -4,7 +4,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
 import numpy as np
@@ -23,6 +23,8 @@ from app.domain.interfaces.gaze_tracker import IGazeTracker
 from app.domain.interfaces.object_detector import IObjectDetector
 from app.domain.interfaces.proctor_incident_repository import IProctorIncidentRepository
 from app.domain.interfaces.proctor_session_repository import IProctorSessionRepository
+from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
+from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
 from app.infrastructure.resilience.circuit_breaker import (
     CircuitBreakerOpenError,
     DEEPFAKE_DETECTOR_BREAKER,
@@ -52,6 +54,17 @@ class SubmitFrameRequest:
 
 
 @dataclass
+class IncidentInfo:
+    """Basic incident information for response."""
+
+    id: str
+    type: str
+    severity: str
+    timestamp: str
+    message: str
+
+
+@dataclass
 class SubmitFrameResponse:
     """Response from frame submission."""
 
@@ -64,6 +77,7 @@ class SubmitFrameResponse:
     processing_time_ms: float
     analysis: Dict[str, Any]
     rate_limit: Optional[Dict[str, Any]] = None
+    incidents: Optional[List[IncidentInfo]] = None
 
 
 class SubmitFrame:
@@ -75,6 +89,8 @@ class SubmitFrame:
         incident_repository: IProctorIncidentRepository,
         face_verifier=None,
         liveness_detector=None,
+        embedding_extractor: Optional[IEmbeddingExtractor] = None,
+        similarity_calculator: Optional[ISimilarityCalculator] = None,
         gaze_tracker: Optional[IGazeTracker] = None,
         object_detector: Optional[IObjectDetector] = None,
         audio_analyzer: Optional[IAudioAnalyzer] = None,
@@ -87,6 +103,8 @@ class SubmitFrame:
         self._incident_repo = incident_repository
         self._face_verifier = face_verifier
         self._liveness_detector = liveness_detector
+        self._embedding_extractor = embedding_extractor
+        self._similarity_calculator = similarity_calculator
         self._gaze_tracker = gaze_tracker
         self._object_detector = object_detector
         self._audio_analyzer = audio_analyzer
@@ -151,7 +169,7 @@ class SubmitFrame:
         )
 
         # Calculate risk and create incidents
-        incidents_created = await self._process_analysis_results(
+        incidents_created, incidents_list = await self._process_analysis_results(
             session=session,
             analysis=analysis_result,
         )
@@ -173,6 +191,7 @@ class SubmitFrame:
             processing_time_ms=processing_time,
             analysis=analysis_result.to_dict(),
             rate_limit=rate_limit_result.to_dict() if rate_limit_result else None,
+            incidents=incidents_list if incidents_list else None,
         )
 
     async def _analyze_frame(
@@ -211,7 +230,7 @@ class SubmitFrame:
             if self._liveness_detector and face_detected:
                 liveness_result = await self._liveness_detector.detect(frame)
                 liveness_passed = liveness_result.is_live
-                liveness_score = liveness_result.confidence
+                liveness_score = liveness_result.liveness_score
         except Exception as e:
             logger.error(f"Liveness detection failed: {e}")
 
@@ -231,9 +250,7 @@ class SubmitFrame:
         if self._object_detector and session.config.enable_object_detection:
             try:
                 object_result = await OBJECT_DETECTOR_BREAKER.call_async(
-                    lambda: self._object_detector.detect(
-                        frame, session.id, self._prohibited_objects
-                    ),
+                    lambda: self._object_detector.detect(frame, session.id),
                     fallback=None,
                 )
             except CircuitBreakerOpenError:
@@ -284,15 +301,66 @@ class SubmitFrame:
         )
 
     async def _verify_face(self, frame: np.ndarray, session) -> dict:
-        """Verify face against baseline."""
-        # This would call the actual face verifier
-        # Placeholder implementation
-        return {
-            "detected": True,
-            "matched": True,
-            "confidence": 0.95,
-            "face_count": 1,
-        }
+        """Verify face against baseline embedding.
+
+        Extracts embedding from current frame and compares with
+        session's baseline embedding using similarity calculator.
+        """
+        try:
+            # Check if we have the required components
+            if not self._embedding_extractor or not self._similarity_calculator:
+                logger.warning("Embedding extractor or similarity calculator not available")
+                return self._default_face_result()
+
+            # Check if session has baseline embedding
+            if session.baseline_embedding is None:
+                logger.warning(f"Session {session.id} has no baseline embedding")
+                return self._default_face_result()
+
+            # Extract embedding from current frame
+            try:
+                current_embedding = await self._embedding_extractor.extract(frame)
+            except Exception as e:
+                logger.warning(f"Failed to extract embedding from frame: {e}")
+                return {
+                    "detected": False,
+                    "matched": False,
+                    "confidence": 0.0,
+                    "face_count": 0,
+                }
+
+            # Compare with baseline using similarity calculator
+            # Note: calculate() returns distance (0.0 = identical, 1.0 = opposite)
+            # It is NOT async
+            distance = self._similarity_calculator.calculate(
+                current_embedding,
+                session.baseline_embedding,
+            )
+
+            # Determine if face matches (distance below threshold = match)
+            threshold = self._similarity_calculator.get_threshold()
+            is_matched = distance < threshold
+
+            # Convert distance to confidence (similarity)
+            # Distance 0.0 = confidence 1.0 (identical)
+            # Distance 1.0 = confidence 0.0 (opposite)
+            confidence = 1.0 - distance
+
+            logger.debug(
+                f"Face verification: distance={distance:.3f}, "
+                f"threshold={threshold}, matched={is_matched}, confidence={confidence:.3f}"
+            )
+
+            return {
+                "detected": True,
+                "matched": is_matched,
+                "confidence": confidence,
+                "face_count": 1,
+            }
+
+        except Exception as e:
+            logger.error(f"Face verification failed: {e}")
+            return self._default_face_result()
 
     def _default_face_result(self) -> dict:
         """Default result when face verifier is unavailable."""
@@ -307,50 +375,57 @@ class SubmitFrame:
         self,
         session,
         analysis: FrameAnalysisResult,
-    ) -> int:
-        """Process analysis results and create incidents."""
-        incidents_created = 0
+    ) -> Tuple[int, List[IncidentInfo]]:
+        """Process analysis results and create incidents.
+
+        Returns:
+            Tuple of (incidents_created count, list of IncidentInfo objects)
+        """
+        incidents: List[IncidentInfo] = []
 
         # No face detected
         if not analysis.face_detected:
-            await self._create_incident(
+            incident = await self._create_incident(
                 session.id,
                 IncidentType.FACE_NOT_DETECTED,
                 0.9,
             )
-            incidents_created += 1
+            incidents.append(incident)
 
         # Face not matched
         elif not analysis.face_matched and analysis.face_confidence > 0.5:
-            await self._create_incident(
+            incident = await self._create_incident(
                 session.id,
                 IncidentType.FACE_NOT_MATCHED,
                 analysis.face_confidence,
             )
-            incidents_created += 1
+            incidents.append(incident)
 
         # Multiple faces
         if analysis.face_count > 1:
-            await self._create_incident(
+            incident = await self._create_incident(
                 session.id,
                 IncidentType.MULTIPLE_FACES,
                 0.95,
                 {"face_count": analysis.face_count},
             )
-            incidents_created += 1
+            incidents.append(incident)
 
         # Liveness failed
         if not analysis.liveness_passed and analysis.face_detected:
-            await self._create_incident(
+            # liveness_score is 0-100, normalize to 0-1 for confidence
+            normalized_score = analysis.liveness_score / 100.0
+            confidence = max(0.0, min(1.0, 1.0 - normalized_score))
+            incident = await self._create_incident(
                 session.id,
                 IncidentType.LIVENESS_FAILED,
-                1.0 - analysis.liveness_score,
+                confidence,
             )
-            incidents_created += 1
+            incidents.append(incident)
 
         # Deepfake detected
         if analysis.deepfake_result and analysis.deepfake_result.is_deepfake:
-            await self._create_incident(
+            incident = await self._create_incident(
                 session.id,
                 IncidentType.DEEPFAKE_DETECTED,
                 analysis.deepfake_result.confidence,
@@ -359,42 +434,42 @@ class SubmitFrame:
                     "artifacts": analysis.deepfake_result.artifacts_found,
                 },
             )
-            incidents_created += 1
+            incidents.append(incident)
 
         # Gaze away
         if analysis.gaze_result and not analysis.gaze_result.is_on_screen:
             if analysis.gaze_result.duration_off_screen_sec > session.config.gaze_away_threshold_sec:
-                await self._create_incident(
+                incident = await self._create_incident(
                     session.id,
                     IncidentType.GAZE_AWAY_PROLONGED,
                     analysis.gaze_result.confidence,
                     {"duration_sec": analysis.gaze_result.duration_off_screen_sec},
                 )
-                incidents_created += 1
+                incidents.append(incident)
 
         # Prohibited objects
         if analysis.object_result and analysis.object_result.has_prohibited_objects:
             for obj in analysis.object_result.get_prohibited_objects():
                 incident_type = self._get_object_incident_type(obj.label)
-                await self._create_incident(
+                incident = await self._create_incident(
                     session.id,
                     incident_type,
                     obj.confidence,
                     {"label": obj.label, "bbox": obj.bounding_box},
                 )
-                incidents_created += 1
+                incidents.append(incident)
 
         # Multiple voices
         if analysis.audio_result and analysis.audio_result.speaker_count > 1:
-            await self._create_incident(
+            incident = await self._create_incident(
                 session.id,
                 IncidentType.MULTIPLE_VOICES,
                 analysis.audio_result.confidence,
                 {"speaker_count": analysis.audio_result.speaker_count},
             )
-            incidents_created += 1
+            incidents.append(incident)
 
-        return incidents_created
+        return len(incidents), incidents
 
     async def _create_incident(
         self,
@@ -402,8 +477,8 @@ class SubmitFrame:
         incident_type: IncidentType,
         confidence: float,
         details: Dict[str, Any] = None,
-    ) -> None:
-        """Create and save an incident."""
+    ) -> IncidentInfo:
+        """Create and save an incident, return incident info for response."""
         incident = ProctorIncident.create(
             session_id=session_id,
             incident_type=incident_type,
@@ -412,6 +487,31 @@ class SubmitFrame:
         )
         await self._incident_repo.save(incident)
         logger.info(f"Created incident {incident.id} of type {incident_type.value}")
+
+        # Map incident type to human-readable message
+        message_map = {
+            IncidentType.FACE_NOT_DETECTED: "No face detected in frame",
+            IncidentType.FACE_NOT_MATCHED: "Face does not match enrolled user",
+            IncidentType.MULTIPLE_FACES: f"Multiple faces detected ({details.get('face_count', 'unknown')} faces)" if details else "Multiple faces detected",
+            IncidentType.LIVENESS_FAILED: "Liveness check failed - possible spoof attempt",
+            IncidentType.DEEPFAKE_DETECTED: "Deepfake/manipulated video detected",
+            IncidentType.GAZE_AWAY_PROLONGED: f"Looking away from screen for {details.get('duration_sec', '?')}s" if details else "Prolonged gaze away from screen",
+            IncidentType.PHONE_DETECTED: "Phone detected in frame",
+            IncidentType.BOOK_DETECTED: "Book detected in frame",
+            IncidentType.ELECTRONIC_DEVICE: "Electronic device detected",
+            IncidentType.PERSON_IN_BACKGROUND: "Additional person detected",
+            IncidentType.MULTIPLE_VOICES: f"Multiple voices detected ({details.get('speaker_count', 'unknown')} speakers)" if details else "Multiple voices detected",
+            IncidentType.UNAUTHORIZED_OBJECT: f"Unauthorized object detected: {details.get('label', 'unknown')}" if details else "Unauthorized object detected",
+            IncidentType.RATE_LIMIT_EXCEEDED: "Rate limit exceeded",
+        }
+
+        return IncidentInfo(
+            id=str(incident.id),
+            type=incident_type.value,
+            severity=incident.severity.value,
+            timestamp=incident.timestamp.isoformat(),
+            message=message_map.get(incident_type, f"Incident: {incident_type.value}"),
+        )
 
     def _get_object_incident_type(self, label: str) -> IncidentType:
         """Map object label to incident type."""

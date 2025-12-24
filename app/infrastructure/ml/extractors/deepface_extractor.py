@@ -67,8 +67,11 @@ class DeepFaceExtractor:
             logger.error(f"Failed to load model {model_name}: {e}")
             raise EmbeddingExtractionError(f"Model load failed: {e}")
 
-    async def extract(self, face_image: np.ndarray) -> np.ndarray:
-        """Extract face embedding from image.
+    def extract_sync(self, face_image: np.ndarray) -> np.ndarray:
+        """Synchronous embedding extraction for thread pool execution.
+
+        This method contains the actual blocking DeepFace call.
+        Called by AsyncEmbeddingExtractor via thread pool for non-blocking execution.
 
         Args:
             face_image: Face image as numpy array (H, W, C)
@@ -82,7 +85,7 @@ class DeepFaceExtractor:
         try:
             logger.debug(f"Extracting embedding using {self._model_name}")
 
-            # Extract embedding using DeepFace
+            # Extract embedding using DeepFace (blocking operation)
             embedding_objs = DeepFace.represent(
                 img_path=face_image,
                 model_name=self._model_name,
@@ -115,6 +118,23 @@ class DeepFaceExtractor:
         except Exception as e:
             logger.error(f"Unexpected error during embedding extraction: {e}", exc_info=True)
             raise EmbeddingExtractionError(f"Unexpected error: {e}")
+
+    async def extract(self, face_image: np.ndarray) -> np.ndarray:
+        """Extract face embedding from image (async wrapper).
+
+        This method delegates to extract_sync for backward compatibility.
+        For truly non-blocking execution, use AsyncEmbeddingExtractor wrapper.
+
+        Args:
+            face_image: Face image as numpy array (H, W, C)
+
+        Returns:
+            Face embedding as 1D numpy array (dimension depends on model)
+
+        Raises:
+            EmbeddingExtractionError: When extraction fails
+        """
+        return self.extract_sync(face_image)
 
     def get_embedding_dimension(self) -> int:
         """Get the dimension of embeddings produced by this extractor.

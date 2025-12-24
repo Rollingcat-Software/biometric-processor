@@ -44,8 +44,14 @@ export default function EnrollmentPage() {
       { person_id: personId, image },
       {
         onSuccess: (result) => {
+          // Handle both 0-1 and 0-100 ranges from backend
+          const qualityPercent = result.quality_score
+            ? (result.quality_score <= 1 ? result.quality_score * 100 : result.quality_score)
+            : null;
           toast.success(t('enrollment.success'), {
-            description: `Face enrolled with quality score: ${(result.quality_score * 100).toFixed(1)}%`,
+            description: qualityPercent
+              ? `Face enrolled with quality score: ${qualityPercent.toFixed(1)}%`
+              : 'Face enrolled successfully',
           });
         },
         onError: (err) => {
@@ -196,19 +202,21 @@ export default function EnrollmentPage() {
                   </div>
                   <div className="space-y-2 rounded-lg bg-muted p-4">
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">Face ID</span>
-                      <span className="font-mono text-sm">{data.face_id}</span>
+                      <span className="text-muted-foreground">Embedding ID</span>
+                      <span className="font-mono text-sm">{data.embedding_id}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">Person ID</span>
-                      <span className="font-mono text-sm">{data.person_id}</span>
+                      <span className="text-muted-foreground">User ID</span>
+                      <span className="font-mono text-sm">{data.user_id}</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Quality Score</span>
-                      <span className="font-semibold">
-                        {(data.quality_score * 100).toFixed(1)}%
-                      </span>
-                    </div>
+                    {data.quality_score !== undefined && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Quality Score</span>
+                        <span className="font-semibold">
+                          {(data.quality_score <= 1 ? data.quality_score * 100 : data.quality_score).toFixed(1)}%
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </motion.div>
               )}

@@ -1,14 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useTranslation } from 'react-i18next';
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   Database,
   Search,
   Trash2,
   Download,
-  Upload,
   RefreshCw,
   User,
   Calendar,
@@ -36,7 +34,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useEmbeddingList, useDeleteEmbedding } from '@/hooks/use-embeddings';
@@ -51,7 +48,6 @@ interface Embedding {
 }
 
 export default function EmbeddingsPage() {
-  const { t } = useTranslation();
   const [searchQuery, setSearchQuery] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -99,7 +95,7 @@ export default function EmbeddingsPage() {
       toast.success('Export Complete', {
         description: `Exported ${data?.embeddings?.length || 0} embeddings`,
       });
-    } catch (err) {
+    } catch {
       toast.error('Export Failed');
     }
   };

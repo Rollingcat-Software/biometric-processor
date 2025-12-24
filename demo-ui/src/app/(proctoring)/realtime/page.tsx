@@ -1,9 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { MonitorPlay, Wifi, WifiOff, AlertCircle, Activity, Eye } from 'lucide-react';
+import { MonitorPlay, Wifi, WifiOff, Activity, Eye } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -12,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useWebSocket } from '@/hooks/use-websocket';
 import { toast } from 'sonner';
+import { formatPercent } from '@/lib/utils/format';
 
 interface FrameResult {
   timestamp: string;
@@ -22,7 +22,6 @@ interface FrameResult {
 }
 
 export default function RealtimePage() {
-  const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -32,14 +31,24 @@ export default function RealtimePage() {
   const [frameResults, setFrameResults] = useState<FrameResult[]>([]);
   const [fps, setFps] = useState(0);
   const frameCountRef = useRef(0);
+  const [wsUrl, setWsUrl] = useState<string>('');
 
   const {
-    isConnected,
+    status,
     connect,
     disconnect,
-    sendBinaryFrame,
+    send,
     lastMessage,
-  } = useWebSocket();
+  } = useWebSocket({
+    url: wsUrl,
+    reconnect: true,
+  });
+
+  const isConnected = status === 'connected';
+
+  const sendBinaryFrame = useCallback((buffer: ArrayBuffer) => {
+    send(buffer);
+  }, [send]);
 
   // Handle incoming WebSocket messages
   useEffect(() => {
@@ -160,7 +169,9 @@ export default function RealtimePage() {
       return;
     }
     await startCamera();
-    connect(sessionId);
+    const baseUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
+    setWsUrl(`${baseUrl}/api/v1/proctoring/sessions/${sessionId}/stream`);
+    connect();
   };
 
   const handleDisconnect = () => {
@@ -259,7 +270,7 @@ export default function RealtimePage() {
                   <div className="absolute bottom-2 left-2 right-2 flex justify-between text-white text-xs bg-black/50 rounded p-2">
                     <span>Face: {latestResult.face_detected ? 'Yes' : 'No'}</span>
                     <span>Verified: {latestResult.face_verified ? 'Yes' : 'No'}</span>
-                    <span>Risk: {(latestResult.risk_score * 100).toFixed(0)}%</span>
+                    <span>Risk: {formatPercent(latestResult.risk_score, 0)}</span>
                     <span>{latestResult.processing_time_ms}ms</span>
                   </div>
                 )}

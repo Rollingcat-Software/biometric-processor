@@ -1,5 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api/client';
+import { API_CONFIG } from '@/config/api.config';
+
+const API_URL = API_CONFIG.BASE_URL;
 
 interface SystemStats {
   total_enrollments: number;
@@ -43,7 +46,7 @@ interface RecentActivity {
 
 async function fetchSystemStats(): Promise<SystemStats> {
   const response = await fetch(
-    `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'}/api/v1/admin/stats`,
+    `${API_URL}/api/v1/admin/stats`,
     { method: 'GET' }
   );
 
@@ -61,7 +64,7 @@ async function fetchHealthStatus(): Promise<HealthStatus> {
 
 async function fetchRecentActivity(): Promise<RecentActivity> {
   const response = await fetch(
-    `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'}/api/v1/admin/activity`,
+    `${API_URL}/api/v1/admin/activity`,
     { method: 'GET' }
   );
 

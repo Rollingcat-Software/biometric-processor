@@ -6,13 +6,13 @@ import { motion } from 'framer-motion';
 import { Activity, Upload, Camera, AlertCircle, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { ImageUploader } from '@/components/media/image-uploader';
 import { WebcamCapture } from '@/components/media/webcam-capture';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useQualityAnalysis } from '@/hooks/use-quality-analysis';
 import { toast } from 'sonner';
+import { formatPercent, toPercent } from '@/lib/utils/format';
 
 const qualityGradeConfig = {
   excellent: { color: 'text-green-600', bg: 'bg-green-500/10', icon: CheckCircle2 },
@@ -45,7 +45,7 @@ export default function QualityPage() {
       {
         onSuccess: (result) => {
           toast.success('Analysis Complete', {
-            description: `Quality Grade: ${result.grade.toUpperCase()}`,
+            description: `Quality Score: ${formatPercent(result.overall_score)}`,
           });
         },
         onError: (err) => {
@@ -63,7 +63,16 @@ export default function QualityPage() {
     reset();
   };
 
-  const gradeConfig = data?.grade ? qualityGradeConfig[data.grade as keyof typeof qualityGradeConfig] : null;
+  const getGradeFromScore = (score: number) => {
+    if (score >= 0.9) return 'excellent';
+    if (score >= 0.75) return 'good';
+    if (score >= 0.6) return 'acceptable';
+    if (score >= 0.4) return 'poor';
+    return 'failed';
+  };
+
+  const grade = data ? getGradeFromScore(data.overall_score) : null;
+  const gradeConfig = grade ? qualityGradeConfig[grade as keyof typeof qualityGradeConfig] : null;
   const GradeIcon = gradeConfig?.icon || CheckCircle2;
 
   return (
@@ -183,10 +192,10 @@ export default function QualityPage() {
                     <GradeIcon className={`h-8 w-8 ${gradeConfig?.color}`} />
                     <div>
                       <p className={`text-lg font-semibold ${gradeConfig?.color}`}>
-                        {t(`quality.levels.${data.grade}`)}
+                        {grade ? t(`quality.levels.${grade}`) : 'Quality Result'}
                       </p>
                       <p className="text-sm text-muted-foreground">
-                        Overall Score: {(data.overall_score * 100).toFixed(1)}%
+                        Overall Score: {formatPercent(data.overall_score)}
                       </p>
                     </div>
                   </div>
@@ -198,9 +207,9 @@ export default function QualityPage() {
                       <div key={key} className="space-y-1">
                         <div className="flex justify-between text-sm">
                           <span className="capitalize">{t(`quality.metrics.${key}`) || key.replace(/_/g, ' ')}</span>
-                          <span className="font-mono">{((value as number) * 100).toFixed(0)}%</span>
+                          <span className="font-mono">{formatPercent(value as number, 0)}</span>
                         </div>
-                        <Progress value={(value as number) * 100} className="h-2" />
+                        <Progress value={toPercent(value as number)} className="h-2" />
                       </div>
                     ))}
                   </div>

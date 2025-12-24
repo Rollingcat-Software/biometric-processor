@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { GitCompare, Upload, AlertCircle, CheckCircle2, XCircle, ArrowLeftRight } from 'lucide-react';
+import { GitCompare, AlertCircle, CheckCircle2, XCircle, ArrowLeftRight } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -12,6 +12,7 @@ import { ImageUploader } from '@/components/media/image-uploader';
 import { SimilarityGauge } from '@/components/biometric/similarity-gauge';
 import { useFaceComparison } from '@/hooks/use-face-comparison';
 import { toast } from 'sonner';
+import { formatPercent } from '@/lib/utils/format';
 
 export default function ComparisonPage() {
   const { t } = useTranslation();
@@ -35,11 +36,11 @@ export default function ComparisonPage() {
         onSuccess: (result) => {
           if (result.match) {
             toast.success('Match Found', {
-              description: `Similarity: ${(result.similarity * 100).toFixed(1)}%`,
+              description: `Similarity: ${formatPercent(result.similarity)}`,
             });
           } else {
             toast.info('No Match', {
-              description: `Similarity: ${(result.similarity * 100).toFixed(1)}%`,
+              description: `Similarity: ${formatPercent(result.similarity)}`,
             });
           }
         },
@@ -83,7 +84,7 @@ export default function ComparisonPage() {
           <div className="space-y-2">
             <div className="flex justify-between">
               <Label>Match Threshold</Label>
-              <span className="text-sm font-mono">{(threshold * 100).toFixed(0)}%</span>
+              <span className="text-sm font-mono">{formatPercent(threshold, 0)}</span>
             </div>
             <Slider
               value={[threshold]}
@@ -149,18 +150,18 @@ export default function ComparisonPage() {
               <SimilarityGauge
                 value={data.similarity}
                 threshold={threshold}
-                size={180}
+                size="lg"
               />
 
               {/* Details */}
               <div className="space-y-1 text-sm">
                 <p>
                   <span className="text-muted-foreground">Similarity:</span>{' '}
-                  <span className="font-semibold">{(data.similarity * 100).toFixed(2)}%</span>
+                  <span className="font-semibold">{formatPercent(data.similarity, 2)}</span>
                 </p>
                 <p>
                   <span className="text-muted-foreground">Threshold:</span>{' '}
-                  <span className="font-mono">{(threshold * 100).toFixed(0)}%</span>
+                  <span className="font-mono">{formatPercent(threshold, 0)}</span>
                 </p>
               </div>
 

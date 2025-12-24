@@ -120,7 +120,7 @@ const itemVariants = {
 };
 
 export default function DashboardPage() {
-  const { isHealthy, isLoading, error, data: healthData } = useApiHealth();
+  const { isHealthy, isLoading, data: healthData } = useApiHealth();
 
   return (
     <div className="space-y-8">
@@ -178,7 +178,7 @@ export default function DashboardPage() {
           { label: 'Status', value: isHealthy ? 'Operational' : 'Offline' },
           { label: 'Features', value: '9 Available' },
           { label: 'Response Time', value: healthData?.latency ? `${healthData.latency}ms` : '-' },
-        ].map((stat, index) => (
+        ].map((stat) => (
           <Card key={stat.label}>
             <CardContent className="p-4">
               <div className="text-sm font-medium text-muted-foreground">
