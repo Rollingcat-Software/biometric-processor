@@ -223,6 +223,9 @@ def get_demographics_analyzer() -> IDemographicsAnalyzer:
         backend="deepface",
         include_race=settings.DEMOGRAPHICS_INCLUDE_RACE,
         include_emotion=settings.DEMOGRAPHICS_INCLUDE_EMOTION,
+        min_image_size=settings.DEMOGRAPHICS_MIN_IMAGE_SIZE,
+        age_margin=settings.DEMOGRAPHICS_AGE_MARGIN,
+        age_confidence=settings.DEMOGRAPHICS_AGE_CONFIDENCE,
     )
 
 
