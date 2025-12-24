@@ -56,20 +56,19 @@ def upgrade() -> None:
         )
     """)
 
-    # Create face_embeddings table
+    # Create biometric_data table (matches pgvector repository schema)
+    # This table stores face embeddings as vectors for efficient similarity search
     op.create_table(
-        "face_embeddings",
-        sa.Column("id", postgresql.UUID(as_uuid=False), primary_key=True),
-        sa.Column("tenant_id", postgresql.UUID(as_uuid=False), nullable=False),
+        "biometric_data",
+        sa.Column("id", postgresql.UUID(as_uuid=False), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+        sa.Column("tenant_id", postgresql.UUID(as_uuid=False), nullable=True),  # Nullable for single-tenant mode
         sa.Column("user_id", sa.String(255), nullable=False),
-        sa.Column("embedding", postgresql.ARRAY(sa.Float), nullable=False),
-        sa.Column("embedding_dimension", sa.Integer, nullable=False, default=512),
-        sa.Column("model_name", sa.String(100), nullable=False, default="facenet"),
-        sa.Column("model_version", sa.String(50), nullable=True),
+        sa.Column("biometric_type", sa.String(50), nullable=False, server_default="FACE"),  # FACE, FINGERPRINT, etc.
+        sa.Column("embedding_model", sa.String(100), nullable=False, server_default="Facenet512"),
         sa.Column("quality_score", sa.Float, nullable=False, default=0.0),
-        sa.Column("source_image_hash", sa.String(64), nullable=True),
-        sa.Column("metadata", sa.Text, nullable=True),
         sa.Column("is_active", sa.Boolean, nullable=False, default=True),
+        sa.Column("is_primary", sa.Boolean, nullable=False, default=True),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),  # For soft delete
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -85,13 +84,49 @@ def upgrade() -> None:
         ),
     )
 
-    # Create indexes for face_embeddings
-    op.create_index("ix_face_embeddings_tenant_id", "face_embeddings", ["tenant_id"])
-    op.create_index("ix_face_embeddings_user_id", "face_embeddings", ["user_id"])
+    # Add embedding column as vector type (requires pgvector extension)
+    # Note: Column is added separately because SQLAlchemy doesn't have native vector type
+    op.execute("""
+        ALTER TABLE biometric_data
+        ADD COLUMN embedding vector(512);
+    """)
+
+    # Create unique constraint for active embeddings (prevents duplicate enrollments)
+    # Uses partial index to allow multiple soft-deleted records
+    op.execute("""
+        CREATE UNIQUE INDEX ix_biometric_data_user_tenant_type_active
+        ON biometric_data (user_id, tenant_id, biometric_type)
+        WHERE deleted_at IS NULL;
+    """)
+
+    # Create indexes for biometric_data (optimized for common queries)
+    op.create_index("ix_biometric_data_tenant_id", "biometric_data", ["tenant_id"])
+    op.create_index("ix_biometric_data_user_id", "biometric_data", ["user_id"])
     op.create_index(
-        "ix_face_embeddings_tenant_user", "face_embeddings", ["tenant_id", "user_id"]
+        "ix_biometric_data_tenant_user", "biometric_data", ["tenant_id", "user_id"]
     )
-    op.create_index("ix_face_embeddings_active", "face_embeddings", ["is_active"])
+    op.create_index("ix_biometric_data_active", "biometric_data", ["is_active"])
+    op.create_index("ix_biometric_data_type", "biometric_data", ["biometric_type"])
+
+    # Create HNSW vector index for fast similarity search
+    # HNSW (Hierarchical Navigable Small World) provides excellent query performance
+    # Parameters: m=16 (connections per layer), ef_construction=64 (build-time accuracy)
+    # This index enables sub-second similarity search even with millions of faces
+    op.execute("""
+        CREATE INDEX ix_biometric_data_embedding_hnsw
+        ON biometric_data
+        USING hnsw (embedding vector_cosine_ops)
+        WITH (m = 16, ef_construction = 64);
+    """)
+
+    # Alternative: IVFFlat index (uncomment if HNSW is too slow to build for large datasets)
+    # IVFFlat is faster to build but provides lower query accuracy
+    # op.execute("""
+    #     CREATE INDEX ix_biometric_data_embedding_ivfflat
+    #     ON biometric_data
+    #     USING ivfflat (embedding vector_cosine_ops)
+    #     WITH (lists = 100);
+    # """)
 
     # Create proctor_sessions table
     op.create_table(
@@ -246,10 +281,13 @@ def downgrade() -> None:
     op.drop_table("incident_evidence")
     op.drop_table("proctor_incidents")
     op.drop_table("proctor_sessions")
-    op.drop_table("face_embeddings")
+    op.drop_table("biometric_data")  # Updated to match new table name
 
     # Drop enums
     op.execute("DROP TYPE IF EXISTS review_action")
     op.execute("DROP TYPE IF EXISTS incident_severity")
     op.execute("DROP TYPE IF EXISTS incident_type")
     op.execute("DROP TYPE IF EXISTS session_status")
+
+    # Note: pgvector extension is not dropped to avoid affecting other databases
+    # If you need to remove it: DROP EXTENSION IF EXISTS vector CASCADE;
