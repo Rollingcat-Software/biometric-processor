@@ -1419,7 +1419,7 @@ class Settings(BaseSettings):
 
     # API settings
     API_HOST: str = Field(default="0.0.0.0")
-    API_PORT: int = Field(default=8000, ge=1024, le=65535)
+    API_PORT: int = Field(default=8001, ge=1024, le=65535)  # STANDARD PORT
     API_WORKERS: int = Field(default=4, ge=1, le=32)
 
     # CORS settings
