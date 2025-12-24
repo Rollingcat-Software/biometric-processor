@@ -71,6 +71,7 @@ from app.domain.interfaces.landmark_detector import ILandmarkDetector
 from app.domain.interfaces.image_preprocessor import IImagePreprocessor
 from app.domain.interfaces.webhook_sender import IWebhookSender
 from app.domain.interfaces.rate_limit_storage import IRateLimitStorage
+from app.infrastructure.ml.liveness.enhanced_liveness_detector import EnhancedLivenessDetector
 from app.infrastructure.ml.quality.quality_assessor import QualityAssessor
 from app.infrastructure.messaging.event_handlers import BiometricEventHandler, EventRouter
 from app.infrastructure.messaging.redis_event_bus import RedisEventBus
@@ -292,6 +293,7 @@ def get_liveness_detector() -> ILivenessDetector:
         - passive: Texture-based analysis (printed photos, screens)
         - active: Facial action analysis (smile, blink)
         - combined: Both methods for highest accuracy
+        - enhanced: Multi-modal detection with LBP, blink, smile detection
 
     Uses LivenessDetectorFactory for Open/Closed Principle compliance.
     """
@@ -385,7 +387,8 @@ def get_rate_limit_storage() -> IRateLimitStorage:
     """
     logger.info(f"Creating rate limit storage: {settings.RATE_LIMIT_STORAGE}")
     return RateLimitStorageFactory.create(
-        storage_type=settings.RATE_LIMIT_STORAGE,
+        backend=settings.RATE_LIMIT_STORAGE,
+        redis_url=settings.redis_url,
     )
 
 
