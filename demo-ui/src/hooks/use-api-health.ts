@@ -23,7 +23,7 @@ import type {
 async function checkHealth(): Promise<HealthCheckResponse> {
   const startTime = performance.now();
 
-  const response = await apiClient.get<HealthCheckResponse>('/health', {
+  const response = await apiClient.get<HealthCheckResponse>('/api/v1/health', {
     retry: false, // Don't retry health checks
   });
   const endTime = performance.now();
@@ -39,7 +39,7 @@ async function checkHealth(): Promise<HealthCheckResponse> {
  * Detailed health check with comprehensive diagnostics
  */
 async function checkDetailedHealth(): Promise<DetailedHealthResponse> {
-  return apiClient.get<DetailedHealthResponse>('/health/detailed', {
+  return apiClient.get<DetailedHealthResponse>('/api/v1/health/detailed', {
     retry: false,
     timeout: 10000, // 10 second timeout for health checks
   });
