@@ -19,6 +19,7 @@ from app.application.use_cases.detect_card_type import DetectCardTypeUseCase
 
 # Application use cases
 from app.application.use_cases.enroll_face import EnrollFaceUseCase
+from app.application.use_cases.enroll_multi_image import EnrollMultiImageUseCase
 from app.application.use_cases.search_face import SearchFaceUseCase
 from app.application.use_cases.verify_face import VerifyFaceUseCase
 
@@ -368,6 +369,27 @@ def get_enroll_face_use_case() -> EnrollFaceUseCase:
         extractor=get_embedding_extractor(),
         quality_assessor=get_quality_assessor(),
         repository=get_embedding_repository(),
+    )
+
+
+def get_enroll_multi_image_use_case() -> EnrollMultiImageUseCase:
+    """Get enroll multi-image use case instance.
+
+    Returns:
+        EnrollMultiImageUseCase with all dependencies injected
+    """
+    from app.domain.services.embedding_fusion_service import EmbeddingFusionService
+
+    fusion_service = EmbeddingFusionService(
+        normalization_strategy=settings.MULTI_IMAGE_NORMALIZATION
+    )
+
+    return EnrollMultiImageUseCase(
+        detector=get_face_detector(),
+        extractor=get_embedding_extractor(),
+        quality_assessor=get_quality_assessor(),
+        repository=get_embedding_repository(),
+        fusion_service=fusion_service,
     )
 
 

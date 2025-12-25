@@ -165,6 +165,16 @@ class Settings(BaseSettings):
     EXPORT_FORMAT: Literal["json", "msgpack"] = Field(default="json")
     EXPORT_INCLUDE_METADATA: bool = Field(default=True)
 
+    # Multi-Image Enrollment
+    MULTI_IMAGE_ENROLLMENT_ENABLED: bool = Field(default=True)
+    MULTI_IMAGE_MIN_IMAGES: int = Field(default=2, ge=2, le=5)
+    MULTI_IMAGE_MAX_IMAGES: int = Field(default=5, ge=2, le=5)
+    MULTI_IMAGE_FUSION_STRATEGY: Literal["weighted_average", "simple_average"] = Field(
+        default="weighted_average"
+    )
+    MULTI_IMAGE_NORMALIZATION: Literal["l2", "none"] = Field(default="l2")
+    MULTI_IMAGE_MIN_QUALITY_PER_IMAGE: float = Field(default=60.0, ge=0.0, le=100.0)
+
     # API Key Authentication
     API_KEY_ENABLED: bool = Field(default=False)
     API_KEY_REQUIRE_AUTH: bool = Field(default=False)
