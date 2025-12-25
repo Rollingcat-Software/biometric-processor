@@ -1,7 +1,26 @@
 {
   "permissions": {
     "allow": [
-      "Bash(where:*)"
+      "Bash(where:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(test:*)",
+      "Bash(python -m uvicorn:*)",
+      "Bash(pip install:*)",
+      "Bash(npm run dev:*)",
+      "Bash(docker-compose ps:*)",
+      "Bash(findstr:*)",
+      "Bash(docker exec:*)",
+      "Bash(curl:*)",
+      "Bash(python:*)",
+      "Bash(.venvScriptspython.exe -c \"import deepface, tensorflow, cv2; print\\(''✓ All ML packages available''\\)\")",
+      "Bash(.venv/Scripts/python.exe:*)",
+      "Bash(.venv/Scripts/pip.exe install:*)",
+      "Bash(netstat:*)",
+      "Bash(taskkill:*)"
     ],
     "deny": [],
     "ask": []
