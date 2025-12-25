@@ -41,7 +41,8 @@
       "Bash(.venvScriptspython.exe -m pytest tests/ -v --tb=short)",
       "Bash(npm run build:*)",
       "Read(//tmp/claude/C--Users-ahabg-OneDrive-Belgeler-GitHub-FIVUCSAS-biometric-processor/tasks/**)",
-      "Read(//c/Users/ahabg/OneDrive/Belgeler/GitHub/FIVUCSAS/biometric-processor/**)"
+      "Read(//c/Users/ahabg/OneDrive/Belgeler/GitHub/FIVUCSAS/biometric-processor/**)",
+      "Bash(git stash:*)"
     ],
     "deny": [],
     "ask": []
