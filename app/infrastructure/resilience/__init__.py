@@ -1,15 +1,15 @@
-"""Resilience patterns for infrastructure."""
+"""Resilience infrastructure module."""
 
 from app.infrastructure.resilience.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerConfig,
     CircuitBreakerOpenError,
     CircuitState,
-)
-from app.infrastructure.resilience.session_rate_limiter import (
-    RateLimitResult,
-    SessionRateLimitConfig,
-    SessionRateLimiter,
+    FACE_DETECTOR_BREAKER,
+    EMBEDDING_EXTRACTOR_BREAKER,
+    QUALITY_ASSESSOR_BREAKER,
+    FACE_VERIFIER_BREAKER,
+    LIVENESS_DETECTOR_BREAKER,
 )
 
 __all__ = [
@@ -17,7 +17,9 @@ __all__ = [
     "CircuitBreakerConfig",
     "CircuitBreakerOpenError",
     "CircuitState",
-    "RateLimitResult",
-    "SessionRateLimitConfig",
-    "SessionRateLimiter",
+    "FACE_DETECTOR_BREAKER",
+    "EMBEDDING_EXTRACTOR_BREAKER",
+    "QUALITY_ASSESSOR_BREAKER",
+    "FACE_VERIFIER_BREAKER",
+    "LIVENESS_DETECTOR_BREAKER",
 ]
