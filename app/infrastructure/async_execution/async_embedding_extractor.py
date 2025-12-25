@@ -9,11 +9,13 @@ Following:
 - Liskov Substitution: Implements same interface as wrapped extractor
 """
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
 
+from app.domain.exceptions.face_errors import MLModelTimeoutError
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 
 if TYPE_CHECKING:
@@ -53,12 +55,14 @@ class AsyncEmbeddingExtractor:
         self,
         extractor: "DeepFaceExtractor",
         thread_pool: "ThreadPoolManager",
+        timeout_seconds: int = 30,
     ) -> None:
         """Initialize async embedding extractor wrapper.
 
         Args:
             extractor: The synchronous DeepFaceExtractor to wrap
             thread_pool: Thread pool manager for executing blocking operations
+            timeout_seconds: Timeout for ML operations in seconds (default: 30)
 
         Note:
             The extractor should have an extract_sync method that performs
@@ -66,16 +70,19 @@ class AsyncEmbeddingExtractor:
         """
         self._extractor = extractor
         self._thread_pool = thread_pool
+        self._timeout_seconds = timeout_seconds
 
         logger.info(
-            f"AsyncEmbeddingExtractor initialized wrapping {extractor.get_model_name()} model"
+            f"AsyncEmbeddingExtractor initialized wrapping {extractor.get_model_name()} model "
+            f"with {timeout_seconds}s timeout"
         )
 
     async def extract(self, face_image: np.ndarray) -> np.ndarray:
-        """Extract face embedding asynchronously.
+        """Extract face embedding asynchronously with timeout protection.
 
         This method offloads the blocking DeepFace extraction to the
         thread pool, allowing other async operations to proceed.
+        Includes timeout protection to prevent indefinite hangs.
 
         Args:
             face_image: Face image as numpy array (H, W, C)
@@ -85,20 +92,32 @@ class AsyncEmbeddingExtractor:
 
         Raises:
             EmbeddingExtractionError: When extraction fails
+            MLModelTimeoutError: When extraction exceeds timeout
             RuntimeError: If thread pool has been shut down
 
         Performance:
             ~10-50ms overhead for thread pool dispatch, but allows
             concurrent request handling during extraction.
         """
-        logger.debug("Executing embedding extraction in thread pool")
+        logger.debug(f"Executing embedding extraction in thread pool (timeout: {self._timeout_seconds}s)")
 
-        # Execute blocking extraction in thread pool
-        embedding = await self._thread_pool.run_blocking(
-            self._extractor.extract_sync, face_image
-        )
+        try:
+            # Execute blocking extraction in thread pool with timeout
+            embedding = await asyncio.wait_for(
+                self._thread_pool.run_blocking(self._extractor.extract_sync, face_image),
+                timeout=self._timeout_seconds
+            )
+            return embedding
 
-        return embedding
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Embedding extraction timed out after {self._timeout_seconds}s "
+                f"(model: {self._extractor.get_model_name()})"
+            )
+            raise MLModelTimeoutError(
+                operation="embedding_extraction",
+                timeout_seconds=self._timeout_seconds
+            )
 
     def get_embedding_dimension(self) -> int:
         """Get the dimension of embeddings produced by this extractor.

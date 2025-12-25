@@ -8,6 +8,7 @@ from app.domain.exceptions.base import BiometricProcessorError
 from app.domain.exceptions.face_errors import (
     EmbeddingExtractionError,
     FaceNotDetectedError,
+    MLModelTimeoutError,
     MultipleFacesError,
     PoorImageQualityError,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "MultipleFacesError",
     "PoorImageQualityError",
     "EmbeddingExtractionError",
+    "MLModelTimeoutError",
     "EmbeddingNotFoundError",
     "VerificationFailedError",
     "LivenessCheckFailedError",

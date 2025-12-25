@@ -45,6 +45,7 @@ class FaceDetectorFactory:
         detector_type: str = "opencv",
         async_enabled: bool = False,
         thread_pool: Optional["ThreadPoolManager"] = None,
+        timeout_seconds: int = 30,
         **kwargs,
     ) -> IFaceDetector:
         """Create a face detector instance.
@@ -54,6 +55,7 @@ class FaceDetectorFactory:
                 Options: "opencv", "ssd", "mtcnn", "retinaface", "mediapipe", "yolov8"
             async_enabled: If True, wrap with AsyncFaceDetector for non-blocking detection
             thread_pool: Thread pool manager for async execution (required if async_enabled)
+            timeout_seconds: Timeout for ML operations in seconds (default: 30)
             **kwargs: Additional arguments passed to detector constructor
 
         Returns:
@@ -75,6 +77,7 @@ class FaceDetectorFactory:
                 "mtcnn",
                 async_enabled=True,
                 thread_pool=pool,
+                timeout_seconds=30,
                 align=True
             )
             ```
@@ -114,7 +117,7 @@ class FaceDetectorFactory:
             from app.infrastructure.async_execution.async_face_detector import (
                 AsyncFaceDetector,
             )
-            return AsyncFaceDetector(base_detector, thread_pool)
+            return AsyncFaceDetector(base_detector, thread_pool, timeout_seconds)
 
         return base_detector
 
