@@ -44,14 +44,14 @@ class PgVectorEmbeddingRepository:
     - Async operations for scalability
 
     Database Schema:
-    - Table: biometric_data
+    - Table: face_embeddings
     - Vector column: embedding (512 dimensions for FaceNet)
     - Index: HNSW or IVFFlat for fast similarity search
     - Supports: cosine distance metric
 
     Note:
         Requires PostgreSQL 11+ with pgvector extension installed.
-        Requires biometric_data table with vector column.
+        Requires face_embeddings table with vector column.
     """
 
     def __init__(
@@ -160,23 +160,17 @@ class PgVectorEmbeddingRepository:
                 # UPSERT: Insert or update if exists
                 await conn.execute(
                     """
-                    INSERT INTO biometric_data (
+                    INSERT INTO face_embeddings (
                         user_id,
                         tenant_id,
                         embedding,
-                        quality_score,
-                        biometric_type,
-                        embedding_model,
-                        is_active,
-                        is_primary
+                        quality_score
                     )
-                    VALUES ($1, $2, $3, $4, 'FACE', 'Facenet512', TRUE, TRUE)
-                    ON CONFLICT (user_id, tenant_id, biometric_type)
-                    WHERE deleted_at IS NULL
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (user_id, tenant_id)
                     DO UPDATE SET
                         embedding = EXCLUDED.embedding,
                         quality_score = EXCLUDED.quality_score,
-                        embedding_model = EXCLUDED.embedding_model,
                         updated_at = CURRENT_TIMESTAMP
                     """,
                     user_id,
@@ -220,13 +214,10 @@ class PgVectorEmbeddingRepository:
                 row = await conn.fetchrow(
                     """
                     SELECT embedding
-                    FROM biometric_data
+                    FROM face_embeddings
                     WHERE user_id = $1
-                      AND ($2::uuid IS NULL OR tenant_id = $2)
-                      AND biometric_type = 'FACE'
-                      AND is_active = TRUE
-                      AND deleted_at IS NULL
-                    ORDER BY is_primary DESC, created_at DESC
+                      AND ($2 IS NULL OR tenant_id = $2)
+                    ORDER BY created_at DESC
                     LIMIT 1
                     """,
                     user_id,
@@ -290,11 +281,8 @@ class PgVectorEmbeddingRepository:
                     SELECT
                         user_id,
                         embedding <=> $1::vector AS distance
-                    FROM biometric_data
-                    WHERE ($2::uuid IS NULL OR tenant_id = $2)
-                      AND biometric_type = 'FACE'
-                      AND is_active = TRUE
-                      AND deleted_at IS NULL
+                    FROM face_embeddings
+                    WHERE ($2 IS NULL OR tenant_id = $2)
                       AND embedding <=> $1::vector < $3
                     ORDER BY distance ASC
                     LIMIT $4
@@ -343,19 +331,15 @@ class PgVectorEmbeddingRepository:
             async with pool.acquire() as conn:
                 result = await conn.execute(
                     """
-                    UPDATE biometric_data
-                    SET deleted_at = CURRENT_TIMESTAMP,
-                        is_active = FALSE
+                    DELETE FROM face_embeddings
                     WHERE user_id = $1
-                      AND ($2::uuid IS NULL OR tenant_id = $2)
-                      AND biometric_type = 'FACE'
-                      AND deleted_at IS NULL
+                      AND ($2 IS NULL OR tenant_id = $2)
                     """,
                     user_id,
                     tenant_id,
                 )
 
-            # Parse result string like "UPDATE 1"
+            # Parse result string like "DELETE 1"
             deleted_count = int(result.split()[-1]) if result else 0
 
             if deleted_count > 0:
@@ -387,12 +371,9 @@ class PgVectorEmbeddingRepository:
                     """
                     SELECT EXISTS(
                         SELECT 1
-                        FROM biometric_data
+                        FROM face_embeddings
                         WHERE user_id = $1
-                          AND ($2::uuid IS NULL OR tenant_id = $2)
-                          AND biometric_type = 'FACE'
-                          AND is_active = TRUE
-                          AND deleted_at IS NULL
+                          AND ($2 IS NULL OR tenant_id = $2)
                     )
                     """,
                     user_id,
@@ -421,11 +402,8 @@ class PgVectorEmbeddingRepository:
                 count = await conn.fetchval(
                     """
                     SELECT COUNT(*)
-                    FROM biometric_data
-                    WHERE ($1::uuid IS NULL OR tenant_id = $1)
-                      AND biometric_type = 'FACE'
-                      AND is_active = TRUE
-                      AND deleted_at IS NULL
+                    FROM face_embeddings
+                    WHERE ($1 IS NULL OR tenant_id = $1)
                     """,
                     tenant_id,
                 )
