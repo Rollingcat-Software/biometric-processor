@@ -250,3 +250,140 @@ export interface WebhookEvent {
   attempts: number;
   created_at: string;
 }
+
+// Multi-image enrollment
+export interface MultiImageEnrollmentRequest {
+  user_id: string;
+  files: File[];
+  tenant_id?: string;
+}
+
+export interface ImageQualityResult {
+  index: number;
+  quality_score: number;
+  issues: string[];
+}
+
+export interface MultiImageEnrollmentResponse {
+  success: boolean;
+  user_id: string;
+  images_processed: number;
+  aggregate_quality_score: number;
+  best_embedding_index: number;
+  image_results: ImageQualityResult[];
+  embedding_id: string;
+  message?: string;
+}
+
+// Enhanced health check types
+export interface ApplicationCheck {
+  status: 'healthy' | 'unhealthy';
+  version: string;
+  environment: string;
+}
+
+export interface DatabaseCheck {
+  status: 'healthy' | 'unhealthy';
+  embeddings_count?: number;
+  type?: string;
+  error?: string;
+}
+
+export interface CacheStats {
+  cache_hits: number;
+  cache_misses: number;
+  total_requests: number;
+  hit_rate_percent: number;
+  current_size: number;
+  max_size: number;
+  ttl_seconds: number;
+}
+
+export interface CacheCheck {
+  status: 'healthy' | 'unhealthy' | 'degraded' | 'disabled';
+  enabled: boolean;
+  stats?: CacheStats;
+  error?: string;
+  message?: string;
+}
+
+export interface ConfigurationCheck {
+  status: 'healthy' | 'unhealthy';
+  multi_image_enrollment: boolean;
+  embedding_dimension: number;
+  face_detection_backend: string;
+  face_recognition_model: string;
+}
+
+export interface DetailedHealthResponse {
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  timestamp: string;
+  version: string;
+  environment: string;
+  uptime_seconds: number;
+  checks: {
+    application: ApplicationCheck;
+    database: DatabaseCheck;
+    cache: CacheCheck;
+    configuration: ConfigurationCheck;
+  };
+}
+
+export interface LivenessResponse {
+  status: 'alive';
+  timestamp: string;
+  uptime_seconds: number;
+}
+
+export interface ReadinessCheck {
+  database: boolean;
+  cache: boolean;
+  configuration: boolean;
+}
+
+export interface ReadinessResponse {
+  ready: boolean;
+  timestamp: string;
+  checks: ReadinessCheck;
+}
+
+// Cache metrics
+export interface CacheMetricsResponse {
+  timestamp: string;
+  cache_enabled: boolean;
+  metrics: CacheStats;
+  recommendations: string[];
+}
+
+// Admin stats (for backend to implement)
+export interface AdminStats {
+  total_enrollments: number;
+  enrollments_today: number;
+  total_verifications: number;
+  verification_success_rate: number;
+  total_liveness_checks: number;
+  spoof_detection_rate: number;
+  avg_response_time: number;
+  p99_response_time: number;
+  cpu_usage: number;
+  memory_usage: number;
+  gpu_memory: number;
+  disk_usage: number;
+  recent_activity: Array<{
+    success: boolean;
+    operation: string;
+    user_id: string;
+    duration: number;
+    timestamp: string;
+  }>;
+}
+
+// Error response
+export interface ErrorResponse {
+  error_code?: string;
+  message: string;
+  detail?: string;
+  details?: Record<string, unknown>;
+  request_id?: string;
+  field_errors?: Record<string, string[]>;
+}
