@@ -23,6 +23,10 @@ services:
       - METRICS_ENABLED=true
       - DATABASE_URL=postgresql://biometric:biometric@postgres:5432/biometric
       - EMBEDDING_STORAGE=postgres
+      # Quality thresholds - More lenient for demo environment
+      - BLUR_THRESHOLD=50.0
+      - QUALITY_THRESHOLD=60.0
+      - MIN_FACE_SIZE=60
     volumes:
       - upload_data:/app/temp_uploads
     depends_on:
