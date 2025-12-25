@@ -20,7 +20,12 @@
       "Bash(.venv/Scripts/python.exe:*)",
       "Bash(.venv/Scripts/pip.exe install:*)",
       "Bash(netstat:*)",
-      "Bash(taskkill:*)"
+      "Bash(taskkill:*)",
+      "Bash(docker logs:*)",
+      "Bash(docker-compose restart:*)",
+      "Bash(docker ps:*)",
+      "Bash(.venvScriptspython.exe -m pytest tests/ -v --tb=short)",
+      "Bash(npm run build:*)"
     ],
     "deny": [],
     "ask": []
