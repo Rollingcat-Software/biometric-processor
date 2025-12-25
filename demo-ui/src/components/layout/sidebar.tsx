@@ -29,6 +29,7 @@ import {
   CreditCard,
   Database,
   Play,
+  Sparkles,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';
 import { Button } from '@/components/ui/button';
@@ -45,8 +46,8 @@ const navigationItems = [
   },
   {
     title: 'nav.demo',
-    href: '/demo',
-    icon: Play,
+    href: '/unified-demo',
+    icon: Sparkles,
     group: 'main',
   },
   {
