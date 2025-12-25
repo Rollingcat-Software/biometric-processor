@@ -8,6 +8,7 @@ from typing import Optional
 
 from fastapi import UploadFile
 
+from app.core.config import settings
 from app.domain.exceptions.storage_errors import FileStorageError
 from app.domain.interfaces.file_storage import IFileStorage
 
@@ -22,7 +23,7 @@ class LocalFileStorage:
 
     Security Features:
     - Path traversal protection: Validates all file paths
-    - File size limits: Maximum 10MB per file
+    - File size limits: Configurable maximum (default: 10MB)
     - Allowed file types: Only images (jpg, jpeg, png, webp)
     - Unique filenames: UUID-based to prevent collisions
 
@@ -31,26 +32,29 @@ class LocalFileStorage:
         For production at scale, consider S3Storage or similar.
     """
 
-    # Security constants
-    MAX_FILE_SIZE_MB = 10
-    MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+    # Security constants - allowed extensions (default set)
     ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
-    def __init__(self, storage_path: str = "./temp_uploads") -> None:
+    def __init__(self, storage_path: str = "./temp_uploads", max_file_size: Optional[int] = None) -> None:
         """Initialize local file storage.
 
         Args:
             storage_path: Directory path for storing files
+            max_file_size: Maximum file size in bytes (uses config if not provided)
 
         Raises:
             FileStorageError: If storage directory cannot be created
         """
         self._storage_path = Path(storage_path).resolve()
+        self._max_file_size = max_file_size or settings.MAX_FILE_SIZE
 
         # Create storage directory if it doesn't exist
         try:
             self._storage_path.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Initialized LocalFileStorage at: {self._storage_path.absolute()}")
+            logger.info(
+                f"Initialized LocalFileStorage at: {self._storage_path.absolute()} "
+                f"(max_file_size: {self._max_file_size / 1024 / 1024:.1f} MB)"
+            )
         except Exception as e:
             logger.error(f"Failed to create storage directory: {e}")
             raise FileStorageError(
@@ -93,13 +97,16 @@ class LocalFileStorage:
             # Read file content
             content = await file.read()
 
-            # SECURITY: Validate file size
+            # SECURITY: Validate file size to prevent memory exhaustion
+            # Large images can consume excessive memory during ML processing
             file_size = len(content)
-            if file_size > self.MAX_FILE_SIZE_BYTES:
+            if file_size > self._max_file_size:
+                max_mb = self._max_file_size / 1024 / 1024
+                actual_mb = file_size / 1024 / 1024
                 raise FileStorageError(
                     operation="save",
                     file_path=file.filename or "unknown",
-                    reason=f"File size ({file_size / 1024 / 1024:.2f} MB) exceeds maximum allowed size ({self.MAX_FILE_SIZE_MB} MB)",
+                    reason=f"File size ({actual_mb:.2f} MB) exceeds maximum allowed size ({max_mb:.1f} MB)",
                 )
 
             if file_size == 0:

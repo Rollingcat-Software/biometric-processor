@@ -17,6 +17,7 @@ import numpy as np
 
 from app.domain.exceptions.face_errors import MLModelTimeoutError
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
+from app.infrastructure.resilience.circuit_breaker import EMBEDDING_EXTRACTOR_BREAKER
 
 if TYPE_CHECKING:
     from app.infrastructure.async_execution.thread_pool_manager import ThreadPoolManager
@@ -78,11 +79,12 @@ class AsyncEmbeddingExtractor:
         )
 
     async def extract(self, face_image: np.ndarray) -> np.ndarray:
-        """Extract face embedding asynchronously with timeout protection.
+        """Extract face embedding asynchronously with timeout and circuit breaker protection.
 
         This method offloads the blocking DeepFace extraction to the
         thread pool, allowing other async operations to proceed.
         Includes timeout protection to prevent indefinite hangs.
+        Circuit breaker protects against cascading failures from ML model issues.
 
         Args:
             face_image: Face image as numpy array (H, W, C)
@@ -93,31 +95,41 @@ class AsyncEmbeddingExtractor:
         Raises:
             EmbeddingExtractionError: When extraction fails
             MLModelTimeoutError: When extraction exceeds timeout
+            CircuitBreakerOpenError: When circuit breaker is open (too many failures)
             RuntimeError: If thread pool has been shut down
 
         Performance:
             ~10-50ms overhead for thread pool dispatch, but allows
             concurrent request handling during extraction.
+
+        Resilience:
+            Circuit breaker opens after 5 consecutive failures, preventing
+            resource waste on a failing ML model. Auto-recovers after 30s.
         """
         logger.debug(f"Executing embedding extraction in thread pool (timeout: {self._timeout_seconds}s)")
 
-        try:
-            # Execute blocking extraction in thread pool with timeout
-            embedding = await asyncio.wait_for(
-                self._thread_pool.run_blocking(self._extractor.extract_sync, face_image),
-                timeout=self._timeout_seconds
-            )
-            return embedding
+        async def _extract_with_timeout():
+            """Inner function to wrap timeout logic for circuit breaker."""
+            try:
+                # Execute blocking extraction in thread pool with timeout
+                embedding = await asyncio.wait_for(
+                    self._thread_pool.run_blocking(self._extractor.extract_sync, face_image),
+                    timeout=self._timeout_seconds
+                )
+                return embedding
 
-        except asyncio.TimeoutError:
-            logger.error(
-                f"Embedding extraction timed out after {self._timeout_seconds}s "
-                f"(model: {self._extractor.get_model_name()})"
-            )
-            raise MLModelTimeoutError(
-                operation="embedding_extraction",
-                timeout_seconds=self._timeout_seconds
-            )
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"Embedding extraction timed out after {self._timeout_seconds}s "
+                    f"(model: {self._extractor.get_model_name()})"
+                )
+                raise MLModelTimeoutError(
+                    operation="embedding_extraction",
+                    timeout_seconds=self._timeout_seconds
+                )
+
+        # Wrap with circuit breaker for resilience
+        return await EMBEDDING_EXTRACTOR_BREAKER.call_async(_extract_with_timeout)
 
     def get_embedding_dimension(self) -> int:
         """Get the dimension of embeddings produced by this extractor.

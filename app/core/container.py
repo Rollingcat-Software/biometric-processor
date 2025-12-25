@@ -42,6 +42,7 @@ from app.infrastructure.ml.factories.extractor_factory import EmbeddingExtractor
 from app.infrastructure.ml.factories.similarity_factory import SimilarityCalculatorFactory
 from app.infrastructure.ml.liveness.enhanced_liveness_detector import EnhancedLivenessDetector
 from app.infrastructure.ml.quality.quality_assessor import QualityAssessor
+from app.infrastructure.idempotency import IdempotencyStore
 from app.infrastructure.messaging.event_handlers import BiometricEventHandler, EventRouter
 from app.infrastructure.messaging.redis_event_bus import RedisEventBus
 from app.infrastructure.persistence.repositories.memory_embedding_repository import (
@@ -123,6 +124,22 @@ def get_file_storage() -> IFileStorage:
     """
     logger.info(f"Creating file storage: {settings.UPLOAD_FOLDER}")
     return LocalFileStorage(storage_path=settings.UPLOAD_FOLDER)
+
+
+@lru_cache()
+def get_idempotency_store() -> IdempotencyStore:
+    """Get idempotency store instance (singleton).
+
+    Returns:
+        Idempotency store for preventing duplicate operations
+
+    Note:
+        The store uses a 24-hour TTL for idempotency keys.
+        This means duplicate requests with the same key will be
+        detected and prevented for 24 hours after the original request.
+    """
+    logger.info("Creating idempotency store (TTL: 24h)")
+    return IdempotencyStore(ttl_hours=24)
 
 
 @lru_cache()

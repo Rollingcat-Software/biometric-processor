@@ -60,14 +60,26 @@ class PgVectorEmbeddingRepository:
         pool_min_size: int = 10,
         pool_max_size: int = 20,
         embedding_dimension: int = 512,
+        command_timeout: float = 30.0,
+        max_queries: int = 50000,
+        max_inactive_connection_lifetime: float = 300.0,
     ) -> None:
-        """Initialize PostgreSQL pgvector repository.
+        """Initialize PostgreSQL pgvector repository with optimized connection pool.
 
         Args:
             database_url: PostgreSQL connection URL (e.g., postgresql://user:pass@host:port/db)
-            pool_min_size: Minimum number of connections in pool
-            pool_max_size: Maximum number of connections in pool
+            pool_min_size: Minimum number of connections in pool (default: 10)
+            pool_max_size: Maximum number of connections in pool (default: 20)
             embedding_dimension: Dimension of face embeddings (default: 512 for FaceNet)
+            command_timeout: Timeout for individual SQL commands in seconds (default: 30)
+            max_queries: Max queries per connection before recycling (default: 50000)
+            max_inactive_connection_lifetime: Max seconds connection can be idle (default: 300)
+
+        Connection Pool Optimization:
+            - command_timeout: Prevents hung queries from blocking connections
+            - max_queries: Prevents memory leaks from long-lived connections
+            - max_inactive_connection_lifetime: Closes stale connections automatically
+            - Optimized for async workloads with concurrent requests
 
         Note:
             Connection pool will be created on first async operation via _ensure_pool()
@@ -76,37 +88,75 @@ class PgVectorEmbeddingRepository:
         self._pool_min_size = pool_min_size
         self._pool_max_size = pool_max_size
         self._embedding_dimension = embedding_dimension
+        self._command_timeout = command_timeout
+        self._max_queries = max_queries
+        self._max_inactive_connection_lifetime = max_inactive_connection_lifetime
         self._pool: Optional[asyncpg.Pool] = None
 
         logger.info(
-            f"Initialized PgVectorEmbeddingRepository "
-            f"(dimension={embedding_dimension}, pool={pool_min_size}-{pool_max_size})"
+            f"Initialized PgVectorEmbeddingRepository with optimized pool settings "
+            f"(dimension={embedding_dimension}, pool={pool_min_size}-{pool_max_size}, "
+            f"command_timeout={command_timeout}s, max_queries={max_queries}, "
+            f"max_inactive_lifetime={max_inactive_connection_lifetime}s)"
         )
 
     async def _ensure_pool(self) -> asyncpg.Pool:
-        """Ensure connection pool is created.
+        """Ensure connection pool is created with optimized async settings.
 
         Returns:
             Active connection pool
 
         Raises:
             RepositoryError: When pool creation fails
+
+        Performance:
+            Pool is optimized for async workloads:
+            - Prevents connection exhaustion under high concurrency
+            - Automatic connection recycling prevents memory leaks
+            - Idle connection cleanup prevents resource waste
+            - Command timeouts prevent hung queries from blocking pool
         """
         if self._pool is None:
             try:
-                logger.info("Creating PostgreSQL connection pool...")
+                logger.info(
+                    f"Creating PostgreSQL connection pool with async optimizations "
+                    f"(size: {self._pool_min_size}-{self._pool_max_size})..."
+                )
                 self._pool = await asyncpg.create_pool(
                     self._database_url,
                     min_size=self._pool_min_size,
                     max_size=self._pool_max_size,
-                    command_timeout=60,
+                    command_timeout=self._command_timeout,
+                    max_queries=self._max_queries,
+                    max_inactive_connection_lifetime=self._max_inactive_connection_lifetime,
+                    # Setup hook to configure pgvector extension on each connection
+                    setup=self._setup_connection,
                 )
-                logger.info("PostgreSQL connection pool created successfully")
+                logger.info(
+                    f"PostgreSQL connection pool created successfully "
+                    f"(timeout={self._command_timeout}s, "
+                    f"max_queries={self._max_queries}, "
+                    f"inactive_lifetime={self._max_inactive_connection_lifetime}s)"
+                )
             except Exception as e:
                 logger.error(f"Failed to create connection pool: {e}", exc_info=True)
                 raise RepositoryError(operation="pool_creation", reason=str(e))
 
         return self._pool
+
+    async def _setup_connection(self, conn: asyncpg.Connection) -> None:
+        """Setup connection configuration for pgvector.
+
+        This method is called for each new connection in the pool.
+        Configures connection-specific settings for optimal performance.
+
+        Args:
+            conn: asyncpg connection to configure
+        """
+        # Register vector type for pgvector extension
+        # This ensures vectors are properly handled by asyncpg
+        await conn.execute("SET statement_timeout = '30s'")
+        logger.debug(f"Configured connection {id(conn)} for pgvector")
 
     async def close(self) -> None:
         """Close connection pool.

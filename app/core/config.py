@@ -129,11 +129,20 @@ class Settings(BaseSettings):
     LOG_FORMAT: Literal["json", "text"] = Field(default="json")
 
     # Rate Limiting
-    RATE_LIMIT_ENABLED: bool = Field(default=True)
-    RATE_LIMIT_PER_MINUTE: int = Field(default=60, ge=1)
-    RATE_LIMIT_STORAGE: Literal["memory", "redis"] = Field(default="memory")
-    RATE_LIMIT_DEFAULT: int = Field(default=60, ge=1)
-    RATE_LIMIT_PREMIUM: int = Field(default=300, ge=1)
+    # Rate Limiting Configuration
+    RATE_LIMIT_ENABLED: bool = Field(default=True, description="Enable API rate limiting")
+    RATE_LIMIT_PER_MINUTE: int = Field(default=60, ge=1, description="Default requests per minute")
+    RATE_LIMIT_STORAGE: Literal["memory", "redis"] = Field(default="memory", description="Rate limit storage backend")
+    RATE_LIMIT_DEFAULT: int = Field(default=60, ge=1, description="Default rate limit for free tier")
+    RATE_LIMIT_PREMIUM: int = Field(default=300, ge=1, description="Rate limit for premium tier")
+
+    # Enrollment-specific rate limiting (prevents enrollment flooding and DoS)
+    ENROLLMENT_RATE_LIMIT_PER_MINUTE: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Rate limit for enrollment endpoints (lower than general API to prevent abuse)"
+    )
 
     # Demographics Analysis
     DEMOGRAPHICS_ENABLED: bool = Field(default=True)
