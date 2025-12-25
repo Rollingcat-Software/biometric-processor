@@ -195,6 +195,13 @@ class EnrollMultiImageUseCase:
             except Exception as e:
                 logger.error(f"Failed to process image {i}: {str(e)}")
                 session.mark_failed()
+
+                # CRITICAL: Clean up partial state to prevent memory leaks
+                # Clear large numpy arrays from memory
+                session.clear_submissions()
+                embeddings.clear()
+                quality_scores.clear()
+
                 raise
 
         # Step 4: Verify we have enough images
@@ -217,6 +224,13 @@ class EnrollMultiImageUseCase:
         except Exception as e:
             logger.error(f"Fusion failed: {str(e)}")
             session.mark_failed()
+
+            # CRITICAL: Clean up partial state to prevent memory leaks
+            # Clear large numpy arrays from memory
+            session.clear_submissions()
+            embeddings.clear()
+            quality_scores.clear()
+
             raise FusionError(reason=str(e))
 
         logger.info(

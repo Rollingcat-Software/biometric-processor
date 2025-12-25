@@ -168,6 +168,17 @@ class EnrollmentSession:
         self.status = SessionStatus.FAILED
         self.updated_at = datetime.utcnow()
 
+    def clear_submissions(self) -> None:
+        """Clear all submissions and release memory.
+
+        This method should be called when a session fails to prevent
+        memory leaks from partially processed embeddings (large numpy arrays).
+        Especially important in error scenarios where the session object
+        might be retained in memory temporarily.
+        """
+        self.submissions.clear()
+        self.updated_at = datetime.utcnow()
+
     @classmethod
     def create_new(
         cls,
