@@ -9,6 +9,11 @@ import {
   Play,
   Clock,
   Link,
+  Edit,
+  AlertTriangle,
+  Info,
+  Key,
+  CheckCircle2,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -25,7 +30,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { useWebhooks, useCreateWebhook, useDeleteWebhook, useTestWebhook } from '@/hooks/use-webhooks';
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from '@/components/ui/accordion';
+import { useWebhooks, useCreateWebhook, useDeleteWebhook, useTestWebhook, useUpdateWebhook } from '@/hooks/use-webhooks';
 import { toast } from 'sonner';
 
 const eventTypes = [
@@ -40,7 +51,9 @@ const eventTypes = [
 ];
 
 export default function WebhooksPage() {
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [editingWebhook, setEditingWebhook] = useState<any>(null);
   const [newWebhook, setNewWebhook] = useState({
     url: '',
     secret: '',
@@ -49,6 +62,7 @@ export default function WebhooksPage() {
 
   const { data: webhooks, isLoading } = useWebhooks();
   const createWebhook = useCreateWebhook();
+  const updateWebhook = useUpdateWebhook();
   const deleteWebhook = useDeleteWebhook();
   const testWebhook = useTestWebhook();
 
@@ -61,11 +75,48 @@ export default function WebhooksPage() {
     try {
       await createWebhook.mutateAsync(newWebhook);
       toast.success('Webhook Created', { description: 'Webhook registered successfully' });
-      setIsDialogOpen(false);
+      setIsCreateDialogOpen(false);
       setNewWebhook({ url: '', secret: '', events: [] });
     } catch (err: any) {
       toast.error('Error', { description: err.message });
     }
+  };
+
+  const handleEdit = async () => {
+    if (!editingWebhook) return;
+
+    try {
+      await updateWebhook.mutateAsync({
+        id: editingWebhook.id,
+        url: editingWebhook.url,
+        events: editingWebhook.events,
+        secret: editingWebhook.secret,
+      });
+      toast.success('Webhook Updated', { description: 'Webhook updated successfully' });
+      setIsEditDialogOpen(false);
+      setEditingWebhook(null);
+    } catch (err: any) {
+      toast.error('Error', { description: err.message });
+    }
+  };
+
+  const handleToggleActive = async (webhook: any) => {
+    try {
+      await updateWebhook.mutateAsync({
+        id: webhook.id,
+        is_active: !webhook.is_active,
+      });
+      toast.success(
+        webhook.is_active ? 'Webhook Deactivated' : 'Webhook Activated'
+      );
+    } catch (err: any) {
+      toast.error('Error', { description: err.message });
+    }
+  };
+
+  const openEditDialog = (webhook: any) => {
+    setEditingWebhook({ ...webhook });
+    setIsEditDialogOpen(true);
   };
 
   const handleDelete = async (id: string) => {
@@ -94,13 +145,22 @@ export default function WebhooksPage() {
     }
   };
 
-  const toggleEvent = (event: string) => {
-    setNewWebhook((prev) => ({
-      ...prev,
-      events: prev.events.includes(event)
-        ? prev.events.filter((e) => e !== event)
-        : [...prev.events, event],
-    }));
+  const toggleEvent = (event: string, isEditing = false) => {
+    if (isEditing && editingWebhook) {
+      setEditingWebhook((prev: any) => ({
+        ...prev,
+        events: prev.events.includes(event)
+          ? prev.events.filter((e: string) => e !== event)
+          : [...prev.events, event],
+      }));
+    } else {
+      setNewWebhook((prev) => ({
+        ...prev,
+        events: prev.events.includes(event)
+          ? prev.events.filter((e) => e !== event)
+          : [...prev.events, event],
+      }));
+    }
   };
 
   return (
@@ -122,7 +182,7 @@ export default function WebhooksPage() {
             </div>
           </div>
 
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+          <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
             <DialogTrigger asChild>
               <Button>
                 <Plus className="mr-2 h-4 w-4" />
@@ -175,7 +235,7 @@ export default function WebhooksPage() {
                 </div>
               </div>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
+                <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
                   Cancel
                 </Button>
                 <Button onClick={handleCreate} disabled={createWebhook.isPending}>
@@ -186,6 +246,134 @@ export default function WebhooksPage() {
           </Dialog>
         </div>
       </motion.div>
+
+      {/* Webhook Setup Documentation */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, delay: 0.05 }}
+      >
+        <Card className="border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/50">
+          <CardContent className="pt-6">
+            <Accordion type="single" collapsible>
+              <AccordionItem value="docs">
+                <AccordionTrigger className="hover:no-underline">
+                  <div className="flex items-center gap-2">
+                    <Info className="h-4 w-4 text-blue-600" />
+                    <span className="font-medium text-blue-900 dark:text-blue-100">
+                      Webhook Signature Verification Setup
+                    </span>
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent>
+                  <div className="space-y-4 text-sm text-blue-900 dark:text-blue-100">
+                    <div>
+                      <h4 className="font-medium mb-2 flex items-center gap-2">
+                        <Key className="h-4 w-4" />
+                        Verifying Webhook Signatures
+                      </h4>
+                      <p className="mb-3 text-blue-800 dark:text-blue-200">
+                        All webhook requests include an <code className="bg-blue-200 dark:bg-blue-900 px-1 rounded">X-Webhook-Signature</code> header for request verification.
+                      </p>
+                      <div className="bg-blue-100 dark:bg-blue-900/50 p-3 rounded font-mono text-xs overflow-x-auto">
+                        <div className="text-blue-700 dark:text-blue-300"># Python Example</div>
+                        <div className="mt-2">import hmac</div>
+                        <div>import hashlib</div>
+                        <div className="mt-2">def verify_webhook(payload, signature, secret):</div>
+                        <div>&nbsp;&nbsp;&nbsp;&nbsp;expected = hmac.new(</div>
+                        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;secret.encode(),</div>
+                        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;payload.encode(),</div>
+                        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;hashlib.sha256</div>
+                        <div>&nbsp;&nbsp;&nbsp;&nbsp;).hexdigest()</div>
+                        <div>&nbsp;&nbsp;&nbsp;&nbsp;return hmac.compare_digest(expected, signature)</div>
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="font-medium mb-2">Request Headers</h4>
+                      <ul className="list-disc list-inside space-y-1 text-blue-800 dark:text-blue-200">
+                        <li><code className="bg-blue-200 dark:bg-blue-900 px-1 rounded">X-Webhook-Signature</code> - HMAC SHA256 signature</li>
+                        <li><code className="bg-blue-200 dark:bg-blue-900 px-1 rounded">X-Event-Type</code> - Event type that triggered the webhook</li>
+                        <li><code className="bg-blue-200 dark:bg-blue-900 px-1 rounded">X-Request-ID</code> - Unique request correlation ID</li>
+                        <li><code className="bg-blue-200 dark:bg-blue-900 px-1 rounded">Content-Type</code> - application/json</li>
+                      </ul>
+                    </div>
+                    <div>
+                      <h4 className="font-medium mb-2">Best Practices</h4>
+                      <ul className="list-disc list-inside space-y-1 text-blue-800 dark:text-blue-200">
+                        <li>Always verify signatures before processing webhook data</li>
+                        <li>Return 200 OK within 5 seconds to avoid retries</li>
+                        <li>Use HTTPS endpoints only in production</li>
+                        <li>Implement idempotency to handle duplicate deliveries</li>
+                        <li>Store webhook secrets securely (use environment variables)</li>
+                      </ul>
+                    </div>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
+          </CardContent>
+        </Card>
+      </motion.div>
+
+      {/* Edit Webhook Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Webhook</DialogTitle>
+            <DialogDescription>
+              Update webhook endpoint configuration
+            </DialogDescription>
+          </DialogHeader>
+          {editingWebhook && (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-url">Endpoint URL</Label>
+                <Input
+                  id="edit-url"
+                  value={editingWebhook.url}
+                  onChange={(e) => setEditingWebhook({ ...editingWebhook, url: e.target.value })}
+                  placeholder="https://your-server.com/webhook"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-secret">Secret (optional)</Label>
+                <Input
+                  id="edit-secret"
+                  type="password"
+                  value={editingWebhook.secret || ''}
+                  onChange={(e) => setEditingWebhook({ ...editingWebhook, secret: e.target.value })}
+                  placeholder="Webhook signing secret"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Events</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {eventTypes.map((event) => (
+                    <div key={event} className="flex items-center space-x-2">
+                      <Switch
+                        id={`edit-${event}`}
+                        checked={editingWebhook.events.includes(event)}
+                        onCheckedChange={() => toggleEvent(event, true)}
+                      />
+                      <Label htmlFor={`edit-${event}`} className="text-xs">
+                        {event}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleEdit} disabled={updateWebhook.isPending}>
+              {updateWebhook.isPending ? 'Updating...' : 'Update'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Webhooks List */}
       <motion.div
@@ -212,53 +400,104 @@ export default function WebhooksPage() {
                 {webhooks.webhooks.map((webhook: any) => (
                   <div
                     key={webhook.id}
-                    className="flex items-center justify-between rounded-lg border p-4"
+                    className="rounded-lg border p-4 space-y-3"
                   >
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <Link className="h-4 w-4 text-muted-foreground" />
-                        <span className="font-medium">{webhook.url}</span>
-                        <Badge variant={webhook.is_active ? 'default' : 'secondary'}>
-                          {webhook.is_active ? 'Active' : 'Inactive'}
-                        </Badge>
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {webhook.events.map((event: string) => (
-                          <Badge key={event} variant="outline" className="text-xs">
-                            {event}
+                    {/* Header Row */}
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Link className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                          <span className="font-medium break-all">{webhook.url}</span>
+                        </div>
+
+                        {/* Status Badges */}
+                        <div className="flex flex-wrap gap-2 items-center">
+                          <Badge variant={webhook.is_active ? 'default' : 'secondary'}>
+                            {webhook.is_active ? (
+                              <>
+                                <CheckCircle2 className="h-3 w-3 mr-1" />
+                                Active
+                              </>
+                            ) : (
+                              'Inactive'
+                            )}
                           </Badge>
-                        ))}
+
+                          {webhook.failure_count > 0 && (
+                            <Badge variant="destructive" className="flex items-center gap-1">
+                              <AlertTriangle className="h-3 w-3" />
+                              {webhook.failure_count} {webhook.failure_count === 1 ? 'failure' : 'failures'}
+                            </Badge>
+                          )}
+
+                          {webhook.secret && (
+                            <Badge variant="outline" className="flex items-center gap-1">
+                              <Key className="h-3 w-3" />
+                              Signed
+                            </Badge>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                        <span className="flex items-center gap-1">
-                          <Clock className="h-3 w-3" />
-                          Created: {new Date(webhook.created_at).toLocaleDateString()}
-                        </span>
-                        {webhook.last_triggered_at && (
-                          <span>
-                            Last triggered: {new Date(webhook.last_triggered_at).toLocaleString()}
-                          </span>
-                        )}
+
+                      {/* Action Buttons */}
+                      <div className="flex gap-2 ml-4">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleToggleActive(webhook)}
+                          disabled={updateWebhook.isPending}
+                          title={webhook.is_active ? 'Deactivate' : 'Activate'}
+                        >
+                          <Switch checked={webhook.is_active} className="pointer-events-none" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openEditDialog(webhook)}
+                          disabled={updateWebhook.isPending}
+                        >
+                          <Edit className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleTest(webhook.id)}
+                          disabled={testWebhook.isPending || !webhook.is_active}
+                          title={!webhook.is_active ? 'Activate webhook to test' : 'Test webhook'}
+                        >
+                          <Play className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => handleDelete(webhook.id)}
+                          disabled={deleteWebhook.isPending}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
                       </div>
                     </div>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleTest(webhook.id)}
-                        disabled={testWebhook.isPending}
-                      >
-                        <Play className="mr-1 h-3 w-3" />
-                        Test
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={() => handleDelete(webhook.id)}
-                        disabled={deleteWebhook.isPending}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
+
+                    {/* Events */}
+                    <div className="flex flex-wrap gap-1">
+                      {webhook.events.map((event: string) => (
+                        <Badge key={event} variant="outline" className="text-xs">
+                          {event}
+                        </Badge>
+                      ))}
+                    </div>
+
+                    {/* Metadata */}
+                    <div className="flex items-center gap-4 text-xs text-muted-foreground border-t pt-2">
+                      <span className="flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        Created: {new Date(webhook.created_at).toLocaleDateString()}
+                      </span>
+                      {webhook.last_triggered_at && (
+                        <span>
+                          Last triggered: {new Date(webhook.last_triggered_at).toLocaleString()}
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))}

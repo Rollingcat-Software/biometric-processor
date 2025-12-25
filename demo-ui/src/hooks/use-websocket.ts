@@ -3,7 +3,7 @@ import { API_CONFIG } from '@/config/api.config';
 
 const WS_URL = API_CONFIG.WS_URL;
 
-type WebSocketStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
+type WebSocketStatus = 'connecting' | 'connected' | 'disconnected' | 'error' | 'reconnecting';
 
 interface UseWebSocketOptions {
   url: string;
@@ -14,6 +14,8 @@ interface UseWebSocketOptions {
   reconnect?: boolean;
   reconnectInterval?: number;
   reconnectAttempts?: number;
+  heartbeatInterval?: number; // Ping interval in ms
+  heartbeatMessage?: string; // Custom ping message
 }
 
 interface UseWebSocketReturn {
@@ -22,6 +24,8 @@ interface UseWebSocketReturn {
   connect: () => void;
   disconnect: () => void;
   lastMessage: any;
+  reconnectCount: number;
+  isConnected: boolean;
 }
 
 export function useWebSocket({
@@ -33,69 +37,114 @@ export function useWebSocket({
   reconnect = true,
   reconnectInterval = 3000,
   reconnectAttempts = 5,
+  heartbeatInterval = 30000, // Default: 30 seconds
+  heartbeatMessage = 'ping',
 }: UseWebSocketOptions): UseWebSocketReturn {
   const [status, setStatus] = useState<WebSocketStatus>('disconnected');
   const [lastMessage, setLastMessage] = useState<any>(null);
+  const [reconnectCount, setReconnectCount] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectCountRef = useRef(0);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
+  const heartbeatTimeoutRef = useRef<NodeJS.Timeout>();
+
+  // Start heartbeat
+  const startHeartbeat = useCallback(() => {
+    if (heartbeatTimeoutRef.current) {
+      clearInterval(heartbeatTimeoutRef.current);
+    }
+
+    heartbeatTimeoutRef.current = setInterval(() => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(heartbeatMessage);
+      }
+    }, heartbeatInterval);
+  }, [heartbeatInterval, heartbeatMessage]);
+
+  // Stop heartbeat
+  const stopHeartbeat = useCallback(() => {
+    if (heartbeatTimeoutRef.current) {
+      clearInterval(heartbeatTimeoutRef.current);
+    }
+  }, []);
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       return;
     }
 
-    setStatus('connecting');
+    setStatus(reconnectCountRef.current > 0 ? 'reconnecting' : 'connecting');
 
     try {
       wsRef.current = new WebSocket(url);
 
       wsRef.current.onopen = () => {
         setStatus('connected');
+        setReconnectCount(0);
         reconnectCountRef.current = 0;
+        startHeartbeat(); // Start heartbeat on connection
         onOpen?.();
       };
 
       wsRef.current.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          setLastMessage(data);
-          onMessage?.(data);
+          // Ignore pong responses
+          if (data !== 'pong' && event.data !== 'pong') {
+            setLastMessage(data);
+            onMessage?.(data);
+          }
         } catch {
-          setLastMessage(event.data);
-          onMessage?.(event.data);
+          // Handle non-JSON messages
+          if (event.data !== 'pong') {
+            setLastMessage(event.data);
+            onMessage?.(event.data);
+          }
         }
       };
 
       wsRef.current.onclose = () => {
         setStatus('disconnected');
+        stopHeartbeat(); // Stop heartbeat on disconnect
         onClose?.();
 
         if (reconnect && reconnectCountRef.current < reconnectAttempts) {
           reconnectCountRef.current++;
+          setReconnectCount(reconnectCountRef.current);
+
+          // Exponential backoff: 3s, 6s, 12s, 24s, 48s
+          const backoffDelay = reconnectInterval * Math.pow(2, reconnectCountRef.current - 1);
+          const maxDelay = 30000; // Cap at 30 seconds
+          const delay = Math.min(backoffDelay, maxDelay);
+
+          setStatus('reconnecting');
           reconnectTimeoutRef.current = setTimeout(() => {
             connect();
-          }, reconnectInterval);
+          }, delay);
         }
       };
 
       wsRef.current.onerror = (error) => {
         setStatus('error');
+        stopHeartbeat();
         onError?.(error);
       };
     } catch (error) {
       setStatus('error');
+      stopHeartbeat();
     }
-  }, [url, onMessage, onOpen, onClose, onError, reconnect, reconnectInterval, reconnectAttempts]);
+  }, [url, onMessage, onOpen, onClose, onError, reconnect, reconnectInterval, reconnectAttempts, startHeartbeat, stopHeartbeat]);
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
     }
+    stopHeartbeat(); // Stop heartbeat
     reconnectCountRef.current = reconnectAttempts; // Prevent reconnection
     wsRef.current?.close();
     setStatus('disconnected');
-  }, [reconnectAttempts]);
+    setReconnectCount(0);
+  }, [reconnectAttempts, stopHeartbeat]);
 
   const send = useCallback((data: string | ArrayBuffer | Blob | object) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -116,6 +165,9 @@ export function useWebSocket({
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
+      if (heartbeatTimeoutRef.current) {
+        clearInterval(heartbeatTimeoutRef.current);
+      }
       wsRef.current?.close();
     };
   }, []);
@@ -126,6 +178,8 @@ export function useWebSocket({
     connect,
     disconnect,
     lastMessage,
+    reconnectCount,
+    isConnected: status === 'connected',
   };
 }
 
