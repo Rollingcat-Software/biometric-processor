@@ -16,6 +16,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
+import { CacheMetricsSkeleton } from '@/components/ui/skeleton';
 import { useCacheMetrics } from '@/hooks/use-cache-metrics';
 
 export default function CacheMetricsPage() {
@@ -59,6 +60,11 @@ export default function CacheMetricsPage() {
         return <Badge variant="secondary">Unknown</Badge>;
     }
   };
+
+  // Show skeleton loader on initial load (not on refresh)
+  if (isLoading && !cacheData) {
+    return <CacheMetricsSkeleton />;
+  }
 
   return (
     <div className="space-y-6">

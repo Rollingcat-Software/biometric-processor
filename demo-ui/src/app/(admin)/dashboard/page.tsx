@@ -22,6 +22,7 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
+import { DashboardSkeleton } from '@/components/ui/skeleton';
 import { useAdminStats } from '@/hooks/use-admin-stats';
 import { useDetailedHealth } from '@/hooks/use-api-health';
 import { formatDuration } from '@/lib/utils';
@@ -75,6 +76,11 @@ export default function AdminDashboardPage() {
     if (days > 0) return `${days}d ${hours % 24}h`;
     return `${hours}h`;
   };
+
+  // Show skeleton loader while loading
+  if (isLoading) {
+    return <DashboardSkeleton />;
+  }
 
   return (
     <div className="space-y-6">
