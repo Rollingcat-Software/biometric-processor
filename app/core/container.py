@@ -18,6 +18,7 @@ from app.application.use_cases.check_liveness import CheckLivenessUseCase
 
 # Application use cases
 from app.application.use_cases.enroll_face import EnrollFaceUseCase
+from app.application.use_cases.enroll_multi_image import EnrollMultiImageUseCase
 from app.application.use_cases.search_face import SearchFaceUseCase
 from app.application.use_cases.verify_face import VerifyFaceUseCase
 from app.core.config import settings
@@ -256,6 +257,20 @@ def get_enroll_face_use_case() -> EnrollFaceUseCase:
         EnrollFaceUseCase with all dependencies injected
     """
     return EnrollFaceUseCase(
+        detector=get_face_detector(),
+        extractor=get_embedding_extractor(),
+        quality_assessor=get_quality_assessor(),
+        repository=get_embedding_repository(),
+    )
+
+
+def get_enroll_multi_image_use_case() -> EnrollMultiImageUseCase:
+    """Get multi-image enrollment use case instance.
+
+    Returns:
+        EnrollMultiImageUseCase with all dependencies injected
+    """
+    return EnrollMultiImageUseCase(
         detector=get_face_detector(),
         extractor=get_embedding_extractor(),
         quality_assessor=get_quality_assessor(),
