@@ -172,3 +172,37 @@ class EmbeddingExtractionError(BiometricProcessorError):
         result = super().to_dict()
         result["reason"] = self.reason
         return result
+
+
+class MLModelTimeoutError(BiometricProcessorError):
+    """Raised when ML model operation exceeds timeout.
+
+    This prevents requests from hanging indefinitely when ML models
+    become unresponsive due to:
+    - Model loading issues
+    - Resource exhaustion (CPU/GPU/memory)
+    - Infrastructure problems
+    - Deadlocks in underlying libraries
+    """
+
+    def __init__(self, operation: str, timeout_seconds: int) -> None:
+        """Initialize ML model timeout error.
+
+        Args:
+            operation: Name of the operation that timed out
+            timeout_seconds: Configured timeout in seconds
+        """
+        super().__init__(
+            message=f"ML model operation timed out: {operation} exceeded {timeout_seconds}s timeout. "
+            f"Please try again or contact support if the issue persists.",
+            error_code="ML_MODEL_TIMEOUT",
+        )
+        self.operation = operation
+        self.timeout_seconds = timeout_seconds
+
+    def to_dict(self) -> dict:
+        """Include timeout details in error response."""
+        result = super().to_dict()
+        result["operation"] = self.operation
+        result["timeout_seconds"] = self.timeout_seconds
+        return result

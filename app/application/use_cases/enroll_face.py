@@ -77,61 +77,75 @@ class EnrollFaceUseCase:
         """
         logger.info(f"Starting face enrollment for user_id={user_id}, tenant_id={tenant_id}")
 
-        # Step 1: Load image
-        image = cv2.imread(image_path)
-        if image is None:
-            raise ValueError(f"Failed to load image: {image_path}")
+        # Initialize image variables for cleanup in finally block
+        image = None
+        face_region = None
 
-        # Step 2: Detect face
-        logger.debug("Step 1/4: Detecting face...")
-        detection = await self._detector.detect(image)
+        try:
+            # Step 1: Load image
+            image = cv2.imread(image_path)
+            if image is None:
+                raise ValueError(f"Failed to load image: {image_path}")
 
-        # Step 3: Extract face region using bounding box
-        logger.debug("Step 2/4: Extracting face region...")
-        face_region = detection.get_face_region(image)
+            # Step 2: Detect face
+            logger.debug("Step 1/4: Detecting face...")
+            detection = await self._detector.detect(image)
 
-        # Step 4: Assess quality
-        logger.debug("Step 3/4: Assessing quality...")
-        quality = await self._quality_assessor.assess(face_region)
+            # Step 3: Extract face region using bounding box
+            logger.debug("Step 2/4: Extracting face region...")
+            face_region = detection.get_face_region(image)
 
-        if not quality.is_acceptable:
-            issues = quality.get_issues()
-            logger.warning(
-                f"Quality check failed: score={quality.score:.1f}, "
-                f"issues={issues}"
-            )
-            raise PoorImageQualityError(
+            # Step 4: Assess quality
+            logger.debug("Step 3/4: Assessing quality...")
+            quality = await self._quality_assessor.assess(face_region)
+
+            if not quality.is_acceptable:
+                issues = quality.get_issues()
+                logger.warning(
+                    f"Quality check failed: score={quality.score:.1f}, "
+                    f"issues={issues}"
+                )
+                raise PoorImageQualityError(
+                    quality_score=quality.score,
+                    min_threshold=self._quality_assessor.get_minimum_acceptable_score(),
+                    issues=issues,
+                )
+
+            logger.info(f"Quality check passed: score={quality.score:.1f}")
+
+            # Step 5: Extract embedding
+            logger.debug("Step 4/4: Extracting embedding...")
+            embedding_vector = await self._extractor.extract(face_region)
+
+            # Step 6: Save to repository
+            await self._repository.save(
+                user_id=user_id,
+                embedding=embedding_vector,
                 quality_score=quality.score,
-                min_threshold=self._quality_assessor.get_minimum_acceptable_score(),
-                issues=issues,
+                tenant_id=tenant_id,
             )
 
-        logger.info(f"Quality check passed: score={quality.score:.1f}")
+            # Step 7: Create and return result entity
+            face_embedding = FaceEmbedding.create_new(
+                user_id=user_id,
+                vector=embedding_vector,
+                quality_score=quality.score,
+                tenant_id=tenant_id,
+            )
 
-        # Step 5: Extract embedding
-        logger.debug("Step 4/4: Extracting embedding...")
-        embedding_vector = await self._extractor.extract(face_region)
+            logger.info(
+                f"Enrollment completed successfully for user_id={user_id}, "
+                f"quality={quality.score:.1f}, "
+                f"embedding_dim={len(embedding_vector)}"
+            )
 
-        # Step 6: Save to repository
-        await self._repository.save(
-            user_id=user_id,
-            embedding=embedding_vector,
-            quality_score=quality.score,
-            tenant_id=tenant_id,
-        )
+            return face_embedding
 
-        # Step 7: Create and return result entity
-        face_embedding = FaceEmbedding.create_new(
-            user_id=user_id,
-            vector=embedding_vector,
-            quality_score=quality.score,
-            tenant_id=tenant_id,
-        )
-
-        logger.info(
-            f"Enrollment completed successfully for user_id={user_id}, "
-            f"quality={quality.score:.1f}, "
-            f"embedding_dim={len(embedding_vector)}"
-        )
-
-        return face_embedding
+        finally:
+            # CRITICAL: Explicitly release CV2 images to prevent memory leaks
+            # Each image can be 10-50 MB depending on resolution
+            # Without explicit cleanup, GC may not collect immediately
+            if image is not None:
+                del image
+            if face_region is not None:
+                del face_region
