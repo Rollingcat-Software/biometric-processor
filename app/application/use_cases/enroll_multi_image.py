@@ -126,6 +126,10 @@ class EnrollMultiImageUseCase:
         for i, image_path in enumerate(image_paths, start=1):
             logger.debug(f"Processing image {i}/{len(image_paths)}: {image_path}")
 
+            # Initialize image variable for cleanup in finally block
+            image = None
+            face_region = None
+
             try:
                 # Load image
                 image = cv2.imread(image_path)
@@ -203,6 +207,15 @@ class EnrollMultiImageUseCase:
                 quality_scores.clear()
 
                 raise
+
+            finally:
+                # CRITICAL: Explicitly release CV2 images to prevent memory leaks
+                # Each image can be 10-50 MB depending on resolution
+                # Without explicit cleanup, GC may not collect immediately
+                if image is not None:
+                    del image
+                if face_region is not None:
+                    del face_region
 
         # Step 4: Verify we have enough images
         if not session.is_ready_for_fusion():
