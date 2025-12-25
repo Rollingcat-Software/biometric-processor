@@ -43,7 +43,7 @@ export default function CardDetectionPage() {
         await videoRef.current.play();
         setIsStreaming(true);
       }
-    } catch (err) {
+    } catch {
       toast.error('Camera Error', { description: 'Failed to access camera' });
     }
   }, []);

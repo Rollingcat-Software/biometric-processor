@@ -85,7 +85,7 @@ export default function RealtimePage() {
         await videoRef.current.play();
         setIsStreaming(true);
       }
-    } catch (err) {
+    } catch {
       toast.error('Camera Error', {
         description: 'Failed to access camera',
       });

@@ -129,7 +129,7 @@ export function useWebSocket({
         stopHeartbeat();
         onError?.(error);
       };
-    } catch (error) {
+    } catch {
       setStatus('error');
       stopHeartbeat();
     }

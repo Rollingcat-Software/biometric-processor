@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 
 from app.application.use_cases.enroll_face import EnrollFaceUseCase
-from app.domain.entities.face_detection import FaceDetection
+from app.domain.entities.face_detection import FaceDetectionResult
 from app.domain.entities.face_embedding import FaceEmbedding
 from app.domain.entities.liveness_result import LivenessResult
 from app.domain.entities.quality_assessment import QualityAssessment
@@ -101,7 +101,7 @@ def valid_image_data():
 @pytest.fixture
 def valid_face_detection():
     """Valid face detection result."""
-    return FaceDetection(
+    return FaceDetectionResult(
         confidence=0.99,
         bounding_box=(100, 100, 200, 200),
         landmarks={
