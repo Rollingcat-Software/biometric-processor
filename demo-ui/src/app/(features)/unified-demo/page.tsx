@@ -29,7 +29,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { ImageUploader } from '@/components/media/image-uploader';
 import { WebcamCapture } from '@/components/media/webcam-capture';
-import { LiveCameraStream } from '@/components/media/live-camera-stream';
+import { EnhancedLiveStream } from '@/components/demo/enhanced-live-stream';
 import { toast } from 'sonner';
 import type { LiveAnalysisResult, AnalysisMode } from '@/hooks/use-live-camera-analysis';
 import { AnalysisResultRenderer } from '@/components/demo/analysis-result-renderer';
@@ -423,7 +423,7 @@ export default function UnifiedDemoPage() {
 
               {/* Live Stream */}
               {inputMode === 'live' && (
-                <LiveCameraStream mode={analysisMode} onResult={handleLiveResult} disabled={false} />
+                <EnhancedLiveStream mode={analysisMode} onResult={handleLiveResult} />
               )}
 
               {/* Action Buttons */}
