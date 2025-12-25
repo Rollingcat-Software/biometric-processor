@@ -49,7 +49,7 @@ async function checkDetailedHealth(): Promise<DetailedHealthResponse> {
  * Liveness probe - indicates if application is running
  */
 async function checkLiveness(): Promise<LivenessResponse> {
-  return apiClient.get<LivenessResponse>('/health/live', {
+  return apiClient.get<LivenessResponse>('/api/v1/health/live', {
     retry: false,
     timeout: 5000, // 5 second timeout
   });
@@ -59,7 +59,7 @@ async function checkLiveness(): Promise<LivenessResponse> {
  * Readiness probe - indicates if application is ready to serve traffic
  */
 async function checkReadiness(): Promise<ReadinessResponse> {
-  return apiClient.get<ReadinessResponse>('/health/ready', {
+  return apiClient.get<ReadinessResponse>('/api/v1/health/ready', {
     retry: false,
     timeout: 10000, // 10 second timeout
   });
