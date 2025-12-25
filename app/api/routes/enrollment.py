@@ -11,6 +11,7 @@ from app.application.use_cases.enroll_face import EnrollFaceUseCase
 from app.application.use_cases.enroll_multi_image import EnrollMultiImageUseCase
 from app.core.config import settings
 from app.core.container import get_enroll_face_use_case, get_enroll_multi_image_use_case, get_file_storage
+from app.core.validation import ValidationError, validate_user_id, validate_tenant_id
 from app.domain.interfaces.file_storage import IFileStorage
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,14 @@ async def enroll_face(
     image_path = None
 
     try:
+        # Validate input parameters for security
+        try:
+            user_id = validate_user_id(user_id)
+            tenant_id = validate_tenant_id(tenant_id)
+        except ValidationError as e:
+            logger.warning(f"Input validation failed: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Invalid input: {str(e)}")
+
         logger.info(f"Enrollment request: user_id={user_id}, tenant_id={tenant_id}")
 
         # Validate file type
@@ -120,6 +129,14 @@ async def enroll_face_multi_image(
     image_paths = []
 
     try:
+        # Validate input parameters for security
+        try:
+            user_id = validate_user_id(user_id)
+            tenant_id = validate_tenant_id(tenant_id)
+        except ValidationError as e:
+            logger.warning(f"Input validation failed: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Invalid input: {str(e)}")
+
         logger.info(
             f"Multi-image enrollment request: user_id={user_id}, "
             f"images={len(files)}, tenant_id={tenant_id}"
@@ -161,20 +178,17 @@ async def enroll_face_multi_image(
             user_id=user_id, image_paths=image_paths, tenant_id=tenant_id
         )
 
-        # Calculate individual quality scores from the session
-        # (In production, you might want to return these from the use case)
-        individual_scores = [70.0] * len(files)  # Placeholder
-
+        # Use actual quality scores from the enrollment result
         return MultiImageEnrollmentResponse(
             success=True,
             user_id=result.user_id,
-            images_processed=len(files),
-            fused_quality_score=result.quality_score,
-            average_quality_score=result.quality_score,  # Approximation
-            individual_quality_scores=individual_scores,
+            images_processed=result.images_processed,
+            fused_quality_score=result.fused_quality_score,
+            average_quality_score=result.average_quality_score,
+            individual_quality_scores=result.individual_quality_scores,
             message="Multi-image enrollment completed successfully",
-            embedding_dimension=result.get_embedding_dimension(),
-            fusion_strategy=settings.MULTI_IMAGE_FUSION_STRATEGY,
+            embedding_dimension=result.embedding_dimension,
+            fusion_strategy=result.fusion_strategy,
         )
 
     finally:

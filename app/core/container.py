@@ -73,6 +73,7 @@ from app.infrastructure.persistence.repositories.memory_embedding_repository imp
 from app.infrastructure.persistence.repositories.pgvector_embedding_repository import (
     PgVectorEmbeddingRepository,
 )
+from app.infrastructure.cache.cached_embedding_repository import CachedEmbeddingRepository
 from app.infrastructure.storage.local_file_storage import LocalFileStorage
 
 logger = logging.getLogger(__name__)
@@ -154,13 +155,16 @@ def get_embedding_repository() -> IEmbeddingRepository:
 
     Returns:
         Embedding repository implementation based on configuration
+        Optionally wrapped with caching layer if EMBEDDING_CACHE_ENABLED=True
 
     Note:
         - If USE_PGVECTOR=True: Returns PgVectorEmbeddingRepository (production)
         - If USE_PGVECTOR=False: Returns InMemoryEmbeddingRepository (development/testing)
+        - If EMBEDDING_CACHE_ENABLED=True: Wraps repository with CachedEmbeddingRepository
 
-        Set USE_PGVECTOR environment variable to control which implementation is used.
+        Set USE_PGVECTOR and EMBEDDING_CACHE_ENABLED environment variables to control behavior.
     """
+    # Create base repository
     if settings.USE_PGVECTOR:
         if not settings.DATABASE_URL:
             raise ValueError("DATABASE_URL must be set when USE_PGVECTOR=True")
@@ -169,7 +173,7 @@ def get_embedding_repository() -> IEmbeddingRepository:
             f"Creating embedding repository (pgvector) - "
             f"dimension={settings.EMBEDDING_DIMENSION}"
         )
-        return PgVectorEmbeddingRepository(
+        base_repository = PgVectorEmbeddingRepository(
             database_url=settings.DATABASE_URL,
             pool_min_size=settings.DATABASE_POOL_MIN_SIZE,
             pool_max_size=settings.DATABASE_POOL_MAX_SIZE,
@@ -177,7 +181,23 @@ def get_embedding_repository() -> IEmbeddingRepository:
         )
     else:
         logger.info("Creating embedding repository (in-memory)")
-        return InMemoryEmbeddingRepository()
+        base_repository = InMemoryEmbeddingRepository()
+
+    # Optionally wrap with caching
+    if settings.EMBEDDING_CACHE_ENABLED:
+        logger.info(
+            f"Wrapping repository with cache: "
+            f"ttl={settings.EMBEDDING_CACHE_TTL_SECONDS}s, "
+            f"max_size={settings.EMBEDDING_CACHE_MAX_SIZE}"
+        )
+        return CachedEmbeddingRepository(
+            repository=base_repository,
+            cache_ttl_seconds=settings.EMBEDDING_CACHE_TTL_SECONDS,
+            max_cache_size=settings.EMBEDDING_CACHE_MAX_SIZE,
+        )
+    else:
+        logger.info("Cache disabled - using repository directly")
+        return base_repository
 
 
 @lru_cache()

@@ -10,6 +10,7 @@ import numpy as np
 from app.core.config import settings
 from app.domain.entities.enrollment_session import EnrollmentSession
 from app.domain.entities.face_embedding import FaceEmbedding
+from app.domain.entities.multi_image_enrollment_result import MultiImageEnrollmentResult
 from app.domain.exceptions.enrollment_errors import (
     FusionError,
     InsufficientImagesError,
@@ -74,7 +75,7 @@ class EnrollMultiImageUseCase:
         user_id: str,
         image_paths: List[str],
         tenant_id: Optional[str] = None,
-    ) -> FaceEmbedding:
+    ) -> MultiImageEnrollmentResult:
         """Execute multi-image face enrollment.
 
         Args:
@@ -83,7 +84,7 @@ class EnrollMultiImageUseCase:
             tenant_id: Optional tenant identifier for multi-tenancy
 
         Returns:
-            FaceEmbedding entity with fused template
+            MultiImageEnrollmentResult with fused template and quality details
 
         Raises:
             InvalidImageCountError: When number of images is not 2-5
@@ -214,7 +215,7 @@ class EnrollMultiImageUseCase:
         # Step 7: Mark session as completed
         session.mark_completed()
 
-        # Step 8: Create and return result entity
+        # Step 8: Create face embedding entity
         face_embedding = FaceEmbedding.create_new(
             user_id=user_id,
             vector=fused_embedding,
@@ -222,11 +223,20 @@ class EnrollMultiImageUseCase:
             tenant_id=tenant_id,
         )
 
+        # Step 9: Create comprehensive result with all quality details
+        result = MultiImageEnrollmentResult.create(
+            face_embedding=face_embedding,
+            individual_quality_scores=quality_scores,
+            fusion_strategy=settings.MULTI_IMAGE_FUSION_STRATEGY,
+        )
+
         logger.info(
             f"Multi-image enrollment completed successfully: "
             f"user_id={user_id}, images={len(embeddings)}, "
+            f"avg_quality={result.average_quality_score:.1f}, "
             f"fused_quality={fused_quality:.1f}, "
+            f"quality_improvement={result.get_quality_improvement():.1f}%, "
             f"embedding_dim={len(fused_embedding)}"
         )
 
-        return face_embedding
+        return result

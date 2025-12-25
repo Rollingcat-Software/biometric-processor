@@ -175,6 +175,11 @@ class Settings(BaseSettings):
     MULTI_IMAGE_NORMALIZATION: Literal["l2", "none"] = Field(default="l2")
     MULTI_IMAGE_MIN_QUALITY_PER_IMAGE: float = Field(default=60.0, ge=0.0, le=100.0)
 
+    # Embedding Cache Settings
+    EMBEDDING_CACHE_ENABLED: bool = Field(default=True, description="Enable LRU cache for embedding lookups")
+    EMBEDDING_CACHE_TTL_SECONDS: int = Field(default=300, ge=60, le=3600, description="Cache TTL in seconds (1 min to 1 hour)")
+    EMBEDDING_CACHE_MAX_SIZE: int = Field(default=1000, ge=100, le=10000, description="Maximum cached embeddings (100 to 10000)")
+
     # API Key Authentication
     API_KEY_ENABLED: bool = Field(default=False)
     API_KEY_REQUIRE_AUTH: bool = Field(default=False)
