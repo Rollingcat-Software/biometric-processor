@@ -120,7 +120,7 @@ export default function ProctoringSessionPage() {
         await videoRef.current.play();
         setIsStreaming(true);
       }
-    } catch (err) {
+    } catch {
       toast.error('Camera Error', {
         description: 'Failed to access camera',
       });
@@ -213,7 +213,7 @@ export default function ProctoringSessionPage() {
     try {
       await createSession(userId, examId);
       await startCamera();
-    } catch (err) {
+    } catch {
       toast.error('Failed to create session', {
         description: err instanceof Error ? err.message : 'Unknown error',
       });
@@ -262,7 +262,7 @@ export default function ProctoringSessionPage() {
       }
 
       await startSession(baselineImage);
-    } catch (err) {
+    } catch {
       toast.error('Failed to start session', {
         description: err instanceof Error ? err.message : 'Unknown error',
       });
@@ -277,7 +277,7 @@ export default function ProctoringSessionPage() {
       await pauseSession();
       console.log('Pause successful');
       toast.success('Session paused');
-    } catch (err) {
+    } catch {
       console.error('Pause failed:', err);
       // Re-enable streaming if pause failed and session is still active
       if (sessionStatus === 'active') {
@@ -298,7 +298,7 @@ export default function ProctoringSessionPage() {
       console.log('End successful');
       stopCamera();
       toast.success('Session ended');
-    } catch (err) {
+    } catch {
       console.error('End failed:', err);
       toast.error('Failed to end session', {
         description: err instanceof Error ? err.message : 'Unknown error',

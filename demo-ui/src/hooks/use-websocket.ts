@@ -83,7 +83,7 @@ export function useWebSocket({
         setStatus('error');
         onError?.(error);
       };
-    } catch (error) {
+    } catch {
       setStatus('error');
     }
   }, [url, onMessage, onOpen, onClose, onError, reconnect, reconnectInterval, reconnectAttempts]);
