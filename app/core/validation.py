@@ -6,9 +6,12 @@ This module provides validation functions for user inputs to prevent:
 - Command injection
 - XSS attacks
 - Invalid data formats
+- File type spoofing
 """
 
+import imghdr
 import re
+from pathlib import Path
 from typing import Optional
 
 # Patterns for validation
@@ -284,3 +287,68 @@ def validate_positive_integer(value: int, name: str = "value", max_val: int = No
         raise ValidationError(f"{name} must be <= {max_val}, got {value}")
 
     return value
+
+
+def validate_image_file(file_path: str, allowed_formats: list[str] = None) -> str:
+    """Validate file is actually an image by checking magic bytes.
+
+    This function performs actual file content validation instead of trusting
+    the Content-Type header, which can be easily spoofed by attackers.
+
+    Args:
+        file_path: Path to the file to validate
+        allowed_formats: List of allowed image formats (default: ['jpeg', 'png', 'gif', 'bmp'])
+
+    Returns:
+        Detected image format (e.g., 'jpeg', 'png')
+
+    Raises:
+        ValidationError: If file is not a valid image or format not allowed
+
+    Security:
+        - Detects actual file type using magic bytes (file signatures)
+        - Prevents file type confusion attacks
+        - Prevents malware disguised as images
+        - Does not trust Content-Type headers
+
+    Examples:
+        >>> validate_image_file("/tmp/photo.jpg")
+        'jpeg'
+        >>> validate_image_file("/tmp/malware.exe")  # raises ValidationError
+        >>> validate_image_file("/tmp/script.jpg")  # raises ValidationError if not actual image
+    """
+    if allowed_formats is None:
+        allowed_formats = ['jpeg', 'png', 'gif', 'bmp']
+
+    # Convert formats to lowercase for comparison
+    allowed_formats = [fmt.lower() for fmt in allowed_formats]
+
+    # Check file exists
+    if not Path(file_path).exists():
+        raise ValidationError(f"File not found: {file_path}")
+
+    # Detect actual file type using magic bytes
+    try:
+        detected_type = imghdr.what(file_path)
+    except Exception as e:
+        raise ValidationError(f"Failed to detect image type: {str(e)}")
+
+    # Check if file is actually an image
+    if detected_type is None:
+        raise ValidationError(
+            "File is not a valid image. File type detection failed. "
+            "Please upload a valid JPEG, PNG, GIF, or BMP image."
+        )
+
+    # Normalize detected type (imghdr returns 'jpeg' for both jpg and jpeg)
+    if detected_type == 'jpeg':
+        detected_type = 'jpeg'  # Already normalized
+
+    # Check if format is allowed
+    if detected_type not in allowed_formats:
+        raise ValidationError(
+            f"Image format not allowed. Detected: {detected_type}, "
+            f"Allowed: {', '.join(allowed_formats)}"
+        )
+
+    return detected_type

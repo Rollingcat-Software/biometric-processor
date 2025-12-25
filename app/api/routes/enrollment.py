@@ -11,7 +11,7 @@ from app.application.use_cases.enroll_face import EnrollFaceUseCase
 from app.application.use_cases.enroll_multi_image import EnrollMultiImageUseCase
 from app.core.config import settings
 from app.core.container import get_enroll_face_use_case, get_enroll_multi_image_use_case, get_file_storage
-from app.core.validation import ValidationError, validate_user_id, validate_tenant_id
+from app.core.validation import ValidationError, validate_image_file, validate_user_id, validate_tenant_id
 from app.domain.interfaces.file_storage import IFileStorage
 
 logger = logging.getLogger(__name__)
@@ -63,12 +63,22 @@ async def enroll_face(
 
         logger.info(f"Enrollment request: user_id={user_id}, tenant_id={tenant_id}")
 
-        # Validate file type
+        # Validate file type (basic header check for early rejection)
         if not file.content_type or not file.content_type.startswith("image/"):
             raise HTTPException(status_code=400, detail="File must be an image")
 
         # Save uploaded file temporarily
         image_path = await storage.save_temp(file)
+
+        # SECURITY: Validate actual file type using magic bytes (not just Content-Type header)
+        # This prevents file type confusion attacks and malware disguised as images
+        try:
+            detected_format = validate_image_file(image_path, allowed_formats=settings.ALLOWED_IMAGE_FORMATS)
+            logger.debug(f"File type validated: {detected_format}")
+        except ValidationError as e:
+            logger.warning(f"File type validation failed: {str(e)}")
+            await storage.cleanup(image_path)  # Clean up invalid file immediately
+            raise HTTPException(status_code=400, detail=str(e))
 
         # Execute enrollment use case
         result = await use_case.execute(user_id=user_id, image_path=image_path, tenant_id=tenant_id)
@@ -159,7 +169,7 @@ async def enroll_face_multi_image(
                 detail=f"Must provide between {min_images} and {max_images} images, got {len(files)}",
             )
 
-        # Validate all files are images
+        # Validate all files are images (basic header check for early rejection)
         for i, file in enumerate(files, start=1):
             if not file.content_type or not file.content_type.startswith("image/"):
                 raise HTTPException(
@@ -172,6 +182,18 @@ async def enroll_face_multi_image(
             logger.debug(f"Saving temporary file {i}/{len(files)}")
             image_path = await storage.save_temp(file)
             image_paths.append(image_path)
+
+            # SECURITY: Validate actual file type using magic bytes (not just Content-Type header)
+            # This prevents file type confusion attacks and malware disguised as images
+            try:
+                detected_format = validate_image_file(image_path, allowed_formats=settings.ALLOWED_IMAGE_FORMATS)
+                logger.debug(f"File {i} type validated: {detected_format}")
+            except ValidationError as e:
+                logger.warning(f"File {i} type validation failed: {str(e)}")
+                # Clean up all uploaded files on validation failure
+                for path in image_paths:
+                    await storage.cleanup(path)
+                raise HTTPException(status_code=400, detail=f"File {i}: {str(e)}")
 
         # Execute multi-image enrollment use case
         result = await use_case.execute(
