@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     LIVENESS_THRESHOLD: float = Field(default=70.0, ge=0.0, le=100.0)
     QUALITY_THRESHOLD: float = Field(default=70.0, ge=0.0, le=100.0)
 
+    # ML Model Timeouts (prevents hung requests)
+    ML_MODEL_TIMEOUT_SECONDS: int = Field(default=30, ge=5, le=120, description="Timeout for ML model operations")
+
     # Liveness Detection Mode
     LIVENESS_MODE: Literal["passive", "active", "combined"] = Field(default="combined")
 

@@ -1,5 +1,6 @@
 """Multi-image face enrollment use case."""
 
+import asyncio
 import logging
 import uuid
 from typing import List, Optional
@@ -15,6 +16,7 @@ from app.domain.exceptions.enrollment_errors import (
     FusionError,
     InsufficientImagesError,
     InvalidImageCountError,
+    MLModelTimeoutError,
 )
 from app.domain.exceptions.face_errors import PoorImageQualityError
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
@@ -130,17 +132,29 @@ class EnrollMultiImageUseCase:
                 if image is None:
                     raise ValueError(f"Failed to load image: {image_path}")
 
-                # Detect face
+                # Detect face with timeout
                 logger.debug(f"  Step 1/3: Detecting face...")
-                detection = await self._detector.detect(image)
+                try:
+                    detection = await asyncio.wait_for(
+                        self._detector.detect(image),
+                        timeout=settings.ML_MODEL_TIMEOUT_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    raise MLModelTimeoutError("face_detection", settings.ML_MODEL_TIMEOUT_SECONDS)
 
                 # Extract face region
                 logger.debug(f"  Step 2/3: Extracting face region...")
                 face_region = detection.get_face_region(image)
 
-                # Assess quality
+                # Assess quality with timeout
                 logger.debug(f"  Step 3/3: Assessing quality...")
-                quality = await self._quality_assessor.assess(face_region)
+                try:
+                    quality = await asyncio.wait_for(
+                        self._quality_assessor.assess(face_region),
+                        timeout=settings.ML_MODEL_TIMEOUT_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    raise MLModelTimeoutError("quality_assessment", settings.ML_MODEL_TIMEOUT_SECONDS)
 
                 # Check if quality meets minimum threshold for multi-image enrollment
                 min_quality = settings.MULTI_IMAGE_MIN_QUALITY_PER_IMAGE
@@ -159,8 +173,14 @@ class EnrollMultiImageUseCase:
 
                 logger.info(f"  Image {i} quality check passed: score={quality.score:.1f}")
 
-                # Extract embedding
-                embedding_vector = await self._extractor.extract(face_region)
+                # Extract embedding with timeout
+                try:
+                    embedding_vector = await asyncio.wait_for(
+                        self._extractor.extract(face_region),
+                        timeout=settings.ML_MODEL_TIMEOUT_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    raise MLModelTimeoutError("embedding_extraction", settings.ML_MODEL_TIMEOUT_SECONDS)
 
                 # Add to session
                 session.add_submission(
