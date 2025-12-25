@@ -229,9 +229,29 @@ class CircuitBreaker(Generic[T]):
 
 
 # Pre-configured circuit breakers for ML components
+FACE_DETECTOR_BREAKER = CircuitBreaker(
+    CircuitBreakerConfig(failure_threshold=5, success_threshold=2, timeout_seconds=30.0),
+    name="face_detector",
+)
+
+EMBEDDING_EXTRACTOR_BREAKER = CircuitBreaker(
+    CircuitBreakerConfig(failure_threshold=5, success_threshold=2, timeout_seconds=30.0),
+    name="embedding_extractor",
+)
+
+QUALITY_ASSESSOR_BREAKER = CircuitBreaker(
+    CircuitBreakerConfig(failure_threshold=5, success_threshold=2, timeout_seconds=30.0),
+    name="quality_assessor",
+)
+
 FACE_VERIFIER_BREAKER = CircuitBreaker(
     CircuitBreakerConfig(failure_threshold=3, success_threshold=2, timeout_seconds=30.0),
     name="face_verifier",
+)
+
+LIVENESS_DETECTOR_BREAKER = CircuitBreaker(
+    CircuitBreakerConfig(failure_threshold=5, success_threshold=2, timeout_seconds=30.0),
+    name="liveness_detector",
 )
 
 DEEPFAKE_DETECTOR_BREAKER = CircuitBreaker(

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from app.api.schemas.verification import VerificationResponse
 from app.application.use_cases.verify_face import VerifyFaceUseCase
 from app.core.container import get_file_storage, get_verify_face_use_case
+from app.core.validation import ValidationError, validate_user_id, validate_tenant_id
 from app.domain.interfaces.file_storage import IFileStorage
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,14 @@ async def verify_face(
     image_path = None
 
     try:
+        # Validate input parameters for security
+        try:
+            user_id = validate_user_id(user_id)
+            tenant_id = validate_tenant_id(tenant_id)
+        except ValidationError as e:
+            logger.warning(f"Input validation failed: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Invalid input: {str(e)}")
+
         logger.info(f"Verification request: user_id={user_id}, tenant_id={tenant_id}")
 
         # Validate file type

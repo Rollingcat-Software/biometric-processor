@@ -1,5 +1,6 @@
 """PostgreSQL embedding repository with pgvector for similarity search."""
 
+import ast
 import logging
 from datetime import datetime
 from typing import List, Optional, Tuple
@@ -175,7 +176,8 @@ class PostgresEmbeddingRepository:
 
             # Parse vector string back to numpy array
             embedding_str = row["embedding"]
-            embedding_list = eval(embedding_str)  # pgvector returns as string
+            # Use ast.literal_eval() for safe parsing (prevents code injection)
+            embedding_list = ast.literal_eval(embedding_str)  # pgvector returns as string
             return np.array(embedding_list, dtype=np.float32)
 
         except Exception as e:
