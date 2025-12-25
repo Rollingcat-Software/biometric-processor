@@ -19,10 +19,12 @@ services:
       - API_PORT=8001
       - RATE_LIMIT_ENABLED=true
       - RATE_LIMIT_STORAGE=redis
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
       - METRICS_ENABLED=true
       - DATABASE_URL=postgresql://biometric:biometric@postgres:5432/biometric
-      - EMBEDDING_STORAGE=postgres
+      - EMBEDDING_REPOSITORY_BACKEND=postgres
     volumes:
       - upload_data:/app/temp_uploads
     depends_on:
