@@ -1,6 +1,5 @@
 /**
  * API Response Types for Biometric Processor
- * Updated to match actual backend response formats
  */
 
 // Base response wrapper
@@ -25,7 +24,14 @@ export interface ServiceHealth {
   message?: string;
 }
 
-// Bounding box - used across multiple endpoints
+// Face detection
+export interface FaceDetectionResult {
+  face_id: string;
+  bounding_box: BoundingBox;
+  confidence: number;
+  landmarks?: FacialLandmarks;
+}
+
 export interface BoundingBox {
   x: number;
   y: number;
@@ -33,60 +39,16 @@ export interface BoundingBox {
   height: number;
 }
 
-// Landmark point
+export interface FacialLandmarks {
+  points: LandmarkPoint[];
+  model: string;
+}
+
 export interface LandmarkPoint {
   x: number;
   y: number;
   z?: number;
   label?: string;
-}
-
-// Face detection - single face
-export interface FaceDetectionResult {
-  face_detected: boolean;
-  confidence: number;
-  quality_score: number;
-  bounding_box: BoundingBox;
-  face_id?: number;
-}
-
-// Multi-face detection
-export interface MultiFaceDetectionResponse {
-  face_count: number;
-  faces: DetectedFace[];
-  image_dimensions: {
-    width: number;
-    height: number;
-  };
-}
-
-export interface DetectedFace {
-  face_id: number;
-  bounding_box: BoundingBox;
-  confidence: number;
-  quality_score: number;
-  landmarks?: Array<{ x: number; y: number }>;
-}
-
-// Facial landmarks detection
-export interface LandmarkDetectionResponse {
-  landmarks: LandmarkPoint[];
-  landmark_count: number;
-  model: string;
-  regions?: {
-    left_eye?: LandmarkPoint[];
-    right_eye?: LandmarkPoint[];
-    nose?: LandmarkPoint[];
-    mouth?: LandmarkPoint[];
-    face_contour?: LandmarkPoint[];
-    left_eyebrow?: LandmarkPoint[];
-    right_eyebrow?: LandmarkPoint[];
-  };
-  head_pose?: {
-    pitch: number;
-    yaw: number;
-    roll: number;
-  };
 }
 
 // Face enrollment
@@ -97,38 +59,28 @@ export interface EnrollmentRequest {
 }
 
 export interface EnrollmentResponse {
-  user_id: string;
-  embedding_id: string;
   success: boolean;
-  message: string;
-  quality_score?: number;
-  created_at?: string;
+  face_id: string;
+  person_id: string;
+  quality_score: number;
+  embedding_id: string;
+  message?: string;
 }
 
-// Face comparison/verification
-export interface ComparisonRequest {
+// Face verification
+export interface VerificationRequest {
   image1: File | Blob;
   image2: File | Blob;
   threshold?: number;
 }
 
-export interface ComparisonResponse {
+export interface VerificationResponse {
   match: boolean;
   similarity: number;
-  distance: number;
   threshold: number;
-  confidence: string;
-  face1: {
-    detected: boolean;
-    quality_score: number;
-    bounding_box: BoundingBox;
-  };
-  face2: {
-    detected: boolean;
-    quality_score: number;
-    bounding_box: BoundingBox;
-  };
-  message: string;
+  processing_time_ms: number;
+  face1: FaceDetectionResult;
+  face2: FaceDetectionResult;
 }
 
 // Face search
@@ -140,14 +92,15 @@ export interface SearchRequest {
 
 export interface SearchResponse {
   matches: SearchMatch[];
-  total_searched: number;
-  query_embedding_id?: string;
+  processing_time_ms: number;
+  query_face: FaceDetectionResult;
 }
 
 export interface SearchMatch {
-  user_id: string;
+  person_id: string;
+  face_id: string;
   similarity: number;
-  embedding_id: string;
+  metadata?: Record<string, unknown>;
 }
 
 // Liveness detection
@@ -159,9 +112,9 @@ export interface LivenessRequest {
 export interface LivenessResponse {
   is_live: boolean;
   liveness_score: number;
-  challenge?: string;
-  challenge_completed?: boolean;
-  message?: string;
+  spoof_type?: string;
+  processing_time_ms: number;
+  checks: LivenessCheck[];
 }
 
 export interface LivenessCheck {
@@ -178,55 +131,33 @@ export interface QualityAnalysisRequest {
 
 export interface QualityAnalysisResponse {
   overall_score: number;
-  passed: boolean;
-  issues: QualityIssue[];
+  grade: QualityGrade;
   metrics: QualityMetrics;
-}
-
-export interface QualityIssue {
-  code: string;
-  severity: string;
-  message: string;
-  value: number;
-  threshold: number;
-  suggestion: string;
-}
-
-export interface QualityMetrics {
-  blur_score: number;
-  brightness: number;
-  face_size: number;
-  face_angle: number;
-  occlusion: number;
+  recommendations?: string[];
 }
 
 export type QualityGrade = 'excellent' | 'good' | 'acceptable' | 'poor' | 'failed';
 
-// Demographics analysis
+export interface QualityMetrics {
+  brightness: number;
+  contrast: number;
+  sharpness: number;
+  pose_deviation: number;
+  face_size: number;
+  occlusion: number;
+  expression_neutrality: number;
+}
+
+// Demographics
 export interface DemographicsRequest {
   image: File | Blob;
 }
 
 export interface DemographicsResponse {
-  age: {
-    value: number;
-    range: [number, number];
-    confidence: number;
-  };
-  gender: {
-    value: 'male' | 'female';
-    confidence: number;
-  };
-  race: {
-    dominant: string;
-    confidence: number;
-    all: Record<string, number>;
-  } | null;
-  emotion: {
-    dominant: string;
-    confidence: number;
-    all: Record<string, number>;
-  } | null;
+  age: AgeEstimate;
+  gender: GenderEstimate;
+  emotion: EmotionEstimate;
+  processing_time_ms: number;
 }
 
 export interface AgeEstimate {
@@ -242,7 +173,7 @@ export interface GenderEstimate {
 
 export interface EmotionEstimate {
   dominant: string;
-  all: Record<string, number>;
+  scores: Record<string, number>;
   confidence: number;
 }
 
@@ -274,52 +205,24 @@ export type ProctoringAlertType =
 
 // Batch processing
 export interface BatchRequest {
-  files: File[];
-  items?: string; // JSON string of items
+  images: File[];
   operation: 'enroll' | 'verify' | 'quality' | 'demographics';
-  threshold?: number;
+  options?: Record<string, unknown>;
 }
 
-export interface BatchEnrollResponse {
-  results: BatchEnrollResult[];
-  total_processed: number;
-  successful: number;
-  failed: number;
-  processing_time_ms: number;
-}
-
-export interface BatchEnrollResult {
-  user_id: string;
-  success: boolean;
-  embedding_id?: string;
-  error?: string;
-}
-
-export interface BatchVerifyResponse {
-  results: BatchVerifyResult[];
-  total_processed: number;
-  matched: number;
-  unmatched: number;
-  failed: number;
-  processing_time_ms: number;
-}
-
-export interface BatchVerifyResult {
-  user_id: string;
-  success: boolean;
-  match?: boolean;
-  similarity?: number;
-  error?: string;
+export interface BatchResponse {
+  job_id: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  total_items: number;
+  processed_items: number;
+  results?: BatchResult[];
+  errors?: BatchError[];
 }
 
 export interface BatchResult {
   index: number;
   success: boolean;
-  user_id?: string;
-  error?: string;
-  similarity?: number;
-  match?: boolean;
-  embedding_id?: string;
+  result: unknown;
 }
 
 export interface BatchError {
@@ -348,10 +251,139 @@ export interface WebhookEvent {
   created_at: string;
 }
 
+// Multi-image enrollment
+export interface MultiImageEnrollmentRequest {
+  user_id: string;
+  files: File[];
+  tenant_id?: string;
+}
+
+export interface ImageQualityResult {
+  index: number;
+  quality_score: number;
+  issues: string[];
+}
+
+export interface MultiImageEnrollmentResponse {
+  success: boolean;
+  user_id: string;
+  images_processed: number;
+  aggregate_quality_score: number;
+  best_embedding_index: number;
+  image_results: ImageQualityResult[];
+  embedding_id: string;
+  message?: string;
+}
+
+// Enhanced health check types
+export interface ApplicationCheck {
+  status: 'healthy' | 'unhealthy';
+  version: string;
+  environment: string;
+}
+
+export interface DatabaseCheck {
+  status: 'healthy' | 'unhealthy';
+  embeddings_count?: number;
+  type?: string;
+  error?: string;
+}
+
+export interface CacheStats {
+  cache_hits: number;
+  cache_misses: number;
+  total_requests: number;
+  hit_rate_percent: number;
+  current_size: number;
+  max_size: number;
+  ttl_seconds: number;
+}
+
+export interface CacheCheck {
+  status: 'healthy' | 'unhealthy' | 'degraded' | 'disabled';
+  enabled: boolean;
+  stats?: CacheStats;
+  error?: string;
+  message?: string;
+}
+
+export interface ConfigurationCheck {
+  status: 'healthy' | 'unhealthy';
+  multi_image_enrollment: boolean;
+  embedding_dimension: number;
+  face_detection_backend: string;
+  face_recognition_model: string;
+}
+
+export interface DetailedHealthResponse {
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  timestamp: string;
+  version: string;
+  environment: string;
+  uptime_seconds: number;
+  checks: {
+    application: ApplicationCheck;
+    database: DatabaseCheck;
+    cache: CacheCheck;
+    configuration: ConfigurationCheck;
+  };
+}
+
+export interface LivenessResponse {
+  status: 'alive';
+  timestamp: string;
+  uptime_seconds: number;
+}
+
+export interface ReadinessCheck {
+  database: boolean;
+  cache: boolean;
+  configuration: boolean;
+}
+
+export interface ReadinessResponse {
+  ready: boolean;
+  timestamp: string;
+  checks: ReadinessCheck;
+}
+
+// Cache metrics
+export interface CacheMetricsResponse {
+  timestamp: string;
+  cache_enabled: boolean;
+  metrics: CacheStats;
+  recommendations: string[];
+}
+
+// Admin stats (for backend to implement)
+export interface AdminStats {
+  total_enrollments: number;
+  enrollments_today: number;
+  total_verifications: number;
+  verification_success_rate: number;
+  total_liveness_checks: number;
+  spoof_detection_rate: number;
+  avg_response_time: number;
+  p99_response_time: number;
+  cpu_usage: number;
+  memory_usage: number;
+  gpu_memory: number;
+  disk_usage: number;
+  recent_activity: Array<{
+    success: boolean;
+    operation: string;
+    user_id: string;
+    duration: number;
+    timestamp: string;
+  }>;
+}
+
 // Error response
-export interface ApiErrorResponse {
-  error_code: string;
+export interface ErrorResponse {
+  error_code?: string;
   message: string;
   detail?: string;
-  errors?: Record<string, string[]>;
+  details?: Record<string, unknown>;
+  request_id?: string;
+  field_errors?: Record<string, string[]>;
 }

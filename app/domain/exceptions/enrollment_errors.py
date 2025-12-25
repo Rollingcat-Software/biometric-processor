@@ -119,3 +119,24 @@ class InvalidImageCountError(EnrollmentSessionError):
         self.count = count
         self.min_images = min_images
         self.max_images = max_images
+
+
+class MLModelTimeoutError(EnrollmentSessionError):
+    """Raised when ML model operation times out."""
+
+    def __init__(self, operation: str, timeout_seconds: int) -> None:
+        """Initialize ML model timeout error.
+
+        Args:
+            operation: The operation that timed out (e.g., "face_detection")
+            timeout_seconds: The timeout value in seconds
+        """
+        super().__init__(
+            message=(
+                f"ML model operation '{operation}' timed out after {timeout_seconds}s. "
+                f"This may indicate model unavailability or overload."
+            ),
+            error_code="ML_MODEL_TIMEOUT",
+        )
+        self.operation = operation
+        self.timeout_seconds = timeout_seconds

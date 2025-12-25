@@ -4,8 +4,9 @@ Adds a unique correlation ID to each request for distributed tracing and logging
 """
 
 import logging
+import re
 import uuid
-from typing import Callable
+from typing import Callable, Optional
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -13,6 +14,39 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.core.logging_config import request_id_context
 
 logger = logging.getLogger(__name__)
+
+# Regex for validating correlation IDs (alphanumeric and hyphens only, max 64 chars)
+# Prevents log injection, XSS, path traversal, and DoS attacks
+CORRELATION_ID_PATTERN = re.compile(r'^[a-zA-Z0-9-]{1,64}$')
+
+
+def validate_correlation_id(value: Optional[str]) -> Optional[str]:
+    """Validate correlation ID format for security.
+
+    Args:
+        value: Client-provided correlation ID
+
+    Returns:
+        Validated correlation ID or None if invalid
+
+    Security:
+        - Prevents log injection attacks
+        - Prevents XSS in log viewers
+        - Prevents path traversal if used in file paths
+        - Prevents DoS with extremely long IDs
+    """
+    if not value:
+        return None
+
+    # Check length and format
+    if len(value) > 64 or not CORRELATION_ID_PATTERN.match(value):
+        logger.warning(
+            f"Invalid correlation ID rejected: {value[:20]}... "
+            f"(length={len(value)})"
+        )
+        return None
+
+    return value
 
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
@@ -35,9 +69,12 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
         Returns:
             Response with correlation ID header
         """
-        # Get or generate correlation ID
-        correlation_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
-        
+        # Get and validate correlation ID from client, or generate new one
+        client_id = request.headers.get("X-Request-ID")
+        validated_id = validate_correlation_id(client_id)
+
+        correlation_id = validated_id if validated_id else str(uuid.uuid4())
+
         # Set in context for logging
         request_id_context.set(correlation_id)
         
