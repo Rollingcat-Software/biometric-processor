@@ -17,11 +17,13 @@ from app.application.use_cases.batch_process import BatchEnrollmentUseCase, Batc
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
 
 # Application use cases
+from app.application.use_cases.detect_card_type import DetectCardTypeUseCase
 from app.application.use_cases.enroll_face import EnrollFaceUseCase
 from app.application.use_cases.enroll_multi_image import EnrollMultiImageUseCase
 from app.application.use_cases.search_face import SearchFaceUseCase
 from app.application.use_cases.verify_face import VerifyFaceUseCase
 from app.core.config import settings
+from app.domain.interfaces.card_type_detector import ICardTypeDetector
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
 from app.domain.interfaces.event_bus import IEventBus
@@ -34,6 +36,7 @@ from app.domain.interfaces.quality_assessor import IQualityAssessor
 from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
 
 # Infrastructure implementations
+from app.infrastructure.ml.card_type.yolo_card_type_detector import YOLOCardTypeDetector
 from app.infrastructure.ml.factories.detector_factory import FaceDetectorFactory
 from app.infrastructure.ml.factories.extractor_factory import EmbeddingExtractorFactory
 from app.infrastructure.ml.factories.similarity_factory import SimilarityCalculatorFactory
@@ -179,6 +182,24 @@ def get_liveness_detector() -> ILivenessDetector:
 
 
 @lru_cache()
+def get_card_type_detector() -> ICardTypeDetector:
+    """Get card type detector instance (singleton).
+
+    Returns:
+        Card type detector implementation (YOLO-based)
+
+    Note:
+        Uses YOLOv8 for detecting Turkish identity cards:
+        - TC Kimlik (National ID)
+        - Ehliyet (Driver's License)
+        - Pasaport (Passport)
+        - Ogrenci Karti (Student ID)
+    """
+    logger.info("Creating card type detector (YOLO-based)")
+    return YOLOCardTypeDetector(confidence_threshold=0.5)
+
+
+@lru_cache()
 def get_event_bus() -> IEventBus:
     """Get event bus instance (singleton).
 
@@ -301,6 +322,17 @@ def get_check_liveness_use_case() -> CheckLivenessUseCase:
     return CheckLivenessUseCase(
         detector=get_face_detector(),
         liveness_detector=get_liveness_detector(),
+    )
+
+
+def get_detect_card_type_use_case() -> DetectCardTypeUseCase:
+    """Get card type detection use case instance.
+
+    Returns:
+        DetectCardTypeUseCase with all dependencies injected
+    """
+    return DetectCardTypeUseCase(
+        detector=get_card_type_detector(),
     )
 
 
