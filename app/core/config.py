@@ -82,11 +82,24 @@ class Settings(BaseSettings):
         description="Enable async ML operations using thread pool (CRITICAL for performance - 10-25x improvement)"
     )
     ML_THREAD_POOL_SIZE: int = Field(
-        default=4,
-        ge=1,
+        default=0,  # 0 = auto-detect CPU count
+        ge=0,
         le=32,
-        description="Thread pool size for async ML operations (recommended: number of CPU cores)"
+        description="Thread pool size for async ML operations (0 = auto-detect, recommended: number of CPU cores)"
     )
+
+    def get_thread_pool_size(self) -> int:
+        """Get optimal thread pool size.
+
+        AUTO-DETECTION FIX: Automatically detects CPU count if not explicitly set.
+        This ensures optimal performance across different deployment environments.
+        """
+        if self.ML_THREAD_POOL_SIZE == 0:
+            import os
+            cpu_count = os.cpu_count() or 4
+            # Use CPU count but cap at 8 for safety
+            return min(cpu_count, 8)
+        return self.ML_THREAD_POOL_SIZE
 
     # Request Timeouts (prevents hung requests)
     REQUEST_TIMEOUT_SECONDS: int = Field(
@@ -125,8 +138,26 @@ class Settings(BaseSettings):
         default="postgresql://postgres:postgres_dev_password@postgres:5432/identity_core_db",
         description="PostgreSQL database URL with pgvector extension (REQUIRED - no mock/in-memory allowed)"
     )
-    DATABASE_POOL_MIN_SIZE: int = Field(default=10, ge=1, le=100)
-    DATABASE_POOL_MAX_SIZE: int = Field(default=20, ge=1, le=100)
+    DATABASE_POOL_MIN_SIZE: int = Field(default=0, ge=0, le=100)  # 0 = auto-detect
+    DATABASE_POOL_MAX_SIZE: int = Field(default=0, ge=0, le=100)  # 0 = auto-detect
+
+    def get_database_pool_config(self) -> dict:
+        """Get optimal database pool configuration.
+
+        AUTO-DETECTION FIX: Automatically calculates pool size based on environment.
+        Formula: min_size = workers * 2, max_size = workers * 4
+        """
+        if self.DATABASE_POOL_MIN_SIZE == 0 or self.DATABASE_POOL_MAX_SIZE == 0:
+            # Auto-detect based on API workers
+            workers = self.API_WORKERS
+            return {
+                "min_size": max(workers * 2, 5),    # At least 5, typically 8-16
+                "max_size": max(workers * 4, 10),   # At least 10, typically 16-32
+            }
+        return {
+            "min_size": self.DATABASE_POOL_MIN_SIZE,
+            "max_size": self.DATABASE_POOL_MAX_SIZE,
+        }
     EMBEDDING_DIMENSION: int = Field(default=512, ge=128, le=4096)  # FaceNet: 512, VGG-Face: 2622
 
     # Redis Configuration
@@ -171,13 +202,66 @@ class Settings(BaseSettings):
     RATE_LIMIT_DEFAULT: int = Field(default=60, ge=1, description="Default rate limit for free tier")
     RATE_LIMIT_PREMIUM: int = Field(default=300, ge=1, description="Rate limit for premium tier")
 
-    # Enrollment-specific rate limiting (prevents enrollment flooding and DoS)
+    # Per-Endpoint Rate Limiting (PERFORMANCE FIX: Cost-based throttling)
+    # Different endpoints have different computational costs
     ENROLLMENT_RATE_LIMIT_PER_MINUTE: int = Field(
         default=10,
         ge=1,
         le=100,
         description="Rate limit for enrollment endpoints (lower than general API to prevent abuse)"
     )
+    VERIFICATION_RATE_LIMIT_PER_MINUTE: int = Field(
+        default=30,
+        ge=1,
+        le=200,
+        description="Rate limit for verification endpoints (moderate cost)"
+    )
+    SEARCH_RATE_LIMIT_PER_MINUTE: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Rate limit for search endpoints (expensive operation)"
+    )
+    LIVENESS_RATE_LIMIT_PER_MINUTE: int = Field(
+        default=15,
+        ge=1,
+        le=100,
+        description="Rate limit for liveness detection (expensive processing)"
+    )
+    BATCH_RATE_LIMIT_PER_MINUTE: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Rate limit for batch operations (very expensive)"
+    )
+    HEALTH_CHECK_RATE_LIMIT_PER_MINUTE: int = Field(
+        default=300,
+        ge=1,
+        le=1000,
+        description="Rate limit for health checks (cheap operation)"
+    )
+
+    def get_endpoint_rate_limit(self, endpoint_type: str) -> int:
+        """Get rate limit for specific endpoint type.
+
+        PERFORMANCE FIX: Returns cost-based rate limits per endpoint.
+        Expensive operations get lower limits to prevent resource exhaustion.
+
+        Args:
+            endpoint_type: Type of endpoint (enrollment, verification, search, etc.)
+
+        Returns:
+            Rate limit (requests per minute)
+        """
+        limits = {
+            "enrollment": self.ENROLLMENT_RATE_LIMIT_PER_MINUTE,
+            "verification": self.VERIFICATION_RATE_LIMIT_PER_MINUTE,
+            "search": self.SEARCH_RATE_LIMIT_PER_MINUTE,
+            "liveness": self.LIVENESS_RATE_LIMIT_PER_MINUTE,
+            "batch": self.BATCH_RATE_LIMIT_PER_MINUTE,
+            "health": self.HEALTH_CHECK_RATE_LIMIT_PER_MINUTE,
+        }
+        return limits.get(endpoint_type, self.RATE_LIMIT_PER_MINUTE)
 
     # Demographics Analysis
     DEMOGRAPHICS_ENABLED: bool = Field(default=True)
@@ -353,10 +437,22 @@ class Settings(BaseSettings):
         return self.ENVIRONMENT == "development"
 
     def get_cors_config(self) -> dict:
-        """Get CORS configuration."""
+        """Get CORS configuration.
+
+        SECURITY FIX: Validates that wildcard CORS is never used in production.
+        This prevents accidental misconfiguration that could expose the API to attacks.
+        """
+        # CRITICAL: Never allow wildcard in production
+        if self.is_production() and ("*" in self.CORS_ORIGINS or len(self.CORS_ORIGINS) == 0):
+            raise ValueError(
+                "SECURITY ERROR: Wildcard CORS ('*') or empty CORS_ORIGINS is not allowed in production. "
+                "Please configure specific allowed origins in CORS_ORIGINS environment variable."
+            )
+
         # In development, allow all origins for easier testing
         # In production, use the configured CORS_ORIGINS
         origins = ["*"] if self.is_development() else self.CORS_ORIGINS
+
         return {
             "allow_origins": origins,
             "allow_credentials": False if origins == ["*"] else True,  # Can't use credentials with wildcard

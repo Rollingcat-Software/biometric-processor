@@ -70,8 +70,9 @@ def get_thread_pool() -> ThreadPoolManager:
         Thread pool is used to execute CPU-bound ML operations (DeepFace)
         without blocking the async event loop. Optimized for ML workloads.
     """
-    pool_size = settings.ML_THREAD_POOL_SIZE
-    logger.info(f"Creating thread pool manager with {pool_size} workers")
+    # AUTO-DETECTION FIX: Use auto-detected pool size
+    pool_size = settings.get_thread_pool_size()
+    logger.info(f"Creating thread pool manager with {pool_size} workers (auto-detected: {settings.ML_THREAD_POOL_SIZE == 0})")
     return ThreadPoolManager(
         max_workers=pool_size,
         thread_name_prefix="ml-worker",
@@ -186,15 +187,19 @@ def get_embedding_repository() -> IEmbeddingRepository:
             "Please configure a PostgreSQL database with pgvector extension."
         )
 
+    # AUTO-DETECTION FIX: Use auto-detected pool sizes
+    pool_config = settings.get_database_pool_config()
+
     logger.info(
         f"Creating embedding repository (pgvector) - "
         f"dimension={settings.EMBEDDING_DIMENSION}, "
-        f"pool={settings.DATABASE_POOL_MIN_SIZE}-{settings.DATABASE_POOL_MAX_SIZE}"
+        f"pool={pool_config['min_size']}-{pool_config['max_size']} "
+        f"(auto-detected: {settings.DATABASE_POOL_MIN_SIZE == 0})"
     )
     return PgVectorEmbeddingRepository(
         database_url=settings.DATABASE_URL,
-        pool_min_size=settings.DATABASE_POOL_MIN_SIZE,
-        pool_max_size=settings.DATABASE_POOL_MAX_SIZE,
+        pool_min_size=pool_config['min_size'],
+        pool_max_size=pool_config['max_size'],
         embedding_dimension=settings.EMBEDDING_DIMENSION,
     )
 

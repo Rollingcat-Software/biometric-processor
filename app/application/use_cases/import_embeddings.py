@@ -104,7 +104,11 @@ class ImportEmbeddingsUseCase:
         return results
 
     def _validate_import_data(self, data: Dict[str, Any]) -> None:
-        """Validate import data structure."""
+        """Validate import data structure and embedding quality.
+
+        SECURITY FIX: Comprehensive validation prevents corrupt/malicious data import.
+        Validates dimensions, value ranges, normalization, and checksums.
+        """
         required_fields = ["version", "embeddings"]
         for field in required_fields:
             if field not in data:
@@ -122,6 +126,11 @@ class ImportEmbeddingsUseCase:
             if expected != actual:
                 raise ImportValidationError("Checksum validation failed")
 
+        # Get expected dimension from first entry (all must match)
+        expected_dim = None
+        if data["embeddings"]:
+            expected_dim = len(data["embeddings"][0].get("embedding", []))
+
         # Validate each embedding entry
         for i, entry in enumerate(data["embeddings"]):
             if "user_id" not in entry:
@@ -130,6 +139,46 @@ class ImportEmbeddingsUseCase:
                 raise ImportValidationError(f"Entry {i} missing embedding")
             if not isinstance(entry["embedding"], list):
                 raise ImportValidationError(f"Entry {i} embedding must be a list")
+
+            # CRITICAL FIX: Validate embedding dimensions
+            embedding = entry["embedding"]
+            if len(embedding) < 128:  # Minimum realistic dimension
+                raise ImportValidationError(
+                    f"Entry {i} ({entry['user_id']}): "
+                    f"embedding dimension too small ({len(embedding)}), expected >= 128"
+                )
+
+            if expected_dim and len(embedding) != expected_dim:
+                raise ImportValidationError(
+                    f"Entry {i} ({entry['user_id']}): "
+                    f"dimension mismatch ({len(embedding)} vs {expected_dim})"
+                )
+
+            # CRITICAL FIX: Validate all values are numeric
+            try:
+                import numpy as np
+                emb_array = np.array(embedding, dtype=np.float32)
+
+                # Check for NaN or Inf
+                if np.any(np.isnan(emb_array)) or np.any(np.isinf(emb_array)):
+                    raise ImportValidationError(
+                        f"Entry {i} ({entry['user_id']}): "
+                        f"embedding contains NaN or Inf values"
+                    )
+
+                # Check value range (embeddings should be normalized)
+                if np.max(np.abs(emb_array)) > 10.0:
+                    raise ImportValidationError(
+                        f"Entry {i} ({entry['user_id']}): "
+                        f"embedding values out of range (max={np.max(np.abs(emb_array))}), "
+                        f"expected normalized values"
+                    )
+
+            except (ValueError, TypeError) as e:
+                raise ImportValidationError(
+                    f"Entry {i} ({entry['user_id']}): "
+                    f"invalid embedding values - {str(e)}"
+                )
 
     async def _import_single(
         self, entry: Dict[str, Any], mode: ImportMode, tenant_id: str
