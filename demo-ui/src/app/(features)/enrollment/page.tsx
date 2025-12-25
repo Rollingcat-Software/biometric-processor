@@ -14,6 +14,7 @@ import { MultiImageUploader } from '@/components/media/multi-image-uploader';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
+import { ErrorDisplay } from '@/components/ui/error-display';
 import { useFaceEnrollment } from '@/hooks/use-face-enrollment';
 import { useMultiImageEnrollment } from '@/hooks/use-multi-image-enrollment';
 import { toast } from 'sonner';
@@ -413,15 +414,12 @@ export default function EnrollmentPage() {
                 <motion.div
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  className="space-y-4"
                 >
-                  <div className="flex items-center gap-2 text-red-600">
-                    <AlertCircle className="h-5 w-5" />
-                    <span className="font-medium">{t('enrollment.error')}</span>
-                  </div>
-                  <div className="rounded-lg bg-red-50 p-4 text-red-800 dark:bg-red-950/50 dark:text-red-200">
-                    {error.message}
-                  </div>
+                  <ErrorDisplay
+                    error={error}
+                    title={t('enrollment.error')}
+                    showCopyButton={true}
+                  />
                 </motion.div>
               )}
 
