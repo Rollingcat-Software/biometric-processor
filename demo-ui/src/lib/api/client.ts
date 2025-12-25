@@ -371,4 +371,14 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
 /**
  * Export error classes for convenience
  */
-export { isRetryableError } from './errors';
+export {
+  ApiClientError,
+  NetworkError,
+  TimeoutError,
+  ValidationError,
+  AuthenticationError,
+  AuthorizationError,
+  NotFoundError,
+  ServerError,
+  isRetryableError,
+} from './errors';
