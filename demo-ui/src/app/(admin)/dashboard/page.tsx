@@ -10,8 +10,6 @@ import {
   TrendingUp,
   Server,
   Database,
-  Cpu,
-  HardDrive,
   AlertCircle,
   CheckCircle2,
   AlertTriangle,
@@ -25,7 +23,6 @@ import { Progress } from '@/components/ui/progress';
 import { DashboardSkeleton } from '@/components/ui/skeleton';
 import { useAdminStats } from '@/hooks/use-admin-stats';
 import { useDetailedHealth } from '@/hooks/use-api-health';
-import { formatDuration } from '@/lib/utils';
 
 export default function AdminDashboardPage() {
   const {
@@ -34,7 +31,6 @@ export default function AdminDashboardPage() {
     isDegraded,
     isUnhealthy,
     isLoading: healthLoading,
-    isError: healthError,
   } = useDetailedHealth();
   const { data: stats, isLoading: statsLoading } = useAdminStats();
 
@@ -54,19 +50,19 @@ export default function AdminDashboardPage() {
     }
   };
 
-  // Helper to get status icon
-  const getStatusIcon = (status?: string) => {
-    switch (status) {
-      case 'healthy':
-        return <CheckCircle2 className="h-5 w-5" />;
-      case 'degraded':
-        return <AlertTriangle className="h-5 w-5" />;
-      case 'unhealthy':
-        return <AlertCircle className="h-5 w-5" />;
-      default:
-        return <AlertCircle className="h-5 w-5" />;
-    }
-  };
+  // Helper to get status icon (currently unused but kept for future use)
+  // const getStatusIcon = (status?: string) => {
+  //   switch (status) {
+  //     case 'healthy':
+  //       return <CheckCircle2 className="h-5 w-5" />;
+  //     case 'degraded':
+  //       return <AlertTriangle className="h-5 w-5" />;
+  //     case 'unhealthy':
+  //       return <AlertCircle className="h-5 w-5" />;
+  //     default:
+  //       return <AlertCircle className="h-5 w-5" />;
+  //   }
+  // };
 
   // Helper to format uptime
   const formatUptime = (seconds?: number) => {
