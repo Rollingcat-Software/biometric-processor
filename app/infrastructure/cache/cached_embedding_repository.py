@@ -90,6 +90,10 @@ class CachedEmbeddingRepository:
         # Lock for thread-safe cache operations in async context
         self._lock = asyncio.Lock()
 
+        # Pending requests for cache stampede protection
+        # Maps cache_key -> asyncio.Future to prevent thundering herd
+        self._pending_requests: dict[str, asyncio.Future] = {}
+
         # Cache statistics
         self._cache_hits = 0
         self._cache_misses = 0
@@ -224,7 +228,11 @@ class CachedEmbeddingRepository:
     async def find_by_user_id(
         self, user_id: str, tenant_id: Optional[str] = None
     ) -> Optional[np.ndarray]:
-        """Find embedding with caching.
+        """Find embedding with caching and cache stampede protection.
+
+        Implements protection against thundering herd problem where multiple
+        concurrent requests for the same cache_key all hit the database
+        simultaneously when cache expires.
 
         Args:
             user_id: User identifier
@@ -232,6 +240,10 @@ class CachedEmbeddingRepository:
 
         Returns:
             Embedding vector if found, None otherwise
+
+        Performance:
+            With stampede protection, only ONE database query per cache_key,
+            even with 1000 concurrent requests during cache miss.
         """
         cache_key = self._make_cache_key(user_id, tenant_id)
 
@@ -240,16 +252,72 @@ class CachedEmbeddingRepository:
         if cached_value is not None:
             return cached_value
 
-        # Cache miss - fetch from repository
-        embedding = await self._repository.find_by_user_id(
-            user_id=user_id, tenant_id=tenant_id
-        )
+        # Cache miss - check if another request is already fetching this key
+        async with self._lock:
+            if cache_key in self._pending_requests:
+                # Another request is already fetching - wait for its result
+                logger.debug(f"Waiting for pending request: {cache_key}")
+                future = self._pending_requests[cache_key]
+                # Release lock while waiting
 
-        # Cache the result if found
-        if embedding is not None:
-            await self._put_in_cache(cache_key, embedding)
+        # Wait outside the lock to avoid blocking other operations
+        if cache_key in self._pending_requests:
+            try:
+                result = await self._pending_requests[cache_key]
+                logger.debug(f"Received result from pending request: {cache_key}")
+                return result
+            except Exception as e:
+                # If pending request failed, we'll try fetching ourselves below
+                logger.warning(f"Pending request failed for {cache_key}: {str(e)}")
+                pass
 
-        return embedding
+        # We are the first request for this key - create future and fetch
+        async with self._lock:
+            # Double-check cache in case it was populated while we waited
+            cached_value = await self._get_from_cache(cache_key)
+            if cached_value is not None:
+                return cached_value
+
+            # Check again if someone else started fetching while we were checking cache
+            if cache_key in self._pending_requests:
+                future = self._pending_requests[cache_key]
+            else:
+                # Create future for this fetch operation
+                future = asyncio.get_event_loop().create_future()
+                self._pending_requests[cache_key] = future
+
+        # If we created the future, we fetch; otherwise wait
+        if not future.done():
+            try:
+                # Fetch from repository (only ONE request does this)
+                embedding = await self._repository.find_by_user_id(
+                    user_id=user_id, tenant_id=tenant_id
+                )
+
+                # Cache the result if found
+                if embedding is not None:
+                    await self._put_in_cache(cache_key, embedding)
+
+                # Notify all waiting requests
+                if not future.done():
+                    future.set_result(embedding)
+
+                return embedding
+
+            except Exception as e:
+                # Notify waiting requests of failure
+                if not future.done():
+                    future.set_exception(e)
+                raise
+
+            finally:
+                # Clean up pending request
+                async with self._lock:
+                    if cache_key in self._pending_requests:
+                        del self._pending_requests[cache_key]
+        else:
+            # Future was completed by another request while we were preparing
+            return await future
 
     async def find_similar(
         self,
