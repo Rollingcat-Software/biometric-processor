@@ -3,13 +3,14 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { UserPlus, Upload, Camera, CheckCircle2, AlertCircle, Images, User } from 'lucide-react';
+import { UserPlus, Upload, Camera, CheckCircle2, AlertCircle, Images, User, Video } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ImageUploader } from '@/components/media/image-uploader';
 import { WebcamCapture } from '@/components/media/webcam-capture';
+import { LiveCameraStream } from '@/components/media/live-camera-stream';
 import { MultiImageUploader } from '@/components/media/multi-image-uploader';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
@@ -18,9 +19,10 @@ import { ErrorDisplay } from '@/components/ui/error-display';
 import { useFaceEnrollment } from '@/hooks/use-face-enrollment';
 import { useMultiImageEnrollment } from '@/hooks/use-multi-image-enrollment';
 import { toast } from 'sonner';
+import type { LiveAnalysisResult } from '@/hooks/use-live-camera-analysis';
 
 type EnrollmentMode = 'single' | 'multi';
-type InputMode = 'upload' | 'camera';
+type InputMode = 'upload' | 'camera' | 'live';
 
 export default function EnrollmentPage() {
   const { t } = useTranslation();
@@ -34,6 +36,9 @@ export default function EnrollmentPage() {
 
   // Multi-image state
   const [selectedImages, setSelectedImages] = useState<File[]>([]);
+
+  // Live stream state
+  const [liveResult, setLiveResult] = useState<LiveAnalysisResult | null>(null);
 
   // Hooks
   const {
@@ -143,8 +148,13 @@ export default function EnrollmentPage() {
     setSelectedImage(null);
     setCapturedImage(null);
     setSelectedImages([]);
+    setLiveResult(null);
     resetSingle();
     resetMulti();
+  };
+
+  const handleLiveResult = (result: LiveAnalysisResult) => {
+    setLiveResult(result);
   };
 
   const handleModeChange = (checked: boolean) => {
@@ -238,7 +248,7 @@ export default function EnrollmentPage() {
                   value={inputMode}
                   onValueChange={(v) => setInputMode(v as InputMode)}
                 >
-                  <TabsList className="grid w-full grid-cols-2">
+                  <TabsList className="grid w-full grid-cols-3">
                     <TabsTrigger value="upload" className="flex items-center gap-2">
                       <Upload className="h-4 w-4" />
                       Upload
@@ -246,6 +256,10 @@ export default function EnrollmentPage() {
                     <TabsTrigger value="camera" className="flex items-center gap-2">
                       <Camera className="h-4 w-4" />
                       Camera
+                    </TabsTrigger>
+                    <TabsTrigger value="live" className="flex items-center gap-2">
+                      <Video className="h-4 w-4" />
+                      Live
                     </TabsTrigger>
                   </TabsList>
                   <TabsContent value="upload" className="mt-4">
@@ -262,6 +276,14 @@ export default function EnrollmentPage() {
                       disabled={isPending}
                     />
                   </TabsContent>
+                  <TabsContent value="live" className="mt-4">
+                    <LiveCameraStream
+                      mode="enrollment_ready"
+                      onResult={handleLiveResult}
+                      disabled={isPending}
+                      userId={personId}
+                    />
+                  </TabsContent>
                 </Tabs>
               ) : (
                 <MultiImageUploader
@@ -274,30 +296,32 @@ export default function EnrollmentPage() {
               )}
 
               {/* Action Buttons */}
-              <div className="flex gap-2 pt-4">
-                <Button
-                  onClick={handleEnroll}
-                  disabled={isPending || !canEnroll}
-                  className="flex-1"
-                >
-                  {isPending ? (
-                    <>
-                      <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                      {t('enrollment.enrolling')}
-                    </>
-                  ) : (
-                    <>
-                      <UserPlus className="mr-2 h-4 w-4" />
-                      {enrollmentMode === 'multi' ? 'Enroll with Multi-Image' : t('enrollment.enrollButton')}
-                    </>
-                  )}
-                </Button>
-                {(isSuccess || isError) && (
-                  <Button variant="outline" onClick={handleReset}>
-                    {t('common.reset')}
+              {inputMode !== 'live' && (
+                <div className="flex gap-2 pt-4">
+                  <Button
+                    onClick={handleEnroll}
+                    disabled={isPending || !canEnroll}
+                    className="flex-1"
+                  >
+                    {isPending ? (
+                      <>
+                        <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                        {t('enrollment.enrolling')}
+                      </>
+                    ) : (
+                      <>
+                        <UserPlus className="mr-2 h-4 w-4" />
+                        {enrollmentMode === 'multi' ? 'Enroll with Multi-Image' : t('enrollment.enrollButton')}
+                      </>
+                    )}
                   </Button>
-                )}
-              </div>
+                  {(isSuccess || isError) && (
+                    <Button variant="outline" onClick={handleReset}>
+                      {t('common.reset')}
+                    </Button>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         </motion.div>
@@ -409,6 +433,83 @@ export default function EnrollmentPage() {
                 </motion.div>
               )}
 
+              {/* Live Enrollment Readiness */}
+              {inputMode === 'live' && liveResult?.enrollment_ready && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="space-y-4"
+                >
+                  {/* Live Mode Indicator */}
+                  <div className="flex items-center justify-between rounded-lg bg-blue-50 p-3 text-sm dark:bg-blue-950/50">
+                    <div className="flex items-center gap-2">
+                      <Video className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                      <span className="font-medium text-blue-900 dark:text-blue-100">Live Enrollment Check</span>
+                    </div>
+                    <div className="text-blue-700 dark:text-blue-300">
+                      Frame #{liveResult.frame_number} • {liveResult.processing_time_ms.toFixed(0)}ms
+                    </div>
+                  </div>
+
+                  {/* Readiness Status */}
+                  <div className={`flex items-center gap-3 rounded-lg p-4 ${
+                    liveResult.enrollment_ready.is_ready ? 'bg-green-500/10' : 'bg-orange-500/10'
+                  }`}>
+                    {liveResult.enrollment_ready.is_ready ? (
+                      <CheckCircle2 className="h-8 w-8 text-green-600" />
+                    ) : (
+                      <AlertCircle className="h-8 w-8 text-orange-600" />
+                    )}
+                    <div>
+                      <p className={`text-lg font-semibold ${
+                        liveResult.enrollment_ready.is_ready ? 'text-green-600' : 'text-orange-600'
+                      }`}>
+                        {liveResult.enrollment_ready.is_ready ? 'Ready for Enrollment ✓' : 'Not Ready Yet'}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        Quality: {(liveResult.enrollment_ready.quality_score * 100).toFixed(1)}%
+                        {liveResult.enrollment_ready.liveness_score !== undefined && (
+                          <> • Liveness: {(liveResult.enrollment_ready.liveness_score * 100).toFixed(1)}%</>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Recommendation */}
+                  {liveResult.enrollment_ready.recommendation && (
+                    <div className="rounded-lg bg-muted p-4">
+                      <p className="text-sm font-medium mb-2">Recommendation</p>
+                      <p className="text-sm text-muted-foreground">
+                        {liveResult.enrollment_ready.recommendation}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Quality Breakdown */}
+                  {liveResult.quality && (
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium">Quality Metrics</p>
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-muted-foreground">Brightness</span>
+                          <span className="font-mono">{(liveResult.quality.brightness * 100).toFixed(0)}%</span>
+                        </div>
+                        <Progress value={liveResult.quality.brightness * 100} className="h-1.5" />
+                      </div>
+                      {liveResult.quality.sharpness !== undefined && (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-muted-foreground">Sharpness</span>
+                            <span className="font-mono">{(liveResult.quality.sharpness * 100).toFixed(0)}%</span>
+                          </div>
+                          <Progress value={liveResult.quality.sharpness * 100} className="h-1.5" />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </motion.div>
+              )}
+
               {/* Error State */}
               {isError && error && (
                 <motion.div
@@ -424,9 +525,13 @@ export default function EnrollmentPage() {
               )}
 
               {/* Empty State */}
-              {!isSuccess && !isError && (
+              {!isSuccess && !isError && !liveResult && (
                 <div className="flex h-40 items-center justify-center text-muted-foreground">
-                  <p>Enter details and click enroll to see results</p>
+                  <p>
+                    {inputMode === 'live'
+                      ? 'Start live streaming to check enrollment readiness'
+                      : 'Enter details and click enroll to see results'}
+                  </p>
                 </div>
               )}
             </CardContent>

@@ -25,6 +25,7 @@ from app.api.routes import quality, multi_face, demographics, landmarks, compari
 from app.api.routes import proctor
 from app.api.routes import proctor_ws
 from app.api.routes import admin
+from app.api.routes import live_analysis
 from app.core.config import settings
 from app.core.container import initialize_dependencies, shutdown_thread_pool
 from app.core.metrics import init_metrics
@@ -199,6 +200,9 @@ app.include_router(proctor.router, prefix=API_PREFIX)
 
 # WebSocket routes (proctoring real-time streaming)
 app.include_router(proctor_ws.router, prefix=API_PREFIX)
+
+# WebSocket routes (live camera analysis)
+app.include_router(live_analysis.router, prefix=API_PREFIX)
 
 # Admin routes
 app.include_router(admin.router, prefix=API_PREFIX)
