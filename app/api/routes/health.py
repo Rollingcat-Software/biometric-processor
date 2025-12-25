@@ -95,7 +95,7 @@ async def detailed_health_check(
     if settings.EMBEDDING_CACHE_ENABLED:
         try:
             if isinstance(repository, CachedEmbeddingRepository):
-                cache_stats = repository.get_cache_stats()
+                cache_stats = await repository.get_cache_stats()
                 checks["cache"] = {
                     "status": "healthy",
                     "enabled": True,
@@ -251,7 +251,7 @@ async def cache_metrics(
             detail="Cache is enabled but repository is not wrapped with caching layer",
         )
 
-    stats = repository.get_cache_stats()
+    stats = await repository.get_cache_stats()
 
     return {
         "timestamp": datetime.utcnow().isoformat() + "Z",

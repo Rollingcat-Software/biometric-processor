@@ -4,6 +4,7 @@ This module implements a caching layer for embedding repository operations
 to improve read performance and reduce database load.
 """
 
+import asyncio
 import hashlib
 import logging
 import time
@@ -86,6 +87,9 @@ class CachedEmbeddingRepository:
         # Using dict instead of lru_cache for TTL support
         self._cache: dict[str, CacheEntry] = {}
 
+        # Lock for thread-safe cache operations in async context
+        self._lock = asyncio.Lock()
+
         # Cache statistics
         self._cache_hits = 0
         self._cache_misses = 0
@@ -110,8 +114,8 @@ class CachedEmbeddingRepository:
             key_parts.append(tenant_id)
         return ":".join(key_parts)
 
-    def _get_from_cache(self, cache_key: str) -> Optional[np.ndarray]:
-        """Get value from cache if valid.
+    async def _get_from_cache(self, cache_key: str) -> Optional[np.ndarray]:
+        """Get value from cache if valid (thread-safe).
 
         Args:
             cache_key: Cache key
@@ -119,70 +123,74 @@ class CachedEmbeddingRepository:
         Returns:
             Cached value if valid, None otherwise
         """
-        if cache_key not in self._cache:
-            self._cache_misses += 1
-            return None
+        async with self._lock:
+            if cache_key not in self._cache:
+                self._cache_misses += 1
+                return None
 
-        entry = self._cache[cache_key]
+            entry = self._cache[cache_key]
 
-        # Check if expired
-        if entry.is_expired():
-            logger.debug(f"Cache entry expired: {cache_key}")
-            del self._cache[cache_key]
-            self._cache_misses += 1
-            return None
+            # Check if expired
+            if entry.is_expired():
+                logger.debug(f"Cache entry expired: {cache_key}")
+                del self._cache[cache_key]
+                self._cache_misses += 1
+                return None
 
-        self._cache_hits += 1
-        logger.debug(f"Cache hit: {cache_key}")
-        return entry.value
+            self._cache_hits += 1
+            logger.debug(f"Cache hit: {cache_key}")
+            return entry.value
 
-    def _put_in_cache(self, cache_key: str, value: np.ndarray) -> None:
-        """Put value in cache.
+    async def _put_in_cache(self, cache_key: str, value: np.ndarray) -> None:
+        """Put value in cache (thread-safe).
 
         Args:
             cache_key: Cache key
             value: Value to cache
         """
-        # Evict oldest entries if cache is full (simple LRU)
-        if len(self._cache) >= self._max_cache_size:
-            # Find and remove oldest entry
-            oldest_key = min(self._cache.items(), key=lambda x: x[1].timestamp)[0]
-            del self._cache[oldest_key]
-            logger.debug(f"Cache full, evicted: {oldest_key}")
+        async with self._lock:
+            # Evict oldest entries if cache is full (simple LRU)
+            if len(self._cache) >= self._max_cache_size:
+                # Find and remove oldest entry
+                oldest_key = min(self._cache.items(), key=lambda x: x[1].timestamp)[0]
+                del self._cache[oldest_key]
+                logger.debug(f"Cache full, evicted: {oldest_key}")
 
-        self._cache[cache_key] = CacheEntry(value, self._cache_ttl_seconds)
-        logger.debug(f"Cached: {cache_key}")
+            self._cache[cache_key] = CacheEntry(value, self._cache_ttl_seconds)
+            logger.debug(f"Cached: {cache_key}")
 
-    def _invalidate_cache(self, cache_key: str) -> None:
-        """Invalidate cache entry.
+    async def _invalidate_cache(self, cache_key: str) -> None:
+        """Invalidate cache entry (thread-safe).
 
         Args:
             cache_key: Cache key to invalidate
         """
-        if cache_key in self._cache:
-            del self._cache[cache_key]
-            logger.debug(f"Cache invalidated: {cache_key}")
+        async with self._lock:
+            if cache_key in self._cache:
+                del self._cache[cache_key]
+                logger.debug(f"Cache invalidated: {cache_key}")
 
-    def get_cache_stats(self) -> dict:
-        """Get cache statistics.
+    async def get_cache_stats(self) -> dict:
+        """Get cache statistics (thread-safe).
 
         Returns:
             Dictionary with cache statistics
         """
-        total_requests = self._cache_hits + self._cache_misses
-        hit_rate = (
-            (self._cache_hits / total_requests * 100) if total_requests > 0 else 0
-        )
+        async with self._lock:
+            total_requests = self._cache_hits + self._cache_misses
+            hit_rate = (
+                (self._cache_hits / total_requests * 100) if total_requests > 0 else 0
+            )
 
-        return {
-            "cache_hits": self._cache_hits,
-            "cache_misses": self._cache_misses,
-            "total_requests": total_requests,
-            "hit_rate_percent": round(hit_rate, 2),
-            "current_size": len(self._cache),
-            "max_size": self._max_cache_size,
-            "ttl_seconds": self._cache_ttl_seconds,
-        }
+            return {
+                "cache_hits": self._cache_hits,
+                "cache_misses": self._cache_misses,
+                "total_requests": total_requests,
+                "hit_rate_percent": round(hit_rate, 2),
+                "current_size": len(self._cache),
+                "max_size": self._max_cache_size,
+                "ttl_seconds": self._cache_ttl_seconds,
+            }
 
     async def save(
         self,
@@ -209,7 +217,7 @@ class CachedEmbeddingRepository:
 
         # Invalidate cache for this user
         cache_key = self._make_cache_key(user_id, tenant_id)
-        self._invalidate_cache(cache_key)
+        await self._invalidate_cache(cache_key)
 
         logger.debug(f"Saved and invalidated cache: {user_id}")
 
@@ -228,7 +236,7 @@ class CachedEmbeddingRepository:
         cache_key = self._make_cache_key(user_id, tenant_id)
 
         # Try cache first
-        cached_value = self._get_from_cache(cache_key)
+        cached_value = await self._get_from_cache(cache_key)
         if cached_value is not None:
             return cached_value
 
@@ -239,7 +247,7 @@ class CachedEmbeddingRepository:
 
         # Cache the result if found
         if embedding is not None:
-            self._put_in_cache(cache_key, embedding)
+            await self._put_in_cache(cache_key, embedding)
 
         return embedding
 
@@ -285,7 +293,7 @@ class CachedEmbeddingRepository:
         # Invalidate cache
         if deleted:
             cache_key = self._make_cache_key(user_id, tenant_id)
-            self._invalidate_cache(cache_key)
+            await self._invalidate_cache(cache_key)
 
         return deleted
 
@@ -302,7 +310,7 @@ class CachedEmbeddingRepository:
         cache_key = self._make_cache_key(user_id, tenant_id)
 
         # If in cache, it exists
-        cached_value = self._get_from_cache(cache_key)
+        cached_value = await self._get_from_cache(cache_key)
         if cached_value is not None:
             return True
 
@@ -321,11 +329,12 @@ class CachedEmbeddingRepository:
         # No caching for count - always get fresh value
         return await self._repository.count(tenant_id=tenant_id)
 
-    def clear_cache(self) -> None:
-        """Clear all cache entries.
+    async def clear_cache(self) -> None:
+        """Clear all cache entries (thread-safe).
 
         Useful for testing or manual cache invalidation.
         """
-        cache_size = len(self._cache)
-        self._cache.clear()
-        logger.info(f"Cache cleared: {cache_size} entries removed")
+        async with self._lock:
+            cache_size = len(self._cache)
+            self._cache.clear()
+            logger.info(f"Cache cleared: {cache_size} entries removed")
