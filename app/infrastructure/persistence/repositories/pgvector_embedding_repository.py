@@ -216,7 +216,7 @@ class PgVectorEmbeddingRepository:
                     SELECT embedding
                     FROM face_embeddings
                     WHERE user_id = $1
-                      AND ($2 IS NULL OR tenant_id = $2)
+                      AND ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
                     ORDER BY created_at DESC
                     LIMIT 1
                     """,
@@ -282,7 +282,7 @@ class PgVectorEmbeddingRepository:
                         user_id,
                         embedding <=> $1::vector AS distance
                     FROM face_embeddings
-                    WHERE ($2 IS NULL OR tenant_id = $2)
+                    WHERE ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
                       AND embedding <=> $1::vector < $3
                     ORDER BY distance ASC
                     LIMIT $4
@@ -333,7 +333,7 @@ class PgVectorEmbeddingRepository:
                     """
                     DELETE FROM face_embeddings
                     WHERE user_id = $1
-                      AND ($2 IS NULL OR tenant_id = $2)
+                      AND ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
                     """,
                     user_id,
                     tenant_id,
@@ -373,7 +373,7 @@ class PgVectorEmbeddingRepository:
                         SELECT 1
                         FROM face_embeddings
                         WHERE user_id = $1
-                          AND ($2 IS NULL OR tenant_id = $2)
+                          AND ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
                     )
                     """,
                     user_id,
@@ -403,7 +403,7 @@ class PgVectorEmbeddingRepository:
                     """
                     SELECT COUNT(*)
                     FROM face_embeddings
-                    WHERE ($1 IS NULL OR tenant_id = $1)
+                    WHERE ($1::VARCHAR IS NULL OR tenant_id = $1::VARCHAR)
                     """,
                     tenant_id,
                 )
