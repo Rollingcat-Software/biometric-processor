@@ -13,11 +13,18 @@ from app.api.schemas.live_analysis import (
     DemographicsResult,
     LivenessResult,
     EnrollmentReadyResult,
+    VerificationResult,
+    SearchResult as LiveSearchResult,
+    LandmarksResult,
 )
 from app.domain.exceptions.face_errors import FaceNotDetectedError, MultipleFacesError
+from app.domain.exceptions.verification_errors import EmbeddingNotFoundError
 from app.domain.interfaces.face_detector import IFaceDetector
 from app.domain.interfaces.liveness_detector import ILivenessDetector
 from app.domain.interfaces.quality_assessor import IQualityAssessor
+from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
+from app.domain.interfaces.embedding_repository import IEmbeddingRepository
+from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +38,9 @@ class LiveCameraAnalysisUseCase:
     - Demographics (age, gender, emotion)
     - Liveness detection
     - Enrollment readiness
+    - Face verification (1:1 matching)
+    - Face search (1:N identification)
+    - Facial landmarks
     """
 
     def __init__(
@@ -38,10 +48,16 @@ class LiveCameraAnalysisUseCase:
         detector: IFaceDetector,
         quality_assessor: IQualityAssessor,
         liveness_detector: Optional[ILivenessDetector] = None,
+        embedding_extractor: Optional[IEmbeddingExtractor] = None,
+        embedding_repository: Optional[IEmbeddingRepository] = None,
+        similarity_calculator: Optional[ISimilarityCalculator] = None,
     ):
         self._detector = detector
         self._quality_assessor = quality_assessor
         self._liveness_detector = liveness_detector
+        self._extractor = embedding_extractor
+        self._repository = embedding_repository
+        self._similarity = similarity_calculator
 
         logger.info("LiveCameraAnalysisUseCase initialized")
 
@@ -50,6 +66,8 @@ class LiveCameraAnalysisUseCase:
         image: np.ndarray,
         mode: AnalysisMode,
         quality_threshold: float = 70.0,
+        user_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> LiveAnalysisResponse:
         """Analyze a single camera frame.
 
@@ -57,6 +75,8 @@ class LiveCameraAnalysisUseCase:
             image: Camera frame as numpy array
             mode: Analysis mode to run
             quality_threshold: Minimum quality score for enrollment
+            user_id: User ID for verification mode
+            tenant_id: Tenant ID for multi-tenancy
 
         Returns:
             Analysis results based on mode
@@ -148,12 +168,125 @@ class LiveCameraAnalysisUseCase:
                     response, quality_threshold
                 )
 
+            # Step 6: Verification (1:1 matching)
+            if mode == AnalysisMode.VERIFICATION:
+                if not user_id:
+                    response.error = "User ID required for verification mode"
+                elif not self._extractor or not self._repository or not self._similarity:
+                    response.error = "Verification dependencies not available"
+                else:
+                    verification = await self._verify_face(face_region, user_id, tenant_id)
+                    response.verification = verification
+
+            # Step 7: Search (1:N identification)
+            if mode == AnalysisMode.SEARCH:
+                if not self._extractor or not self._repository or not self._similarity:
+                    response.error = "Search dependencies not available"
+                else:
+                    search = await self._search_face(face_region, tenant_id)
+                    response.search = search
+
+            # Step 8: Landmarks
+            if mode == AnalysisMode.LANDMARKS:
+                if response.face and response.face.landmarks:
+                    response.landmarks = LandmarksResult(
+                        landmarks=response.face.landmarks,
+                        num_landmarks=len(response.face.landmarks),
+                        confidence=detection.confidence,
+                    )
+                else:
+                    response.error = "Landmarks not available from detector"
+
             return response
 
         except Exception as e:
             logger.error(f"Error in live frame analysis: {str(e)}", exc_info=True)
             response.error = f"Analysis error: {str(e)}"
             return response
+
+    async def _verify_face(
+        self, face_image: np.ndarray, user_id: str, tenant_id: Optional[str]
+    ) -> VerificationResult:
+        """Verify face against enrolled user."""
+        try:
+            # Extract embedding from current frame
+            current_embedding = await self._extractor.extract(face_image)
+
+            # Get stored embedding
+            stored_embedding = await self._repository.get_embedding(user_id, tenant_id)
+            if stored_embedding is None:
+                raise EmbeddingNotFoundError(f"No enrollment found for user: {user_id}")
+
+            # Calculate similarity
+            similarity = self._similarity.calculate_similarity(current_embedding, stored_embedding.embedding)
+            threshold = 0.6  # Default threshold
+
+            # Determine match
+            match = similarity >= threshold
+
+            return VerificationResult(
+                match=match,
+                confidence=similarity,
+                similarity=similarity,
+                threshold=threshold,
+                user_id=user_id,
+            )
+
+        except EmbeddingNotFoundError:
+            return VerificationResult(
+                match=False,
+                confidence=0.0,
+                similarity=0.0,
+                threshold=0.6,
+                user_id=user_id,
+            )
+        except Exception as e:
+            logger.error(f"Verification error: {str(e)}")
+            raise
+
+    async def _search_face(
+        self, face_image: np.ndarray, tenant_id: Optional[str]
+    ) -> LiveSearchResult:
+        """Search for face in database (1:N identification)."""
+        try:
+            # Extract embedding from current frame
+            query_embedding = await self._extractor.extract(face_image)
+
+            # Search in repository
+            matches = await self._repository.search_similar(
+                query_embedding,
+                tenant_id=tenant_id,
+                top_k=1,  # Just best match for live mode
+                threshold=0.6,
+            )
+
+            if matches:
+                best_match = matches[0]
+                return LiveSearchResult(
+                    found=True,
+                    user_id=best_match.user_id,
+                    confidence=best_match.distance,
+                    similarity=best_match.distance,
+                    num_candidates=1,
+                )
+            else:
+                return LiveSearchResult(
+                    found=False,
+                    user_id=None,
+                    confidence=0.0,
+                    similarity=0.0,
+                    num_candidates=0,
+                )
+
+        except Exception as e:
+            logger.error(f"Search error: {str(e)}")
+            return LiveSearchResult(
+                found=False,
+                user_id=None,
+                confidence=0.0,
+                similarity=0.0,
+                num_candidates=0,
+            )
 
     async def _analyze_demographics(self, face_image: np.ndarray) -> DemographicsResult:
         """Analyze demographics from face image.

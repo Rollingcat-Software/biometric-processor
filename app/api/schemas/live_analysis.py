@@ -14,6 +14,9 @@ class AnalysisMode(str, Enum):
     DEMOGRAPHICS = "demographics"  # Face + demographics
     LIVENESS = "liveness"  # Face + liveness check
     ENROLLMENT_READY = "enrollment_ready"  # All checks for enrollment
+    VERIFICATION = "verification"  # 1:1 face verification
+    SEARCH = "search"  # 1:N face search/identification
+    LANDMARKS = "landmarks"  # Facial landmark detection
     FULL_ANALYSIS = "full"  # Everything
 
 
@@ -100,6 +103,34 @@ class EnrollmentReadyResult(BaseModel):
     recommendation: str = Field(..., description="User guidance message")
 
 
+class VerificationResult(BaseModel):
+    """Face verification result (1:1 matching)."""
+
+    match: bool = Field(..., description="Whether faces match")
+    confidence: float = Field(..., ge=0, le=1, description="Match confidence score")
+    similarity: float = Field(..., ge=0, le=1, description="Face similarity score")
+    threshold: float = Field(..., description="Threshold used for matching")
+    user_id: str = Field(..., description="User ID being verified against")
+
+
+class SearchResult(BaseModel):
+    """Face search/identification result (1:N matching)."""
+
+    found: bool = Field(..., description="Whether a match was found")
+    user_id: Optional[str] = Field(None, description="Matched user ID")
+    confidence: float = Field(..., ge=0, le=1, description="Match confidence")
+    similarity: float = Field(..., ge=0, le=1, description="Best similarity score")
+    num_candidates: int = Field(..., description="Number of candidates searched")
+
+
+class LandmarksResult(BaseModel):
+    """Facial landmarks detection result."""
+
+    landmarks: Dict[str, List[float]] = Field(..., description="Landmark coordinates by name")
+    num_landmarks: int = Field(..., description="Total number of landmarks")
+    confidence: float = Field(..., ge=0, le=1, description="Landmark detection confidence")
+
+
 class LiveAnalysisResponse(BaseModel):
     """Response for each analyzed frame."""
 
@@ -113,6 +144,9 @@ class LiveAnalysisResponse(BaseModel):
     demographics: Optional[DemographicsResult] = None
     liveness: Optional[LivenessResult] = None
     enrollment_ready: Optional[EnrollmentReadyResult] = None
+    verification: Optional[VerificationResult] = None
+    search: Optional[SearchResult] = None
+    landmarks: Optional[LandmarksResult] = None
 
     # Error handling
     error: Optional[str] = Field(None, description="Error message if processing failed")

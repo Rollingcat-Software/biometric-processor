@@ -8,6 +8,9 @@ export type AnalysisMode =
   | 'demographics'
   | 'liveness'
   | 'enrollment_ready'
+  | 'verification'
+  | 'search'
+  | 'landmarks'
   | 'full';
 
 export interface LiveAnalysisConfig {
@@ -56,6 +59,28 @@ export interface EnrollmentReadyData {
   recommendation?: string;
 }
 
+export interface VerificationData {
+  match: boolean;
+  confidence: number;
+  similarity: number;
+  threshold: number;
+  user_id: string;
+}
+
+export interface SearchData {
+  found: boolean;
+  user_id?: string;
+  confidence: number;
+  similarity: number;
+  num_candidates: number;
+}
+
+export interface LandmarksData {
+  landmarks: Record<string, number[]>;
+  num_landmarks: number;
+  confidence: number;
+}
+
 export interface LiveAnalysisResult {
   frame_number: number;
   timestamp: number;
@@ -65,6 +90,9 @@ export interface LiveAnalysisResult {
   demographics?: DemographicsData;
   liveness?: LivenessData;
   enrollment_ready?: EnrollmentReadyData;
+  verification?: VerificationData;
+  search?: SearchData;
+  landmarks?: LandmarksData;
   error?: string;
   skipped?: boolean;
   recommendation?: string;
