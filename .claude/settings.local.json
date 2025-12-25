@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(where:*)"
+      "Bash(where:*)",
+      "Bash(git pull:*)",
+      "Bash(powershell -Command \"Start-Process ''C:\\\\Program Files\\\\Docker\\\\Docker\\\\Docker Desktop.exe''\")",
+      "Bash(timeout /t 20 /nobreak)",
+      "Bash(dir:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(npm run build:*)"
     ],
     "deny": [],
     "ask": []
