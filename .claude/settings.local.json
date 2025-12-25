@@ -20,7 +20,21 @@
       "Bash(.venv/Scripts/python.exe:*)",
       "Bash(.venv/Scripts/pip.exe install:*)",
       "Bash(netstat:*)",
-      "Bash(taskkill:*)"
+      "Bash(taskkill:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker logs:*)",
+      "Bash(for i in {1..5})",
+      "Bash(do curl -s http://localhost:8001/api/v1/health)",
+      "Bash(done)",
+      "Bash(cut:*)",
+      "Bash(timeout 5 tail:*)",
+      "Bash(exit 0)",
+      "Bash(timeout 10 tail:*)",
+      "Bash(break)",
+      "Bash(echo:*)",
+      "Bash(docker-compose build:*)",
+      "Bash(for i in {1..10})",
+      "Bash(do sleep 2)"
     ],
     "deny": [],
     "ask": []
