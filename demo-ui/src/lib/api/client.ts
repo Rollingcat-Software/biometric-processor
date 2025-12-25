@@ -17,8 +17,6 @@ import {
   isRetryableError,
 } from './errors';
 
-export type { ApiClientError } from './errors';
-
 /**
  * API client configuration
  */
