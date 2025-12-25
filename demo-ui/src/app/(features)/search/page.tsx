@@ -3,25 +3,28 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { Search, Upload, Camera, Users, AlertCircle } from 'lucide-react';
+import { Search, Upload, Camera, Users, AlertCircle, Video } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { ImageUploader } from '@/components/media/image-uploader';
 import { WebcamCapture } from '@/components/media/webcam-capture';
+import { LiveCameraStream } from '@/components/media/live-camera-stream';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useFaceSearch } from '@/hooks/use-face-search';
 import { toast } from 'sonner';
 import { formatPercent, toPercent } from '@/lib/utils/format';
+import type { LiveAnalysisResult } from '@/hooks/use-live-camera-analysis';
 
 export default function SearchPage() {
   const { t } = useTranslation();
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [capturedImage, setCapturedImage] = useState<Blob | null>(null);
-  const [inputMode, setInputMode] = useState<'upload' | 'camera'>('upload');
+  const [inputMode, setInputMode] = useState<'upload' | 'camera' | 'live'>('upload');
   const [maxResults, setMaxResults] = useState(10);
   const [threshold, setThreshold] = useState(0.6);
+  const [liveResult, setLiveResult] = useState<LiveAnalysisResult | null>(null);
 
   const { mutate: searchFace, isPending, isSuccess, isError, data, error, reset } = useFaceSearch();
 
@@ -55,7 +58,12 @@ export default function SearchPage() {
   const handleReset = () => {
     setSelectedImage(null);
     setCapturedImage(null);
+    setLiveResult(null);
     reset();
+  };
+
+  const handleLiveResult = (result: LiveAnalysisResult) => {
+    setLiveResult(result);
   };
 
   return (
@@ -121,9 +129,9 @@ export default function SearchPage() {
               {/* Image Input Tabs */}
               <Tabs
                 value={inputMode}
-                onValueChange={(v) => setInputMode(v as 'upload' | 'camera')}
+                onValueChange={(v) => setInputMode(v as 'upload' | 'camera' | 'live')}
               >
-                <TabsList className="grid w-full grid-cols-2">
+                <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="upload" className="flex items-center gap-2">
                     <Upload className="h-4 w-4" />
                     Upload
@@ -131,6 +139,10 @@ export default function SearchPage() {
                   <TabsTrigger value="camera" className="flex items-center gap-2">
                     <Camera className="h-4 w-4" />
                     Camera
+                  </TabsTrigger>
+                  <TabsTrigger value="live" className="flex items-center gap-2">
+                    <Video className="h-4 w-4" />
+                    Live Stream
                   </TabsTrigger>
                 </TabsList>
                 <TabsContent value="upload" className="mt-4">
@@ -147,33 +159,42 @@ export default function SearchPage() {
                     disabled={isPending}
                   />
                 </TabsContent>
+                <TabsContent value="live" className="mt-4">
+                  <LiveCameraStream
+                    mode="search"
+                    onResult={handleLiveResult}
+                    disabled={isPending}
+                  />
+                </TabsContent>
               </Tabs>
 
               {/* Action Buttons */}
-              <div className="flex gap-2 pt-4">
-                <Button
-                  onClick={handleSearch}
-                  disabled={isPending || (!selectedImage && !capturedImage)}
-                  className="flex-1"
-                >
-                  {isPending ? (
-                    <>
-                      <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                      {t('search.searching')}
-                    </>
-                  ) : (
-                    <>
-                      <Search className="mr-2 h-4 w-4" />
-                      {t('search.searchButton')}
-                    </>
-                  )}
-                </Button>
-                {(isSuccess || isError) && (
-                  <Button variant="outline" onClick={handleReset}>
-                    {t('common.reset')}
+              {inputMode !== 'live' && (
+                <div className="flex gap-2 pt-4">
+                  <Button
+                    onClick={handleSearch}
+                    disabled={isPending || (!selectedImage && !capturedImage)}
+                    className="flex-1"
+                  >
+                    {isPending ? (
+                      <>
+                        <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                        {t('search.searching')}
+                      </>
+                    ) : (
+                      <>
+                        <Search className="mr-2 h-4 w-4" />
+                        {t('search.searchButton')}
+                      </>
+                    )}
                   </Button>
-                )}
-              </div>
+                  {(isSuccess || isError) && (
+                    <Button variant="outline" onClick={handleReset}>
+                      {t('common.reset')}
+                    </Button>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         </motion.div>
@@ -194,7 +215,64 @@ export default function SearchPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {isSuccess && data && (
+              {/* Live Stream Results */}
+              {inputMode === 'live' && liveResult?.search && (
+                <motion.div
+                  key={liveResult.frame_number}
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ duration: 0.2 }}
+                  className="space-y-4"
+                >
+                  {/* Live Mode Indicator */}
+                  <div className="flex items-center justify-between rounded-lg bg-blue-50 p-3 text-sm dark:bg-blue-950/50">
+                    <div className="flex items-center gap-2">
+                      <Video className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                      <span className="font-medium text-blue-900 dark:text-blue-100">Live Analysis</span>
+                    </div>
+                    <div className="text-blue-700 dark:text-blue-300">
+                      Frame #{liveResult.frame_number} • {liveResult.processing_time_ms.toFixed(0)}ms
+                    </div>
+                  </div>
+
+                  {/* Live Search Result */}
+                  {liveResult.search.found ? (
+                    <div className="rounded-lg bg-green-500/10 p-4">
+                      <p className="text-2xl font-bold text-green-600">✓ Match Found</p>
+                      <div className="mt-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-muted-foreground">User ID</span>
+                          <span className="font-medium">{liveResult.search.user_id}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-muted-foreground">Confidence</span>
+                          <span className={`font-semibold ${
+                            toPercent(liveResult.search.confidence) >= 80 ? 'text-green-600' :
+                            toPercent(liveResult.search.confidence) >= 60 ? 'text-yellow-600' :
+                            'text-red-600'
+                          }`}>
+                            {formatPercent(liveResult.search.confidence)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-muted-foreground">Similarity</span>
+                          <span className="font-mono text-sm">{formatPercent(liveResult.search.similarity)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg bg-orange-500/10 p-4">
+                      <p className="text-2xl font-bold text-orange-600">No Match</p>
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        Searched {liveResult.search.num_candidates} candidate{liveResult.search.num_candidates !== 1 ? 's' : ''}
+                      </p>
+                    </div>
+                  )}
+                </motion.div>
+              )}
+
+              {/* Static Results */}
+              {inputMode !== 'live' && isSuccess && data && (
                 <motion.div
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
@@ -265,9 +343,13 @@ export default function SearchPage() {
                 </motion.div>
               )}
 
-              {!isSuccess && !isError && (
+              {!liveResult && !isSuccess && !isError && (
                 <div className="flex h-64 items-center justify-center text-muted-foreground">
-                  <p>Upload an image to search for matching faces</p>
+                  <p>
+                    {inputMode === 'live'
+                      ? 'Start live streaming to search for matching faces'
+                      : 'Upload an image to search for matching faces'}
+                  </p>
                 </div>
               )}
             </CardContent>

@@ -3,23 +3,26 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { ScanFace, Upload, Camera, CheckCircle2, XCircle, AlertCircle, Shield } from 'lucide-react';
+import { ScanFace, Upload, Camera, CheckCircle2, XCircle, AlertCircle, Shield, Video } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { ImageUploader } from '@/components/media/image-uploader';
 import { WebcamCapture } from '@/components/media/webcam-capture';
+import { LiveCameraStream } from '@/components/media/live-camera-stream';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useLivenessCheck } from '@/hooks/use-liveness-check';
 import { toast } from 'sonner';
 import { formatPercent, toPercent } from '@/lib/utils/format';
+import type { LiveAnalysisResult } from '@/hooks/use-live-camera-analysis';
 
 export default function LivenessPage() {
   const { t } = useTranslation();
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [capturedImage, setCapturedImage] = useState<Blob | null>(null);
-  const [inputMode, setInputMode] = useState<'upload' | 'camera'>('camera');
+  const [inputMode, setInputMode] = useState<'upload' | 'camera' | 'live'>('camera');
+  const [liveResult, setLiveResult] = useState<LiveAnalysisResult | null>(null);
 
   const { mutate: checkLiveness, isPending, isSuccess, isError, data, error, reset } = useLivenessCheck();
 
@@ -59,8 +62,16 @@ export default function LivenessPage() {
   const handleReset = () => {
     setSelectedImage(null);
     setCapturedImage(null);
+    setLiveResult(null);
     reset();
   };
+
+  const handleLiveResult = (result: LiveAnalysisResult) => {
+    setLiveResult(result);
+  };
+
+  // Use live result if in live mode
+  const displayData = inputMode === 'live' && liveResult?.liveness ? liveResult.liveness : data;
 
   return (
     <div className="space-y-6">
@@ -99,9 +110,9 @@ export default function LivenessPage() {
               {/* Image Input Tabs */}
               <Tabs
                 value={inputMode}
-                onValueChange={(v) => setInputMode(v as 'upload' | 'camera')}
+                onValueChange={(v) => setInputMode(v as 'upload' | 'camera' | 'live')}
               >
-                <TabsList className="grid w-full grid-cols-2">
+                <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="camera" className="flex items-center gap-2">
                     <Camera className="h-4 w-4" />
                     Camera
@@ -109,6 +120,10 @@ export default function LivenessPage() {
                   <TabsTrigger value="upload" className="flex items-center gap-2">
                     <Upload className="h-4 w-4" />
                     Upload
+                  </TabsTrigger>
+                  <TabsTrigger value="live" className="flex items-center gap-2">
+                    <Video className="h-4 w-4" />
+                    Live Stream
                   </TabsTrigger>
                 </TabsList>
                 <TabsContent value="camera" className="mt-4">
@@ -125,29 +140,37 @@ export default function LivenessPage() {
                     disabled={isPending}
                   />
                 </TabsContent>
+                <TabsContent value="live" className="mt-4">
+                  <LiveCameraStream
+                    mode="liveness"
+                    onResult={handleLiveResult}
+                    disabled={isPending}
+                  />
+                </TabsContent>
               </Tabs>
 
               {/* Action Buttons */}
-              <div className="flex gap-2 pt-4">
-                <Button
-                  onClick={handleCheck}
-                  disabled={isPending || (!selectedImage && !capturedImage)}
-                  className="flex-1"
-                >
-                  {isPending ? (
-                    <>
-                      <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                      {t('liveness.checking')}
-                    </>
-                  ) : (
-                    <>
-                      <ScanFace className="mr-2 h-4 w-4" />
-                      {t('liveness.checkButton')}
-                    </>
-                  )}
-                </Button>
-                {(isSuccess || isError) && (
-                  <Button variant="outline" onClick={handleReset}>
+              {inputMode !== 'live' && (
+                <div className="flex gap-2 pt-4">
+                  <Button
+                    onClick={handleCheck}
+                    disabled={isPending || (!selectedImage && !capturedImage)}
+                    className="flex-1"
+                  >
+                    {isPending ? (
+                      <>
+                        <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                        {t('liveness.checking')}
+                      </>
+                    ) : (
+                      <>
+                        <ScanFace className="mr-2 h-4 w-4" />
+                        {t('liveness.checkButton')}
+                      </>
+                    )}
+                  </Button>
+                  {(isSuccess || isError) && (
+                    <Button variant="outline" onClick={handleReset}>
                     {t('common.reset')}
                   </Button>
                 )}
@@ -170,7 +193,20 @@ export default function LivenessPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {isSuccess && data && (
+              {/* Live Mode Indicator */}
+              {inputMode === 'live' && liveResult && (
+                <div className="mb-4 flex items-center justify-between rounded-lg bg-blue-50 p-3 text-sm dark:bg-blue-950/50">
+                  <div className="flex items-center gap-2">
+                    <Video className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                    <span className="font-medium text-blue-900 dark:text-blue-100">Live Liveness Detection</span>
+                  </div>
+                  <div className="text-blue-700 dark:text-blue-300">
+                    Frame #{liveResult.frame_number} • {liveResult.processing_time_ms.toFixed(0)}ms
+                  </div>
+                </div>
+              )}
+
+              {((inputMode === 'live' && liveResult?.liveness) || (isSuccess && data)) && displayData && (
                 <motion.div
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -178,65 +214,43 @@ export default function LivenessPage() {
                 >
                   {/* Status Badge */}
                   <div className={`flex items-center gap-3 rounded-lg p-4 ${
-                    data.is_live
+                    displayData.is_live
                       ? 'bg-green-500/10 text-green-600'
                       : 'bg-red-500/10 text-red-600'
                   }`}>
-                    {data.is_live ? (
+                    {displayData.is_live ? (
                       <CheckCircle2 className="h-8 w-8" />
                     ) : (
                       <XCircle className="h-8 w-8" />
                     )}
                     <div>
                       <p className="text-lg font-semibold">
-                        {data.is_live ? t('liveness.result.live') : t('liveness.result.spoof')}
+                        {displayData.is_live ? 'Live Person ✓' : 'Potential Spoof ⚠️'}
                       </p>
-                      {!data.is_live && data.message && (
-                        <Badge variant="destructive" className="mt-1">
-                          {data.message}
-                        </Badge>
-                      )}
                     </div>
                   </div>
 
                   {/* Liveness Score */}
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm">
-                      <span>{t('liveness.result.score')}</span>
+                      <span>Liveness Score</span>
                       <span className="font-semibold">
-                        {formatPercent(data.confidence)}
+                        {formatPercent(displayData.confidence)}
                       </span>
                     </div>
                     <Progress
-                      value={toPercent(data.confidence)}
-                      className={data.is_live ? 'bg-green-200' : 'bg-red-200'}
+                      value={toPercent(displayData.confidence)}
+                      className={displayData.is_live ? 'bg-green-200' : 'bg-red-200'}
                     />
                   </div>
 
-                  {/* Detailed Checks */}
-                  {data.checks && data.checks.length > 0 && (
-                    <div className="space-y-2">
-                      <p className="text-sm font-medium">Security Checks</p>
-                      <div className="space-y-2">
-                        {data.checks.map((check, index) => (
-                          <div
-                            key={index}
-                            className="flex items-center justify-between rounded-lg border p-2"
-                          >
-                            <div className="flex items-center gap-2">
-                              {check.passed ? (
-                                <CheckCircle2 className="h-4 w-4 text-green-500" />
-                              ) : (
-                                <XCircle className="h-4 w-4 text-red-500" />
-                              )}
-                              <span className="text-sm">{check.name}</span>
-                            </div>
-                            <span className="text-sm font-mono">
-                              {formatPercent(check.score, 0)}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
+                  {/* Recommendation */}
+                  {displayData.recommendation && (
+                    <div className="rounded-lg bg-muted p-4">
+                      <p className="text-sm font-medium mb-2">Recommendation</p>
+                      <p className="text-sm text-muted-foreground">
+                        {displayData.recommendation}
+                      </p>
                     </div>
                   )}
 
@@ -259,11 +273,13 @@ export default function LivenessPage() {
                 </motion.div>
               )}
 
-              {!isSuccess && !isError && (
+              {!isSuccess && !isError && !liveResult && (
                 <div className="flex h-64 flex-col items-center justify-center gap-4 text-muted-foreground">
                   <Shield className="h-12 w-12" />
                   <p className="text-center">
-                    Capture or upload a face image to check liveness
+                    {inputMode === 'live'
+                      ? 'Start live streaming for real-time liveness detection'
+                      : 'Capture or upload a face image to check liveness'}
                   </p>
                 </div>
               )}

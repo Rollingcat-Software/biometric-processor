@@ -8,8 +8,11 @@ This module provides:
 - Error tracking
 """
 
+import atexit
 import logging
 import logging.config
+import logging.handlers
+import queue
 import sys
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -155,6 +158,10 @@ class SecurityEventLogger:
         self.logger.warning("Suspicious activity detected", extra=extra)
 
 
+# Global queue listener for async-safe logging
+_queue_listener: Optional[logging.handlers.QueueListener] = None
+
+
 # Logging configuration
 LOGGING_CONFIG = {
     "version": 1,
@@ -181,42 +188,31 @@ LOGGING_CONFIG = {
             "stream": sys.stdout,
             "filters": ["correlation_id"],
         },
-        "file": {
-            "class": "logging.handlers.RotatingFileHandler",
-            "level": "INFO",
-            "formatter": "structured",
-            "filename": "logs/app.log",
-            "maxBytes": 10485760,  # 10MB
-            "backupCount": 5,
+        # QueueHandler for async-safe file logging (non-blocking)
+        "file_queue": {
+            "class": "logging.handlers.QueueHandler",
+            "queue": None,  # Will be set in setup_logging()
             "filters": ["correlation_id"],
         },
-        "security": {
-            "class": "logging.handlers.RotatingFileHandler",
-            "level": "INFO",
-            "formatter": "structured",
-            "filename": "logs/security.log",
-            "maxBytes": 10485760,  # 10MB
-            "backupCount": 10,
+        "security_queue": {
+            "class": "logging.handlers.QueueHandler",
+            "queue": None,  # Will be set in setup_logging()
             "filters": ["correlation_id"],
         },
-        "error": {
-            "class": "logging.handlers.RotatingFileHandler",
-            "level": "ERROR",
-            "formatter": "structured",
-            "filename": "logs/error.log",
-            "maxBytes": 10485760,  # 10MB
-            "backupCount": 10,
+        "error_queue": {
+            "class": "logging.handlers.QueueHandler",
+            "queue": None,  # Will be set in setup_logging()
             "filters": ["correlation_id"],
         },
     },
     "loggers": {
         "": {  # Root logger
-            "handlers": ["console", "file", "error"],
+            "handlers": ["console", "file_queue", "error_queue"],
             "level": "DEBUG" if settings.DEBUG else "INFO",
             "propagate": False,
         },
         "security": {
-            "handlers": ["security", "console"],
+            "handlers": ["security_queue", "console"],
             "level": "INFO",
             "propagate": False,
         },
@@ -226,7 +222,7 @@ LOGGING_CONFIG = {
             "propagate": False,
         },
         "fastapi": {
-            "handlers": ["console", "file"],
+            "handlers": ["console", "file_queue"],
             "level": "INFO",
             "propagate": False,
         },
@@ -235,19 +231,119 @@ LOGGING_CONFIG = {
 
 
 def setup_logging():
-    """Setup logging configuration."""
+    """Setup async-safe logging configuration with QueueHandler.
+
+    This implementation uses QueueHandler + QueueListener to ensure that
+    file I/O operations don't block the async event loop. All log writes
+    are handled in a separate thread.
+
+    Architecture:
+        - Loggers write to QueueHandler (non-blocking, ~1μs overhead)
+        - QueueListener runs in background thread
+        - Listener writes to RotatingFileHandler (blocking, but separate thread)
+        - Event loop remains responsive during log writes
+
+    Thread Safety:
+        - Queue operations are thread-safe
+        - Listener runs in dedicated thread
+        - No blocking of async event loop
+    """
     import os
-    
+    global _queue_listener
+
     # Create logs directory if it doesn't exist
     os.makedirs("logs", exist_ok=True)
-    
+
+    # Create log queues (unbounded for reliability)
+    file_queue = queue.Queue(-1)  # -1 = unbounded
+    security_queue = queue.Queue(-1)
+    error_queue = queue.Queue(-1)
+
+    # Update config with queue instances
+    LOGGING_CONFIG["handlers"]["file_queue"]["queue"] = file_queue
+    LOGGING_CONFIG["handlers"]["security_queue"]["queue"] = security_queue
+    LOGGING_CONFIG["handlers"]["error_queue"]["queue"] = error_queue
+
+    # Apply logging configuration
     logging.config.dictConfig(LOGGING_CONFIG)
-    
+
+    # Create actual file handlers (will run in separate thread via QueueListener)
+    correlation_filter = CorrelationIdFilter()
+    structured_formatter = StructuredFormatter()
+
+    file_handler = logging.handlers.RotatingFileHandler(
+        filename="logs/app.log",
+        maxBytes=10485760,  # 10MB
+        backupCount=5,
+    )
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(structured_formatter)
+    file_handler.addFilter(correlation_filter)
+
+    security_handler = logging.handlers.RotatingFileHandler(
+        filename="logs/security.log",
+        maxBytes=10485760,  # 10MB
+        backupCount=10,
+    )
+    security_handler.setLevel(logging.INFO)
+    security_handler.setFormatter(structured_formatter)
+    security_handler.addFilter(correlation_filter)
+
+    error_handler = logging.handlers.RotatingFileHandler(
+        filename="logs/error.log",
+        maxBytes=10485760,  # 10MB
+        backupCount=10,
+    )
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(structured_formatter)
+    error_handler.addFilter(correlation_filter)
+
+    # Create QueueListeners to process log records in separate threads
+    # Each listener handles file I/O operations off the main event loop
+    file_listener = logging.handlers.QueueListener(
+        file_queue,
+        file_handler,
+        respect_handler_level=True
+    )
+
+    security_listener = logging.handlers.QueueListener(
+        security_queue,
+        security_handler,
+        respect_handler_level=True
+    )
+
+    error_listener = logging.handlers.QueueListener(
+        error_queue,
+        error_handler,
+        respect_handler_level=True
+    )
+
+    # Start all queue listener threads
+    file_listener.start()
+    security_listener.start()
+    error_listener.start()
+
+    # Store listeners for cleanup
+    global _queue_listener
+    _queue_listener = (file_listener, security_listener, error_listener)
+
+    # Register cleanup handler to stop listeners on shutdown
+    atexit.register(_shutdown_logging)
+
     logger = logging.getLogger(__name__)
     logger.info(
-        f"Logging initialized: environment={settings.ENVIRONMENT}, "
-        f"debug={settings.DEBUG}"
+        f"Async-safe logging initialized with QueueHandler (3 listeners): "
+        f"environment={settings.ENVIRONMENT}, debug={settings.DEBUG}"
     )
+
+
+def _shutdown_logging():
+    """Stop all queue listeners on application shutdown."""
+    global _queue_listener
+    if _queue_listener:
+        for listener in _queue_listener:
+            listener.stop()
+        _queue_listener = None
 
 
 # Global security event logger instance

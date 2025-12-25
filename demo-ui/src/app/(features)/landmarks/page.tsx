@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { Eye, Upload, Camera, AlertCircle, Maximize2 } from 'lucide-react';
+import { Eye, Upload, Camera, AlertCircle, Maximize2, Video } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -11,18 +11,21 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { ImageUploader } from '@/components/media/image-uploader';
 import { WebcamCapture } from '@/components/media/webcam-capture';
+import { LiveCameraStream } from '@/components/media/live-camera-stream';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useLandmarkDetection } from '@/hooks/use-landmark-detection';
 import { toast } from 'sonner';
+import type { LiveAnalysisResult } from '@/hooks/use-live-camera-analysis';
 
 export default function LandmarksPage() {
   const { t } = useTranslation();
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [capturedImage, setCapturedImage] = useState<Blob | null>(null);
-  const [inputMode, setInputMode] = useState<'upload' | 'camera'>('upload');
+  const [inputMode, setInputMode] = useState<'upload' | 'camera' | 'live'>('upload');
   const [include3D, setInclude3D] = useState(false);
   const [showOverlay, setShowOverlay] = useState(true);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [liveResult, setLiveResult] = useState<LiveAnalysisResult | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
 
@@ -62,7 +65,12 @@ export default function LandmarksPage() {
     setSelectedImage(null);
     setCapturedImage(null);
     setImageLoaded(false);
+    setLiveResult(null);
     reset();
+  };
+
+  const handleLiveResult = (result: LiveAnalysisResult) => {
+    setLiveResult(result);
   };
 
   // Draw landmarks on canvas
@@ -209,9 +217,9 @@ export default function LandmarksPage() {
 
               <Tabs
                 value={inputMode}
-                onValueChange={(v) => setInputMode(v as 'upload' | 'camera')}
+                onValueChange={(v) => setInputMode(v as 'upload' | 'camera' | 'live')}
               >
-                <TabsList className="grid w-full grid-cols-2">
+                <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="upload" className="flex items-center gap-2">
                     <Upload className="h-4 w-4" />
                     Upload
@@ -219,6 +227,10 @@ export default function LandmarksPage() {
                   <TabsTrigger value="camera" className="flex items-center gap-2">
                     <Camera className="h-4 w-4" />
                     Camera
+                  </TabsTrigger>
+                  <TabsTrigger value="live" className="flex items-center gap-2">
+                    <Video className="h-4 w-4" />
+                    Live Stream
                   </TabsTrigger>
                 </TabsList>
                 <TabsContent value="upload" className="mt-4">
@@ -235,32 +247,41 @@ export default function LandmarksPage() {
                     disabled={isPending}
                   />
                 </TabsContent>
+                <TabsContent value="live" className="mt-4">
+                  <LiveCameraStream
+                    mode="landmarks"
+                    onResult={handleLiveResult}
+                    disabled={isPending}
+                  />
+                </TabsContent>
               </Tabs>
 
-              <div className="flex gap-2 pt-4">
-                <Button
-                  onClick={handleDetect}
-                  disabled={isPending || (!selectedImage && !capturedImage)}
-                  className="flex-1"
-                >
-                  {isPending ? (
-                    <>
-                      <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                      Detecting...
-                    </>
-                  ) : (
-                    <>
-                      <Eye className="mr-2 h-4 w-4" />
-                      Detect Landmarks
-                    </>
-                  )}
-                </Button>
-                {(isSuccess || isError) && (
-                  <Button variant="outline" onClick={handleReset}>
-                    {t('common.reset')}
+              {inputMode !== 'live' && (
+                <div className="flex gap-2 pt-4">
+                  <Button
+                    onClick={handleDetect}
+                    disabled={isPending || (!selectedImage && !capturedImage)}
+                    className="flex-1"
+                  >
+                    {isPending ? (
+                      <>
+                        <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                        Detecting...
+                      </>
+                    ) : (
+                      <>
+                        <Eye className="mr-2 h-4 w-4" />
+                        Detect Landmarks
+                      </>
+                    )}
                   </Button>
-                )}
-              </div>
+                  {(isSuccess || isError) && (
+                    <Button variant="outline" onClick={handleReset}>
+                      {t('common.reset')}
+                    </Button>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         </motion.div>
@@ -295,7 +316,70 @@ export default function LandmarksPage() {
               </div>
             </CardHeader>
             <CardContent>
-              {isSuccess && data && imageUrl && (
+              {/* Live Stream Results */}
+              {inputMode === 'live' && liveResult?.landmarks && (
+                <motion.div
+                  key={liveResult.frame_number}
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ duration: 0.2 }}
+                  className="space-y-4"
+                >
+                  {/* Live Mode Indicator */}
+                  <div className="flex items-center justify-between rounded-lg bg-blue-50 p-3 text-sm dark:bg-blue-950/50">
+                    <div className="flex items-center gap-2">
+                      <Video className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                      <span className="font-medium text-blue-900 dark:text-blue-100">Live Analysis</span>
+                    </div>
+                    <div className="text-blue-700 dark:text-blue-300">
+                      Frame #{liveResult.frame_number} • {liveResult.processing_time_ms.toFixed(0)}ms
+                    </div>
+                  </div>
+
+                  {/* Landmark Stats */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="rounded-lg border bg-gradient-to-br from-indigo-500/10 to-indigo-500/5 p-4">
+                      <p className="text-sm text-muted-foreground">Landmarks Detected</p>
+                      <p className="text-3xl font-bold text-indigo-600">
+                        {liveResult.landmarks.num_landmarks}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border bg-gradient-to-br from-purple-500/10 to-purple-500/5 p-4">
+                      <p className="text-sm text-muted-foreground">Confidence</p>
+                      <p className="text-3xl font-bold text-purple-600">
+                        {(liveResult.landmarks.confidence * 100).toFixed(0)}%
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Landmark Point Samples */}
+                  {liveResult.landmarks.landmarks && (
+                    <div className="rounded-lg border p-3">
+                      <p className="mb-2 text-sm font-medium">Sample Landmark Points</p>
+                      <div className="flex flex-wrap gap-2">
+                        {Object.keys(liveResult.landmarks.landmarks).slice(0, 8).map((key) => (
+                          <Badge key={key} variant="outline" className="font-mono text-xs">
+                            {key}
+                          </Badge>
+                        ))}
+                        {Object.keys(liveResult.landmarks.landmarks).length > 8 && (
+                          <Badge variant="secondary" className="text-xs">
+                            +{Object.keys(liveResult.landmarks.landmarks).length - 8} more
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Info Note */}
+                  <div className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
+                    💡 Live landmark visualization coming soon. Currently showing detection stats in real-time.
+                  </div>
+                </motion.div>
+              )}
+
+              {/* Static Results */}
+              {inputMode !== 'live' && isSuccess && data && imageUrl && (
                 <motion.div
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -382,10 +466,14 @@ export default function LandmarksPage() {
                 </motion.div>
               )}
 
-              {!isSuccess && !isError && (
+              {!liveResult && !isSuccess && !isError && (
                 <div className="flex h-64 flex-col items-center justify-center gap-4 text-muted-foreground">
                   <Maximize2 className="h-12 w-12" />
-                  <p>Upload an image to detect facial landmarks</p>
+                  <p>
+                    {inputMode === 'live'
+                      ? 'Start live streaming to detect facial landmarks'
+                      : 'Upload an image to detect facial landmarks'}
+                  </p>
                 </div>
               )}
             </CardContent>

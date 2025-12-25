@@ -18,6 +18,7 @@ import numpy as np
 from app.domain.entities.face_detection import FaceDetectionResult
 from app.domain.exceptions.face_errors import MLModelTimeoutError
 from app.domain.interfaces.face_detector import IFaceDetector
+from app.infrastructure.resilience.circuit_breaker import FACE_DETECTOR_BREAKER
 
 if TYPE_CHECKING:
     from app.infrastructure.async_execution.thread_pool_manager import ThreadPoolManager
@@ -79,11 +80,12 @@ class AsyncFaceDetector:
         )
 
     async def detect(self, image: np.ndarray) -> FaceDetectionResult:
-        """Detect face in image asynchronously with timeout protection.
+        """Detect face in image asynchronously with timeout and circuit breaker protection.
 
         This method offloads the blocking DeepFace detection to the
         thread pool, allowing other async operations to proceed.
         Includes timeout protection to prevent indefinite hangs.
+        Circuit breaker protects against cascading failures from ML model issues.
 
         Args:
             image: Input image as numpy array (H, W, C) in BGR format
@@ -95,31 +97,41 @@ class AsyncFaceDetector:
             FaceNotDetectedError: When no face is detected
             MultipleFacesError: When multiple faces are detected
             MLModelTimeoutError: When detection exceeds timeout
+            CircuitBreakerOpenError: When circuit breaker is open (too many failures)
             RuntimeError: If thread pool has been shut down
 
         Performance:
             ~10-50ms overhead for thread pool dispatch, but allows
             concurrent request handling during detection.
+
+        Resilience:
+            Circuit breaker opens after 5 consecutive failures, preventing
+            resource waste on a failing ML model. Auto-recovers after 30s.
         """
         logger.debug(f"Executing face detection in thread pool (timeout: {self._timeout_seconds}s)")
 
-        try:
-            # Execute blocking detection in thread pool with timeout
-            result = await asyncio.wait_for(
-                self._thread_pool.run_blocking(self._detector.detect_sync, image),
-                timeout=self._timeout_seconds
-            )
-            return result
+        async def _detect_with_timeout():
+            """Inner function to wrap timeout logic for circuit breaker."""
+            try:
+                # Execute blocking detection in thread pool with timeout
+                result = await asyncio.wait_for(
+                    self._thread_pool.run_blocking(self._detector.detect_sync, image),
+                    timeout=self._timeout_seconds
+                )
+                return result
 
-        except asyncio.TimeoutError:
-            logger.error(
-                f"Face detection timed out after {self._timeout_seconds}s "
-                f"(backend: {self._detector.get_detector_name()})"
-            )
-            raise MLModelTimeoutError(
-                operation="face_detection",
-                timeout_seconds=self._timeout_seconds
-            )
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"Face detection timed out after {self._timeout_seconds}s "
+                    f"(backend: {self._detector.get_detector_name()})"
+                )
+                raise MLModelTimeoutError(
+                    operation="face_detection",
+                    timeout_seconds=self._timeout_seconds
+                )
+
+        # Wrap with circuit breaker for resilience
+        return await FACE_DETECTOR_BREAKER.call_async(_detect_with_timeout)
 
     def get_detector_name(self) -> str:
         """Get the name of the underlying detector backend.

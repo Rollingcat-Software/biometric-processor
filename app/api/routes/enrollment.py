@@ -1,18 +1,24 @@
 """Enrollment API routes."""
 
 import logging
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 
 from app.api.schemas.enrollment import EnrollmentResponse
 from app.api.schemas.multi_image_enrollment import MultiImageEnrollmentResponse
 from app.application.use_cases.enroll_face import EnrollFaceUseCase
 from app.application.use_cases.enroll_multi_image import EnrollMultiImageUseCase
 from app.core.config import settings
-from app.core.container import get_enroll_face_use_case, get_enroll_multi_image_use_case, get_file_storage
+from app.core.container import (
+    get_enroll_face_use_case,
+    get_enroll_multi_image_use_case,
+    get_file_storage,
+    get_idempotency_store,
+)
 from app.core.validation import ValidationError, validate_image_file, validate_user_id, validate_tenant_id
 from app.domain.interfaces.file_storage import IFileStorage
+from app.infrastructure.idempotency import IdempotencyStore
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +32,13 @@ async def enroll_face(
     tenant_id: str = Form(None, description="Optional tenant identifier"),
     use_case: EnrollFaceUseCase = Depends(get_enroll_face_use_case),
     storage: IFileStorage = Depends(get_file_storage),
+    idempotency_store: IdempotencyStore = Depends(get_idempotency_store),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", description="Optional idempotency key to prevent duplicate enrollments"),
 ) -> EnrollmentResponse:
     """Enroll a user's face.
+
+    SECURITY: This endpoint is protected by rate limiting (default: 10 requests/minute)
+    to prevent enrollment flooding and DoS attacks. See ENROLLMENT_RATE_LIMIT_PER_MINUTE config.
 
     This endpoint:
     1. Validates the uploaded image
@@ -61,7 +72,28 @@ async def enroll_face(
             logger.warning(f"Input validation failed: {str(e)}")
             raise HTTPException(status_code=400, detail=f"Invalid input: {str(e)}")
 
-        logger.info(f"Enrollment request: user_id={user_id}, tenant_id={tenant_id}")
+        logger.info(f"Enrollment request: user_id={user_id}, tenant_id={tenant_id}, idempotency_key={idempotency_key or 'none'}")
+
+        # Check idempotency if key provided
+        if idempotency_key:
+            # Read file content to compute hash
+            file_content = await file.read()
+            file_hash = idempotency_store.hash_file_content(file_content)
+            request_hash = idempotency_store.hash_request(user_id, tenant_id, file_hash)
+
+            # Check if we've already processed this exact request
+            try:
+                cached_response = await idempotency_store.get_response(idempotency_key, request_hash)
+                if cached_response:
+                    logger.info(f"Returning cached enrollment response for idempotency_key={idempotency_key}")
+                    return EnrollmentResponse(**cached_response.response_data)
+            except ValueError as e:
+                # Idempotency key conflict (same key, different request)
+                logger.error(f"Idempotency conflict: {str(e)}")
+                raise HTTPException(status_code=409, detail=str(e))
+
+            # Reset file pointer after reading for hash
+            await file.seek(0)
 
         # Validate file type (basic header check for early rejection)
         if not file.content_type or not file.content_type.startswith("image/"):
@@ -83,13 +115,25 @@ async def enroll_face(
         # Execute enrollment use case
         result = await use_case.execute(user_id=user_id, image_path=image_path, tenant_id=tenant_id)
 
-        return EnrollmentResponse(
+        response = EnrollmentResponse(
             success=True,
             user_id=result.user_id,
             quality_score=result.quality_score,
             message="Face enrolled successfully",
             embedding_dimension=result.get_embedding_dimension(),
         )
+
+        # Store response for idempotency if key provided
+        if idempotency_key:
+            await idempotency_store.store_response(
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+                response_data=response.model_dump(),
+                status_code=200,
+                user_id=user_id
+            )
+
+        return response
 
     finally:
         # Cleanup temporary file
@@ -104,8 +148,13 @@ async def enroll_face_multi_image(
     tenant_id: str = Form(None, description="Optional tenant identifier"),
     use_case: EnrollMultiImageUseCase = Depends(get_enroll_multi_image_use_case),
     storage: IFileStorage = Depends(get_file_storage),
+    idempotency_store: IdempotencyStore = Depends(get_idempotency_store),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", description="Optional idempotency key to prevent duplicate enrollments"),
 ) -> MultiImageEnrollmentResponse:
     """Enroll a user's face using multiple images (template fusion).
+
+    SECURITY: This endpoint is protected by rate limiting (default: 10 requests/minute)
+    to prevent enrollment flooding and DoS attacks. See ENROLLMENT_RATE_LIMIT_PER_MINUTE config.
 
     This endpoint implements multi-image biometric enrollment:
     - Accepts 2-5 face images per user
@@ -149,8 +198,35 @@ async def enroll_face_multi_image(
 
         logger.info(
             f"Multi-image enrollment request: user_id={user_id}, "
-            f"images={len(files)}, tenant_id={tenant_id}"
+            f"images={len(files)}, tenant_id={tenant_id}, idempotency_key={idempotency_key or 'none'}"
         )
+
+        # Check idempotency if key provided
+        if idempotency_key:
+            # Compute combined hash of all files
+            combined_hash_data = ""
+            for i, file in enumerate(files):
+                file_content = await file.read()
+                file_hash = idempotency_store.hash_file_content(file_content)
+                combined_hash_data += file_hash
+                # Reset file pointer after reading for hash
+                await file.seek(0)
+
+            # Hash the combined hashes
+            import hashlib
+            combined_file_hash = hashlib.sha256(combined_hash_data.encode()).hexdigest()
+            request_hash = idempotency_store.hash_request(user_id, tenant_id, combined_file_hash)
+
+            # Check if we've already processed this exact request
+            try:
+                cached_response = await idempotency_store.get_response(idempotency_key, request_hash)
+                if cached_response:
+                    logger.info(f"Returning cached multi-image enrollment response for idempotency_key={idempotency_key}")
+                    return MultiImageEnrollmentResponse(**cached_response.response_data)
+            except ValueError as e:
+                # Idempotency key conflict (same key, different request)
+                logger.error(f"Idempotency conflict: {str(e)}")
+                raise HTTPException(status_code=409, detail=str(e))
 
         # Check if multi-image enrollment is enabled
         if not settings.MULTI_IMAGE_ENROLLMENT_ENABLED:
@@ -201,7 +277,7 @@ async def enroll_face_multi_image(
         )
 
         # Use actual quality scores from the enrollment result
-        return MultiImageEnrollmentResponse(
+        response = MultiImageEnrollmentResponse(
             success=True,
             user_id=result.user_id,
             images_processed=result.images_processed,
@@ -212,6 +288,18 @@ async def enroll_face_multi_image(
             embedding_dimension=result.embedding_dimension,
             fusion_strategy=result.fusion_strategy,
         )
+
+        # Store response for idempotency if key provided
+        if idempotency_key:
+            await idempotency_store.store_response(
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+                response_data=response.model_dump(),
+                status_code=200,
+                user_id=user_id
+            )
+
+        return response
 
     finally:
         # Cleanup all temporary files
