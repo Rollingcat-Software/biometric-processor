@@ -24,7 +24,8 @@ services:
       - REDIS_DB=0
       - METRICS_ENABLED=true
       - DATABASE_URL=postgresql://biometric:biometric@postgres:5432/biometric
-      - EMBEDDING_STORAGE=postgres
+      - USE_PGVECTOR=true
+      - EMBEDDING_DIMENSION=512
       # Quality thresholds - More lenient for demo environment
       - BLUR_THRESHOLD=50.0
       - QUALITY_THRESHOLD=60.0
