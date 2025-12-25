@@ -45,13 +45,11 @@ from app.infrastructure.ml.quality.quality_assessor import QualityAssessor
 from app.infrastructure.idempotency import IdempotencyStore
 from app.infrastructure.messaging.event_handlers import BiometricEventHandler, EventRouter
 from app.infrastructure.messaging.redis_event_bus import RedisEventBus
-from app.infrastructure.persistence.repositories.memory_embedding_repository import (
-    InMemoryEmbeddingRepository,
-)
 from app.infrastructure.persistence.repositories.pgvector_embedding_repository import (
     PgVectorEmbeddingRepository,
 )
 from app.infrastructure.storage.local_file_storage import LocalFileStorage
+from app.infrastructure.async_execution.thread_pool_manager import ThreadPoolManager
 
 logger = logging.getLogger(__name__)
 
@@ -62,28 +60,54 @@ logger = logging.getLogger(__name__)
 
 
 @lru_cache()
-def get_face_detector() -> IFaceDetector:
-    """Get face detector instance (singleton).
+def get_thread_pool() -> ThreadPoolManager:
+    """Get thread pool manager instance (singleton).
 
     Returns:
-        Face detector implementation
+        Thread pool manager for async ML operations
+
+    Note:
+        Thread pool is used to execute CPU-bound ML operations (DeepFace)
+        without blocking the async event loop. Optimized for ML workloads.
+    """
+    pool_size = settings.ML_THREAD_POOL_SIZE
+    logger.info(f"Creating thread pool manager with {pool_size} workers")
+    return ThreadPoolManager(
+        max_workers=pool_size,
+        thread_name_prefix="ml-worker",
+    )
+
+
+@lru_cache()
+def get_face_detector() -> IFaceDetector:
+    """Get face detector instance (singleton) with async support.
+
+    Returns:
+        Face detector implementation with async execution if enabled
     """
     logger.info(f"Creating face detector: {settings.FACE_DETECTION_BACKEND}")
-    return FaceDetectorFactory.create(detector_type=settings.FACE_DETECTION_BACKEND, align=True)
+    return FaceDetectorFactory.create(
+        detector_type=settings.FACE_DETECTION_BACKEND,
+        align=True,
+        async_enabled=settings.ASYNC_ML_ENABLED,
+        thread_pool=get_thread_pool() if settings.ASYNC_ML_ENABLED else None,
+    )
 
 
 @lru_cache()
 def get_embedding_extractor() -> IEmbeddingExtractor:
-    """Get embedding extractor instance (singleton).
+    """Get embedding extractor instance (singleton) with async support.
 
     Returns:
-        Embedding extractor implementation
+        Embedding extractor implementation with async execution if enabled
     """
     logger.info(f"Creating embedding extractor: {settings.FACE_RECOGNITION_MODEL}")
     return EmbeddingExtractorFactory.create(
         model_name=settings.FACE_RECOGNITION_MODEL,
         detector_backend=settings.FACE_DETECTION_BACKEND,
         enforce_detection=False,
+        async_enabled=settings.ASYNC_ML_ENABLED,
+        thread_pool=get_thread_pool() if settings.ASYNC_ML_ENABLED else None,
     )
 
 
@@ -147,31 +171,32 @@ def get_embedding_repository() -> IEmbeddingRepository:
     """Get embedding repository instance (singleton).
 
     Returns:
-        Embedding repository implementation based on configuration
+        PostgreSQL pgvector embedding repository (production-ready)
+
+    Raises:
+        ValueError: If DATABASE_URL is not configured
 
     Note:
-        - If USE_PGVECTOR=True: Returns PgVectorEmbeddingRepository (production)
-        - If USE_PGVECTOR=False: Returns InMemoryEmbeddingRepository (development/testing)
-
-        Set USE_PGVECTOR environment variable to control which implementation is used.
+        Always uses PgVectorEmbeddingRepository with efficient vector similarity search.
+        In-memory repositories have been removed - only real database allowed.
     """
-    if settings.USE_PGVECTOR:
-        if not settings.DATABASE_URL:
-            raise ValueError("DATABASE_URL must be set when USE_PGVECTOR=True")
+    if not settings.DATABASE_URL:
+        raise ValueError(
+            "DATABASE_URL must be set. In-memory repositories are not allowed. "
+            "Please configure a PostgreSQL database with pgvector extension."
+        )
 
-        logger.info(
-            f"Creating embedding repository (pgvector) - "
-            f"dimension={settings.EMBEDDING_DIMENSION}"
-        )
-        return PgVectorEmbeddingRepository(
-            database_url=settings.DATABASE_URL,
-            pool_min_size=settings.DATABASE_POOL_MIN_SIZE,
-            pool_max_size=settings.DATABASE_POOL_MAX_SIZE,
-            embedding_dimension=settings.EMBEDDING_DIMENSION,
-        )
-    else:
-        logger.info("Creating embedding repository (in-memory)")
-        return InMemoryEmbeddingRepository()
+    logger.info(
+        f"Creating embedding repository (pgvector) - "
+        f"dimension={settings.EMBEDDING_DIMENSION}, "
+        f"pool={settings.DATABASE_POOL_MIN_SIZE}-{settings.DATABASE_POOL_MAX_SIZE}"
+    )
+    return PgVectorEmbeddingRepository(
+        database_url=settings.DATABASE_URL,
+        pool_min_size=settings.DATABASE_POOL_MIN_SIZE,
+        pool_max_size=settings.DATABASE_POOL_MAX_SIZE,
+        embedding_dimension=settings.EMBEDDING_DIMENSION,
+    )
 
 
 @lru_cache()
@@ -406,30 +431,121 @@ def get_batch_verification_use_case() -> BatchVerificationUseCase:
 def initialize_dependencies() -> None:
     """Initialize all singleton dependencies.
 
-    This pre-loads ML models at application startup for better
-    first-request performance.
+    This pre-loads ML models and creates thread pool at application startup
+    for better first-request performance.
+
+    Critical Performance Optimization:
+        - Creates thread pool for async ML operations
+        - Pre-loads DeepFace models to avoid first-request delay
+        - Initializes database connection pool
     """
     logger.info("Initializing dependencies...")
 
-    # Pre-load expensive ML models
+    # CRITICAL: Initialize thread pool first (required for async ML operations)
+    if settings.ASYNC_ML_ENABLED:
+        logger.info("Initializing thread pool for async ML operations...")
+        get_thread_pool()
+
+    # Pre-load expensive ML models (with async wrappers if enabled)
+    logger.info("Pre-loading ML models...")
     get_face_detector()
     get_embedding_extractor()
     get_quality_assessor()
     get_similarity_calculator()
+    get_liveness_detector()
 
-    # Initialize storage
+    # Initialize storage and repositories
+    logger.info("Initializing storage and database...")
     get_file_storage()
     get_embedding_repository()
-    get_liveness_detector()
 
     # Initialize event bus and handlers (if enabled)
     if settings.EVENT_BUS_ENABLED:
+        logger.info("Initializing event bus...")
         get_event_bus()
         get_event_handler()
         get_event_router()
         get_event_publisher()
 
-    logger.info("Dependencies initialized successfully")
+    logger.info(
+        f"Dependencies initialized successfully "
+        f"(async_ml={settings.ASYNC_ML_ENABLED}, "
+        f"thread_pool_size={settings.ML_THREAD_POOL_SIZE})"
+    )
+
+
+async def shutdown_dependencies(wait: bool = True) -> None:
+    """Shutdown all dependencies gracefully.
+
+    This function should be called during application shutdown to ensure
+    proper cleanup of resources (thread pools, database connections, etc.).
+
+    Args:
+        wait: If True, wait for pending operations to complete
+
+    Critical for Production:
+        - Prevents resource leaks
+        - Ensures graceful shutdown
+        - Closes database connection pools
+        - Shuts down thread pool workers
+    """
+    logger.info("Shutting down dependencies...")
+
+    # Shutdown thread pool first (prevents new ML tasks)
+    if settings.ASYNC_ML_ENABLED:
+        try:
+            thread_pool = get_thread_pool()
+            logger.info("Shutting down thread pool...")
+            thread_pool.shutdown(wait=wait, cancel_futures=not wait)
+            logger.info("Thread pool shut down successfully")
+        except Exception as e:
+            logger.error(f"Error shutting down thread pool: {e}", exc_info=True)
+
+    # Close database connection pool
+    try:
+        repository = get_embedding_repository()
+        if hasattr(repository, 'close'):
+            logger.info("Closing database connection pool...")
+            await repository.close()
+            logger.info("Database connection pool closed")
+    except Exception as e:
+        logger.error(f"Error closing database connections: {e}", exc_info=True)
+
+    # Close event bus connections
+    if settings.EVENT_BUS_ENABLED:
+        try:
+            event_bus = get_event_bus()
+            if hasattr(event_bus, 'close'):
+                logger.info("Closing event bus connections...")
+                await event_bus.close()
+                logger.info("Event bus closed")
+        except Exception as e:
+            logger.error(f"Error closing event bus: {e}", exc_info=True)
+
+    logger.info("Dependencies shutdown complete")
+
+
+def shutdown_thread_pool(wait: bool = True) -> None:
+    """Shutdown thread pool gracefully (sync wrapper).
+
+    Args:
+        wait: If True, wait for pending operations to complete
+
+    Note:
+        This is a synchronous wrapper for use in non-async contexts.
+        For async code, use shutdown_dependencies() instead.
+    """
+    if not settings.ASYNC_ML_ENABLED:
+        logger.debug("Thread pool not enabled, skipping shutdown")
+        return
+
+    try:
+        thread_pool = get_thread_pool()
+        logger.info(f"Shutting down thread pool (wait={wait})...")
+        thread_pool.shutdown(wait=wait, cancel_futures=not wait)
+        logger.info("Thread pool shutdown complete")
+    except Exception as e:
+        logger.error(f"Error during thread pool shutdown: {e}", exc_info=True)
 
 
 def clear_cache() -> None:
@@ -441,6 +557,7 @@ def clear_cache() -> None:
     """
     logger.warning("Clearing dependency cache")
 
+    get_thread_pool.cache_clear()
     get_face_detector.cache_clear()
     get_embedding_extractor.cache_clear()
     get_quality_assessor.cache_clear()

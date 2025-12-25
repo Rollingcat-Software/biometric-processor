@@ -27,7 +27,7 @@ from app.api.routes import proctor_ws
 from app.api.routes import admin
 from app.api.routes import live_analysis
 from app.core.config import settings
-from app.core.container import initialize_dependencies, shutdown_thread_pool
+from app.core.container import initialize_dependencies, shutdown_dependencies, shutdown_thread_pool
 from app.core.metrics import init_metrics
 from app.infrastructure.rate_limit.storage_factory import RateLimitStorageFactory
 
@@ -83,9 +83,9 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down application...")
 
-    # Shutdown thread pool gracefully
-    logger.info("Shutting down thread pool manager...")
-    shutdown_thread_pool(wait=True)
+    # CRITICAL: Shutdown all dependencies gracefully (thread pool, database, event bus, etc.)
+    logger.info("Shutting down dependencies...")
+    await shutdown_dependencies(wait=True)
 
     logger.info("Application shutdown complete")
 

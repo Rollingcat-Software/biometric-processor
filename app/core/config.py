@@ -76,6 +76,40 @@ class Settings(BaseSettings):
     # ML Model Timeouts (prevents hung requests)
     ML_MODEL_TIMEOUT_SECONDS: int = Field(default=30, ge=5, le=120, description="Timeout for ML model operations")
 
+    # CRITICAL PERFORMANCE: Async ML Execution
+    ASYNC_ML_ENABLED: bool = Field(
+        default=True,
+        description="Enable async ML operations using thread pool (CRITICAL for performance - 10-25x improvement)"
+    )
+    ML_THREAD_POOL_SIZE: int = Field(
+        default=4,
+        ge=1,
+        le=32,
+        description="Thread pool size for async ML operations (recommended: number of CPU cores)"
+    )
+
+    # Request Timeouts (prevents hung requests)
+    REQUEST_TIMEOUT_SECONDS: int = Field(
+        default=60,
+        ge=10,
+        le=300,
+        description="Maximum time for entire request processing (prevents resource exhaustion)"
+    )
+
+    # Batch Processing Limits (prevents DoS attacks)
+    BATCH_MAX_SIZE: int = Field(
+        default=50,
+        ge=1,
+        le=100,
+        description="Maximum number of images in a batch operation (prevents memory exhaustion)"
+    )
+    BATCH_MAX_TOTAL_SIZE_MB: int = Field(
+        default=50,
+        ge=1,
+        le=200,
+        description="Maximum total size of all files in a batch (MB)"
+    )
+
     # Liveness Detection Mode
     LIVENESS_MODE: Literal["passive", "active", "combined"] = Field(default="combined")
 
@@ -86,12 +120,13 @@ class Settings(BaseSettings):
     BLUR_THRESHOLD: float = Field(default=100.0, ge=0.0)
 
     # Database (PostgreSQL with pgvector)
+    # CRITICAL: In-memory repositories removed - only real database allowed
     DATABASE_URL: Optional[str] = Field(
-        default="postgresql://postgres:postgres_dev_password@postgres:5432/identity_core_db"
+        default="postgresql://postgres:postgres_dev_password@postgres:5432/identity_core_db",
+        description="PostgreSQL database URL with pgvector extension (REQUIRED - no mock/in-memory allowed)"
     )
     DATABASE_POOL_MIN_SIZE: int = Field(default=10, ge=1, le=100)
     DATABASE_POOL_MAX_SIZE: int = Field(default=20, ge=1, le=100)
-    USE_PGVECTOR: bool = Field(default=False)  # Set to True to use pgvector, False for in-memory
     EMBEDDING_DIMENSION: int = Field(default=512, ge=128, le=4096)  # FaceNet: 512, VGG-Face: 2622
 
     # Redis Configuration

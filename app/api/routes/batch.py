@@ -1,10 +1,15 @@
-"""Batch processing API routes."""
+"""Batch processing API routes with DoS protection.
+
+CRITICAL SECURITY FIX:
+    Added batch size limits to prevent DoS attacks and memory exhaustion.
+    Validates both count and total size before processing.
+"""
 
 import json
 import logging
 from typing import List
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.api.schemas.batch import (
     BatchEnrollmentItemRequest,
@@ -19,6 +24,7 @@ from app.application.use_cases.batch_process import (
     EnrollmentItem,
     VerificationItem,
 )
+from app.core.config import settings
 from app.core.container import (
     get_batch_enrollment_use_case,
     get_batch_verification_use_case,
@@ -62,6 +68,32 @@ async def batch_enroll(
         ]
     """
     logger.info(f"Batch enrollment request: {len(files)} files")
+
+    # CRITICAL FIX: Validate batch size to prevent DoS attacks
+    if len(files) > settings.BATCH_MAX_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Batch size ({len(files)}) exceeds maximum allowed ({settings.BATCH_MAX_SIZE}). "
+                   f"This prevents memory exhaustion and DoS attacks."
+        )
+
+    # CRITICAL FIX: Validate total batch size to prevent memory exhaustion
+    total_size_bytes = 0
+    for file in files:
+        # Try to get file size from file object
+        if hasattr(file, 'size') and file.size:
+            total_size_bytes += file.size
+        # Estimate 2MB per file if size not available
+        else:
+            total_size_bytes += 2 * 1024 * 1024
+
+    max_total_bytes = settings.BATCH_MAX_TOTAL_SIZE_MB * 1024 * 1024
+    if total_size_bytes > max_total_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Batch total size ({total_size_bytes / 1024 / 1024:.1f} MB) exceeds maximum "
+                   f"allowed ({settings.BATCH_MAX_TOTAL_SIZE_MB} MB). This prevents memory exhaustion."
+        )
 
     # Parse items JSON
     try:
