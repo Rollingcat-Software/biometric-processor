@@ -17,13 +17,15 @@ export function Providers({ children }: ProvidersProps) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            staleTime: 60 * 1000, // 1 minute
+            staleTime: 60 * 1000, // 1 minute - ML results don't change
             gcTime: 5 * 60 * 1000, // 5 minutes
-            retry: 1,
-            refetchOnWindowFocus: false,
+            retry: 1, // Only retry once - ML operations are expensive
+            retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000), // Exponential backoff
+            refetchOnWindowFocus: false, // Don't refetch on focus - prevents excessive API calls
           },
           mutations: {
-            retry: 1,
+            retry: 1, // Only retry once for mutations
+            retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
           },
         },
       })

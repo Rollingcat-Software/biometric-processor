@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils/cn';
 import { Button } from '@/components/ui/button';
 import { useAppStore } from '@/lib/store/app-store';
+import { compressImage, getCompressionStats } from '@/lib/utils/image-compression';
 
 interface WebcamCaptureProps {
   onCapture: (image: Blob | null) => void;
@@ -106,7 +107,7 @@ export function WebcamCapture({
     setIsStreaming(false);
   }, []);
 
-  const captureImage = useCallback(() => {
+  const captureImage = useCallback(async () => {
     if (!videoRef.current || !canvasRef.current) return;
 
     const video = videoRef.current;
@@ -118,17 +119,51 @@ export function WebcamCapture({
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.drawImage(video, 0, 0);
-      canvas.toBlob(
-        (blob) => {
-          if (blob) {
-            onCapture(blob);
-            setCapturedPreview(URL.createObjectURL(blob));
-            stopCamera();
+
+      try {
+        // First, convert canvas to blob
+        const rawBlob = await new Promise<Blob>((resolve, reject) => {
+          canvas.toBlob(
+            (blob) => {
+              if (blob) {
+                resolve(blob);
+              } else {
+                reject(new Error('Failed to capture image'));
+              }
+            },
+            'image/jpeg',
+            1.0
+          );
+        });
+
+        // Then compress the blob (reduces 5-10MB to ~500KB)
+        const compressedBlob = await compressImage(
+          new File([rawBlob], 'webcam-capture.jpg', { type: 'image/jpeg' }),
+          {
+            maxWidth: 1920,
+            maxHeight: 1080,
+            quality: 0.85,
+            mimeType: 'image/jpeg',
           }
-        },
-        'image/jpeg',
-        0.9
-      );
+        );
+
+        // Log compression stats in development
+        if (process.env.NODE_ENV === 'development') {
+          const stats = getCompressionStats(rawBlob.size, compressedBlob.size);
+          console.log('[Webcam Compression]', {
+            original: `${(rawBlob.size / 1024).toFixed(1)} KB`,
+            compressed: `${(compressedBlob.size / 1024).toFixed(1)} KB`,
+            reduction: `${stats.reduction}%`,
+          });
+        }
+
+        onCapture(compressedBlob);
+        setCapturedPreview(URL.createObjectURL(compressedBlob));
+        stopCamera();
+      } catch (err) {
+        console.error('Image capture/compression failed:', err);
+        setError('Failed to capture image. Please try again.');
+      }
     }
   }, [onCapture, stopCamera]);
 

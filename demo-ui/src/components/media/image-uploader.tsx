@@ -6,6 +6,7 @@ import { Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils/cn';
 import { Button } from '@/components/ui/button';
+import { compressImageToFile, getCompressionStats } from '@/lib/utils/image-compression';
 
 interface ImageUploaderProps {
   onImageSelected: (file: File | null) => void;
@@ -27,7 +28,7 @@ export function ImageUploader({
   const [error, setError] = useState<string | null>(null);
 
   const onDrop = useCallback(
-    (acceptedFiles: File[], rejectedFiles: unknown[]) => {
+    async (acceptedFiles: File[], rejectedFiles: unknown[]) => {
       setError(null);
 
       if (rejectedFiles.length > 0) {
@@ -42,12 +43,35 @@ export function ImageUploader({
           return;
         }
 
-        onImageSelected(file);
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          setPreview(reader.result as string);
-        };
-        reader.readAsDataURL(file);
+        try {
+          // Compress image before upload (5-10MB → ~500KB)
+          const compressedFile = await compressImageToFile(file, {
+            maxWidth: 1920,
+            maxHeight: 1080,
+            quality: 0.85,
+            mimeType: 'image/jpeg',
+          });
+
+          // Log compression stats in development
+          if (process.env.NODE_ENV === 'development') {
+            const stats = getCompressionStats(file.size, compressedFile.size);
+            console.log('[Image Compression]', {
+              original: `${(file.size / 1024).toFixed(1)} KB`,
+              compressed: `${(compressedFile.size / 1024).toFixed(1)} KB`,
+              reduction: `${stats.reduction}%`,
+            });
+          }
+
+          onImageSelected(compressedFile);
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            setPreview(reader.result as string);
+          };
+          reader.readAsDataURL(compressedFile);
+        } catch (err) {
+          console.error('Image compression failed:', err);
+          setError('Failed to process image. Please try a different image.');
+        }
       }
     },
     [onImageSelected, maxSize, t]
