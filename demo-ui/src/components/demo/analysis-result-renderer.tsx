@@ -232,6 +232,10 @@ function renderDemographics(result: any) {
 function renderLiveness(result: any) {
   const liveness = result.liveness || result;
   const isLive = liveness.is_live;
+  // API returns liveness_score (0-100), fallback to confidence
+  const score = liveness.liveness_score ?? liveness.confidence ?? 0;
+  // Normalize to 0-1 if score is > 1 (meaning it's 0-100 scale)
+  const normalizedScore = score > 1 ? score / 100 : score;
 
   return (
     <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="space-y-4">
@@ -240,8 +244,11 @@ function renderLiveness(result: any) {
           {isLive ? '✓ Live Person' : '✗ Spoof Detected'}
         </p>
         <p className="mt-2 text-sm text-muted-foreground">
-          Confidence: {formatPercent(liveness.confidence)}
+          Liveness Score: {formatPercent(normalizedScore)}
         </p>
+        {liveness.challenge && (
+          <p className="text-xs text-muted-foreground">Challenge: {liveness.challenge}</p>
+        )}
         {liveness.method && (
           <p className="text-xs text-muted-foreground">Method: {liveness.method}</p>
         )}

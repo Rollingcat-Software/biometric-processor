@@ -70,8 +70,10 @@ class StaticFileService:
             'text/html',
             'text/css',
             'text/javascript',
+            'text/plain',  # Required for Next.js RSC data files
             'application/javascript',
             'application/json',
+            'application/octet-stream',  # Required for Next.js RSC payloads
             'image/png',
             'image/jpeg',
             'image/svg+xml',
