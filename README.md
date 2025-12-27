@@ -148,84 +148,231 @@ biometric-processor/
 
 ## Installation
 
-### 1. Clone the Repository
+### Prerequisites
+
+- **Python 3.11+**
+- **Node.js 18+**
+- **PostgreSQL 14+ with pgvector extension**
+- **Redis 7+**
+- **4GB+ RAM** (8GB recommended)
+- **GPU** (optional, for faster inference)
+
+### Local Development Setup
+
+#### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/Rollingcat-Software/biometric-processor.git
 cd biometric-processor
 ```
 
-### 2. Create Virtual Environment
+#### 2. Install PostgreSQL with pgvector
 
 ```bash
-python -m venv venv
+# Ubuntu/Debian
+sudo apt install postgresql postgresql-contrib
+sudo -u postgres psql -c "CREATE EXTENSION vector;"
 
-# Linux/macOS
-source venv/bin/activate
+# macOS
+brew install postgresql pgvector
 
-# Windows
-venv\Scripts\activate
+# Create database
+createdb biometric_db
+psql biometric_db -c "CREATE EXTENSION vector;"
 ```
 
-### 3. Install Dependencies
+#### 3. Install Redis
 
 ```bash
+# Ubuntu/Debian
+sudo apt install redis-server
+sudo systemctl start redis
+
+# macOS
+brew install redis
+brew services start redis
+```
+
+#### 4. Setup Python Environment
+
+```bash
+python -m venv .venv
+
+# Linux/macOS
+source .venv/bin/activate
+
+# Windows
+.venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 4. Configure Environment
+#### 5. Build Frontend
+
+```bash
+cd demo-ui
+npm install
+npm run build
+cd ..
+```
+
+#### 6. Configure Environment
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` with your settings:
+Edit `.env` with your settings (key changes for local development):
 
 ```env
-# Application
-APP_NAME=FIVUCSAS Biometric Processor
-VERSION=1.0.0
-ENVIRONMENT=development
+# Database (local PostgreSQL)
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/biometric_db
+USE_PGVECTOR=True
+
+# Redis (local)
+REDIS_HOST=localhost
+REDIS_PORT=6379
 
 # Server
 API_HOST=0.0.0.0
 API_PORT=8001
-
-# Face Recognition
-FACE_DETECTION_BACKEND=opencv
-FACE_RECOGNITION_MODEL=Facenet
-VERIFICATION_THRESHOLD=0.6
-
-# Liveness Detection
-LIVENESS_THRESHOLD=80.0
-
-# Quality Assessment
-QUALITY_THRESHOLD=70.0
-MIN_FACE_SIZE=80
-BLUR_THRESHOLD=100.0
-
-# Logging
-LOG_LEVEL=INFO
 ```
+
+#### 7. Run the Application
+
+```bash
+# Development mode (with auto-reload)
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+
+# Production mode
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 4
+```
+
+The application will be available at: `http://localhost:8001`
+
+- **Frontend UI**: `http://localhost:8001`
+- **API Documentation**: `http://localhost:8001/docs`
+- **ReDoc**: `http://localhost:8001/redoc`
+
+---
+
+## PaaS Deployment
+
+The application is optimized for Platform-as-a-Service deployment with managed PostgreSQL and Redis.
+
+### Deploy to Railway
+
+1. **Install Railway CLI**
+   ```bash
+   npm install -g @railway/cli
+   ```
+
+2. **Login and Initialize**
+   ```bash
+   railway login
+   railway init
+   ```
+
+3. **Add Services in Railway Dashboard**
+   - PostgreSQL (with pgvector)
+   - Redis
+
+4. **Deploy**
+   ```bash
+   railway up
+   ```
+
+Railway will automatically:
+- Build the frontend (`npm run build` in demo-ui)
+- Install Python dependencies
+- Start the server using `Procfile`
+- Provide `DATABASE_URL` and `REDIS_URL` environment variables
+
+### Deploy to Render
+
+1. **Connect Repository**
+   - Connect your GitHub repository to Render
+   - Render will detect `render.yaml` automatically
+
+2. **Auto-Provision Services**
+   Render will automatically create:
+   - Web service (Python)
+   - PostgreSQL database with pgvector
+   - Redis cache
+
+3. **Deploy**
+   - Push to main branch
+   - Render auto-deploys using the configuration in `render.yaml`
+
+### Deploy to Heroku
+
+1. **Install Heroku CLI**
+   ```bash
+   # Install from https://devcenter.heroku.com/articles/heroku-cli
+   heroku login
+   ```
+
+2. **Create App and Add Services**
+   ```bash
+   heroku create biometric-processor
+   heroku addons:create heroku-postgresql:mini
+   heroku addons:create heroku-redis:mini
+   ```
+
+3. **Enable pgvector Extension**
+   ```bash
+   heroku pg:psql
+   CREATE EXTENSION IF NOT EXISTS vector;
+   \q
+   ```
+
+4. **Deploy**
+   ```bash
+   git push heroku main
+   ```
+
+### Environment Variables for PaaS
+
+PaaS platforms automatically provide:
+- `PORT` - Server port (auto-configured)
+- `DATABASE_URL` - PostgreSQL connection string
+- `REDIS_URL` - Redis connection string
+
+Additional variables to set:
+```bash
+ENVIRONMENT=production
+LOG_FORMAT=json
+USE_PGVECTOR=true
+RATE_LIMIT_STORAGE=redis
+```
+
+---
 
 ## Running the Application
 
-### Development Mode
+### Local Development
 
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
-### Production Mode
+### Production
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 4
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 4
 ```
 
-The API will be available at: `http://localhost:8001`
+### Using Build Script
 
-- **API Documentation**: `http://localhost:8001/docs`
-- **ReDoc**: `http://localhost:8001/redoc`
+```bash
+# One-command build
+chmod +x build.sh
+./build.sh
+
+# Then run
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8001
+```
 
 ## API Reference
 
