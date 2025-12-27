@@ -1,4 +1,8 @@
 # Railway deployment - CPU-only (smaller image size)
+# Install tensorflow-cpu FIRST before deepface to prevent GPU version
+tensorflow-cpu>=2.15.0
+
+# Core API
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
@@ -6,30 +10,21 @@ pillow>=10.3.0
 numpy>=1.26.0
 opencv-python-headless>=4.8.0
 scikit-image>=0.21.0
-deepface>=0.0.79
 pydantic>=2.5.0
 pydantic-settings>=2.0.0
 python-dotenv>=1.0.0
-mediapipe>=0.10.0
 httpx>=0.26.0
 psutil>=5.9.0
 structlog>=24.0.0
 aiofiles>=24.1.0
 
-# PostgreSQL with pgvector for face embedding storage
+# Face recognition (uses opencv detector by default, no YOLO needed)
+deepface>=0.0.79
+mediapipe>=0.10.0
+
+# PostgreSQL with pgvector
 asyncpg>=0.29.0
 pgvector>=0.2.4
 
-# Redis for event bus and caching
+# Redis
 redis>=5.0.0
-
-# CPU-only TensorFlow (much smaller than GPU version)
-tensorflow-cpu>=2.15.0
-
-# CPU-only PyTorch (required by ultralytics)
---extra-index-url https://download.pytorch.org/whl/cpu
-torch
-torchvision
-
-# YOLO for face detection
-ultralytics>=8.0.0
