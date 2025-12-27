@@ -1,8 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
-import { ApiClientError } from '@/lib/api/client';
+import { apiClient } from '@/lib/api/client';
 import { API_CONFIG } from '@/config/api.config';
 
-const API_URL = API_CONFIG.BASE_URL;
 const REQUEST_TIMEOUT = API_CONFIG.TIMEOUT.DEFAULT;
 
 interface LandmarkRequest {
@@ -52,72 +51,36 @@ async function detectLandmarks(request: LandmarkRequest): Promise<LandmarkRespon
     formData.append('include_3d', request.include_3d.toString());
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+  // Use centralized API client with built-in retry, timeout, and error handling
+  const data = await apiClient.upload<BackendLandmarkResponse>('/api/v1/landmarks/detect', formData, {
+    timeout: REQUEST_TIMEOUT,
+  });
 
-  try {
-    const response = await fetch(`${API_URL}/api/v1/landmarks/detect`, {
-      method: 'POST',
-      body: formData,
-      signal: controller.signal,
-    });
+  // Create a lookup map for landmarks by id
+  const landmarkById = new Map<number, LandmarkPoint>();
+  data.landmarks.forEach((lm) => {
+    landmarkById.set(lm.id, lm);
+  });
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: 'Landmark detection failed' }));
+  // Transform region indices to actual points
+  const resolvedRegions: Record<string, LandmarkPoint[]> = {};
+  const regionIndices = data.regions || {};
 
-      // Handle specific error for dlib not installed
-      if (error.error_code === 'LANDMARK_ERROR') {
-        throw new ApiClientError(response.status, error.message, {
-          code: error.error_code,
-          details: error,
-          userMessage: 'Landmark detection is not available. The dlib library is not installed on the server.',
-        });
-      }
+  Object.entries(regionIndices).forEach(([regionName, indices]) => {
+    resolvedRegions[regionName] = indices
+      .map((idx) => landmarkById.get(idx))
+      .filter((point): point is LandmarkPoint => point !== undefined);
+  });
 
-      throw new ApiClientError(response.status, error.message || error.detail, {
-        code: error.error_code,
-        details: error,
-      });
-    }
-
-    const data: BackendLandmarkResponse = await response.json();
-
-    // Create a lookup map for landmarks by id
-    const landmarkById = new Map<number, LandmarkPoint>();
-    data.landmarks.forEach((lm) => {
-      landmarkById.set(lm.id, lm);
-    });
-
-    // Transform region indices to actual points
-    const resolvedRegions: Record<string, LandmarkPoint[]> = {};
-    const regionIndices = data.regions || {};
-
-    Object.entries(regionIndices).forEach(([regionName, indices]) => {
-      resolvedRegions[regionName] = indices
-        .map((idx) => landmarkById.get(idx))
-        .filter((point): point is LandmarkPoint => point !== undefined);
-    });
-
-    // Transform to UI-friendly format
-    return {
-      landmarks: data.landmarks,
-      landmark_count: data.landmark_count,
-      model: data.model,
-      regionIndices: regionIndices,
-      regions: resolvedRegions,
-      head_pose: data.head_pose,
-    };
-  } catch (error) {
-    if (error instanceof ApiClientError) {
-      throw error;
-    }
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new ApiClientError(408, 'Request timeout - landmark detection took too long');
-    }
-    throw new ApiClientError(0, error instanceof Error ? error.message : 'Unknown error');
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  // Transform to UI-friendly format
+  return {
+    landmarks: data.landmarks,
+    landmark_count: data.landmark_count,
+    model: data.model,
+    regionIndices: regionIndices,
+    regions: resolvedRegions,
+    head_pose: data.head_pose,
+  };
 }
 
 export function useLandmarkDetection() {

@@ -1,7 +1,6 @@
 import { useMutation } from '@tanstack/react-query';
+import { apiClient } from '@/lib/api/client';
 import { API_CONFIG } from '@/config/api.config';
-
-const API_URL = API_CONFIG.BASE_URL;
 
 interface SimilarityMatrixRequest {
   files: File[];
@@ -49,34 +48,19 @@ async function validateImage(file: File, label: string, index: number): Promise<
   formData.append('file', file, file.name);
 
   try {
-    const response = await fetch(`${API_URL}/api/v1/quality/analyze`, {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: 'No face detected' }));
-      return {
-        index,
-        label,
-        valid: false,
-        error: error.message || error.detail || 'No face detected',
-      };
-    }
-
-    const data = await response.json();
+    const data = await apiClient.upload('/api/v1/quality/analyze', formData);
     return {
       index,
       label,
       valid: true,
-      error: data.passed ? undefined : 'Low quality face',
+      error: (data as any).passed ? undefined : 'Low quality face',
     };
-  } catch {
+  } catch (error) {
     return {
       index,
       label,
       valid: false,
-      error: 'Failed to analyze image',
+      error: error instanceof Error ? error.message : 'Failed to analyze image',
     };
   }
 }
@@ -101,22 +85,15 @@ async function computeSimilarityMatrix(request: SimilarityMatrixRequest): Promis
     formData.append('labels', request.labels.join(','));
   }
 
-  const url = new URL(`${API_URL}/api/v1/similarity/matrix`);
+  const params: Record<string, string | number | boolean | undefined> = {};
   if (request.threshold !== undefined) {
-    url.searchParams.set('threshold', request.threshold.toString());
+    params.threshold = request.threshold;
   }
 
-  const response = await fetch(url.toString(), {
-    method: 'POST',
-    body: formData,
+  // Use centralized API client with built-in retry, timeout, and error handling
+  return apiClient.upload<SimilarityMatrixResponse>('/api/v1/similarity/matrix', formData, {
+    params,
   });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: 'Similarity matrix computation failed' }));
-    throw new Error(error.message || error.detail);
-  }
-
-  return response.json();
 }
 
 export function useSimilarityMatrix() {
