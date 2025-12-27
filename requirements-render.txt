@@ -1,0 +1,52 @@
+# Render Deployment - CPU-only ML dependencies
+# Optimized for smaller image size
+
+# ===========================================
+# Core API Framework
+# ===========================================
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+pydantic>=2.5.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+httpx>=0.26.0
+aiofiles>=24.1.0
+structlog>=24.0.0
+
+# ===========================================
+# Image Processing
+# ===========================================
+pillow>=10.3.0
+numpy>=1.26.0
+opencv-python-headless>=4.8.0
+scikit-image>=0.21.0
+
+# ===========================================
+# Machine Learning - CPU Only
+# ===========================================
+# Install tensorflow-cpu FIRST to prevent GPU version
+tensorflow-cpu>=2.15.0
+
+# Face Recognition
+deepface>=0.0.79
+mediapipe>=0.10.0
+
+# ===========================================
+# Database - PostgreSQL + pgvector
+# ===========================================
+asyncpg>=0.29.0
+pgvector>=0.2.4
+psycopg2-binary>=2.9.0
+
+# ===========================================
+# Caching - Redis
+# ===========================================
+redis>=5.0.0
+
+# ===========================================
+# Utilities
+# ===========================================
+psutil>=5.9.0
+tqdm>=4.0.0
+pandas>=2.0.0
