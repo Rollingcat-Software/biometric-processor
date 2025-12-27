@@ -1,7 +1,8 @@
 import { useMutation } from '@tanstack/react-query';
+import { apiClient } from '@/lib/api/client';
 import { API_CONFIG } from '@/config/api.config';
 
-const API_URL = API_CONFIG.BASE_URL;
+const REQUEST_TIMEOUT = API_CONFIG.TIMEOUT.DEFAULT;
 
 interface CardDetectionRequest {
   image: File | Blob;
@@ -27,20 +28,10 @@ async function detectCard(request: CardDetectionRequest): Promise<CardDetectionR
   const filename = request.image instanceof File ? request.image.name : 'capture.jpg';
   formData.append('file', request.image, filename);
 
-  const response = await fetch(
-    `${API_URL}/api/v1/card-type/detect-live`,
-    {
-      method: 'POST',
-      body: formData,
-    }
-  );
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: 'Card detection failed' }));
-    throw new Error(error.message || error.detail);
-  }
-
-  const data: BackendCardDetectionResponse = await response.json();
+  // Use centralized API client with built-in retry, timeout, and error handling
+  const data = await apiClient.upload<BackendCardDetectionResponse>('/api/v1/card-type/detect-live', formData, {
+    timeout: REQUEST_TIMEOUT,
+  });
 
   // Map backend response to frontend format
   return {
