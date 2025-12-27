@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -125,6 +126,7 @@ export default function UnifiedDemoPage() {
 
   // Processing states
   const [isProcessing, setIsProcessing] = useState(false);
+  const [userId, setUserId] = useState<string>('');
   const [singleResult, setSingleResult] = useState<any>(null);
   const [batchResults, setBatchResults] = useState<any[]>([]);
 
@@ -152,6 +154,16 @@ export default function UnifiedDemoPage() {
       const formData = new FormData();
       formData.append('file', image);
 
+      // Add user_id for verification mode
+      if (analysisMode === 'verification') {
+        if (!userId.trim()) {
+          toast.error('Please enter a User ID for verification');
+          setIsProcessing(false);
+          return;
+        }
+        formData.append('user_id', userId.trim());
+      }
+
       const endpoint = getEndpointForMode(analysisMode);
       const response = await fetch(`${API_CONFIG.BASE_URL}${endpoint}`, {
         method: 'POST',
@@ -159,7 +171,9 @@ export default function UnifiedDemoPage() {
       });
 
       if (!response.ok) {
-        throw new Error(`API error: ${response.statusText}`);
+        const errorData = await response.json().catch(() => null);
+        const errorMessage = errorData?.message || errorData?.detail || response.statusText;
+        throw new Error(errorMessage);
       }
 
       const data = await response.json();
@@ -167,7 +181,7 @@ export default function UnifiedDemoPage() {
       toast.success('Analysis complete!');
     } catch (error: any) {
       console.error('Analysis error:', error);
-      toast.error(`Analysis failed: ${error.message}`);
+      toast.error(error.message || 'Analysis failed');
     } finally {
       setIsProcessing(false);
     }
@@ -201,8 +215,10 @@ export default function UnifiedDemoPage() {
         });
 
         if (!response.ok) {
-          throw new Error(`API error: ${response.statusText}`);
-        }
+        const errorData = await response.json().catch(() => null);
+        const errorMessage = errorData?.message || errorData?.detail || response.statusText;
+        throw new Error(errorMessage);
+      }
 
         const data = await response.json();
         results.push({ image: image.name, result: data, success: true });
@@ -327,12 +343,34 @@ export default function UnifiedDemoPage() {
               </div>
             )}
 
+            {/* User ID input for verification mode */}
+            {analysisMode === 'verification' && (
+              <div className="space-y-2">
+                <Label htmlFor="userId">User ID</Label>
+                <Input
+                  id="userId"
+                  placeholder="Enter user ID to verify against"
+                  value={userId}
+                  onChange={(e) => setUserId(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  The user ID of the enrolled user to verify against
+                </p>
+              </div>
+            )}
+
             <Separator />
 
             {/* Input Mode Selector */}
             <div className="space-y-2">
               <Label>Input Method</Label>
-              <Tabs value={inputMode} onValueChange={(v) => setInputMode(v as InputMode)}>
+              <Tabs value={inputMode} onValueChange={(v) => {
+                setInputMode(v as InputMode);
+                // Clear results when changing input mode
+                setSingleResult(null);
+                setBatchResults([]);
+                setLiveResult(null);
+              }}>
                 <TabsList className="grid w-full grid-cols-4">
                   <TabsTrigger value="upload" className="flex items-center gap-1.5">
                     <Upload className="h-3.5 w-3.5" />
@@ -401,10 +439,19 @@ export default function UnifiedDemoPage() {
                       <p className="mb-2 text-sm font-medium">
                         Selected: {batchImages.length} image{batchImages.length !== 1 ? 's' : ''}
                       </p>
-                      <div className="max-h-32 space-y-1 overflow-y-auto text-xs text-muted-foreground">
+                      <div className="grid max-h-48 grid-cols-4 gap-2 overflow-y-auto">
                         {batchImages.map((img, idx) => (
-                          <div key={idx} className="truncate">
-                            {idx + 1}. {img.name}
+                          <div key={idx} className="relative group">
+                            <img
+                              src={URL.createObjectURL(img)}
+                              alt={img.name}
+                              className="h-16 w-full rounded object-cover"
+                            />
+                            <div className="absolute inset-0 flex items-end justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded">
+                              <span className="text-[10px] text-white p-1 truncate w-full text-center">
+                                {img.name}
+                              </span>
+                            </div>
                           </div>
                         ))}
                       </div>

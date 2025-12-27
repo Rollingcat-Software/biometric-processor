@@ -235,7 +235,7 @@ function renderLiveness(result: any) {
   // API returns liveness_score (0-100), fallback to confidence
   const score = liveness.liveness_score ?? liveness.confidence ?? 0;
   // Normalize to 0-1 if score is > 1 (meaning it's 0-100 scale)
-  const normalizedScore = score > 1 ? score / 100 : score;
+  // formatPercent handles both 0-1 and 0-100 scales automatically
 
   return (
     <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="space-y-4">
@@ -244,7 +244,7 @@ function renderLiveness(result: any) {
           {isLive ? '✓ Live Person' : '✗ Spoof Detected'}
         </p>
         <p className="mt-2 text-sm text-muted-foreground">
-          Liveness Score: {formatPercent(normalizedScore)}
+          Liveness Score: {formatPercent(score)}
         </p>
         {liveness.challenge && (
           <p className="text-xs text-muted-foreground">Challenge: {liveness.challenge}</p>
@@ -354,15 +354,15 @@ function renderSearch(result: any) {
         <p className={`text-2xl font-bold ${found ? 'text-green-600' : 'text-orange-600'}`}>
           {found ? '✓ Match Found' : 'No Match'}
         </p>
-        {found && search.user_id && (
-          <p className="mt-2 text-sm text-muted-foreground">User: {search.user_id}</p>
+        {found && (search.best_match?.user_id ?? search.user_id) && (
+          <p className="mt-2 text-sm text-muted-foreground">User: {(search.best_match?.user_id ?? search.user_id)}</p>
         )}
       </div>
 
       <div className="grid grid-cols-2 gap-3 text-sm">
         <div className="rounded-lg border p-3">
           <p className="text-muted-foreground">Confidence</p>
-          <p className="font-mono">{formatPercent(search.confidence)}</p>
+          <p className="font-mono">{formatPercent(search.best_match?.confidence ?? search.confidence)}</p>
         </div>
         <div className="rounded-lg border p-3">
           <p className="text-muted-foreground">Candidates</p>
