@@ -1,8 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
-import { ApiClientError } from '@/lib/api/client';
+import { apiClient } from '@/lib/api/client';
 import { API_CONFIG } from '@/config/api.config';
 
-const API_URL = API_CONFIG.BASE_URL;
 const REQUEST_TIMEOUT = API_CONFIG.TIMEOUT.DEFAULT;
 
 interface ComparisonRequest {
@@ -65,50 +64,24 @@ async function compareFaces(request: ComparisonRequest): Promise<ComparisonRespo
     formData.append('threshold', request.threshold.toString());
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+  // Use centralized API client with built-in retry, timeout, and error handling
+  const data = await apiClient.upload<BackendComparisonResponse>('/api/v1/compare', formData, {
+    timeout: REQUEST_TIMEOUT,
+  });
 
-  try {
-    const response = await fetch(`${API_URL}/api/v1/compare`, {
-      method: 'POST',
-      body: formData,
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: 'Face comparison failed' }));
-      throw new ApiClientError(response.status, error.message || error.detail, {
-        code: error.error_code,
-        details: error,
-      });
-    }
-
-    const data: BackendComparisonResponse = await response.json();
-
-    // Transform to UI-friendly format
-    return {
-      similarity: data.similarity,
-      match: data.match,
-      threshold: data.threshold,
-      distance: data.distance,
-      confidence: data.confidence,
-      face1_quality: data.face1.quality_score,
-      face2_quality: data.face2.quality_score,
-      face1_detected: data.face1.detected,
-      face2_detected: data.face2.detected,
-      message: data.message,
-    };
-  } catch (error) {
-    if (error instanceof ApiClientError) {
-      throw error;
-    }
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new ApiClientError(408, 'Request timeout - face comparison took too long');
-    }
-    throw new ApiClientError(0, error instanceof Error ? error.message : 'Unknown error');
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  // Transform to UI-friendly format
+  return {
+    similarity: data.similarity,
+    match: data.match,
+    threshold: data.threshold,
+    distance: data.distance,
+    confidence: data.confidence,
+    face1_quality: data.face1.quality_score,
+    face2_quality: data.face2.quality_score,
+    face1_detected: data.face1.detected,
+    face2_detected: data.face2.detected,
+    message: data.message,
+  };
 }
 
 export function useFaceComparison() {
