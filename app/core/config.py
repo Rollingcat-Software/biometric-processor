@@ -507,6 +507,17 @@ class Settings(BaseSettings):
             "timeout_seconds": self.PROCTOR_CIRCUIT_BREAKER_TIMEOUT_SEC,
         }
 
+    @property
+    def port(self) -> int:
+        """Get port from PORT env var (PaaS standard) or API_PORT.
+
+        PaaS platforms (Railway, Render, Heroku) typically provide a PORT
+        environment variable. This property checks for PORT first, then
+        falls back to API_PORT.
+        """
+        import os
+        return int(os.getenv("PORT", self.API_PORT))
+
 
 # Singleton settings instance
 settings = Settings()

@@ -1,0 +1,49 @@
+services:
+  - type: web
+    name: biometric-processor
+    env: python
+    region: oregon
+    plan: starter
+    buildCommand: cd demo-ui && npm ci && npm run build && cd .. && pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_FORMAT
+        value: json
+      - key: METRICS_ENABLED
+        value: "false"
+      - key: RATE_LIMIT_STORAGE
+        value: redis
+      - key: USE_PGVECTOR
+        value: "true"
+    healthCheckPath: /api/v1/health
+
+  # PostgreSQL Database with pgvector
+  - type: pserv
+    name: biometric-postgres
+    env: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./Dockerfile.postgres
+    dockerContext: ./
+    disk:
+      name: biometric-db
+      mountPath: /var/lib/postgresql/data
+      sizeGB: 10
+    envVars:
+      - key: POSTGRES_DB
+        value: biometric_db
+      - key: POSTGRES_USER
+        value: biometric
+      - key: POSTGRES_PASSWORD
+        generateValue: true
+
+  # Redis Cache
+  - type: redis
+    name: biometric-redis
+    region: oregon
+    plan: starter
+    maxmemoryPolicy: allkeys-lru

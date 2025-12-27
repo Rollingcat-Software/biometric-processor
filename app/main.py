@@ -287,7 +287,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "app.main:app",
         host=settings.API_HOST,
-        port=settings.API_PORT,
+        port=settings.port,  # Uses PORT env var if available (PaaS compatibility)
         reload=settings.is_development(),
         log_level=settings.LOG_LEVEL.lower(),
     )
