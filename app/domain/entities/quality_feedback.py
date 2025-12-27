@@ -31,17 +31,19 @@ class QualityIssue:
 class QualityMetrics:
     """Detailed quality metrics for an image.
 
+    All metrics are normalized to 0-100 scale for consistent display.
+
     Attributes:
-        blur_score: Laplacian variance (higher = sharper)
-        brightness: Normalized brightness (0.0-1.0)
-        face_size: Face size in pixels
-        face_angle: Face rotation angle in degrees
-        occlusion: Occlusion percentage (0.0-1.0)
+        blur_score: Sharpness score (0-100, higher = sharper)
+        brightness: Brightness score (0-100, 50 = optimal)
+        face_size: Face size score (0-100, based on 200px reference)
+        face_angle: Frontal alignment score (0-100, 100 = frontal, 0 = tilted)
+        occlusion: Occlusion score (0-100, 0 = no occlusion, 100 = fully occluded)
     """
 
     blur_score: float
     brightness: float
-    face_size: int
+    face_size: float  # Changed from int to float for normalized value
     face_angle: float
     occlusion: float
 
@@ -78,11 +80,14 @@ class QualityIssueResponse(BaseModel):
 
 
 class QualityMetricsResponse(BaseModel):
-    """API response model for quality metrics."""
+    """API response model for quality metrics.
+
+    All values are normalized to 0-100 scale.
+    """
 
     blur_score: float
     brightness: float
-    face_size: int
+    face_size: float  # Changed from int to float (normalized)
     face_angle: float
     occlusion: float
 

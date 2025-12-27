@@ -23,14 +23,14 @@ class AnalyzeQualityUseCase:
     Provides actionable feedback on why an image fails quality checks.
     """
 
-    # Quality issue codes and thresholds
-    BLUR_THRESHOLD = 100.0
-    BRIGHTNESS_LOW = 0.3
-    BRIGHTNESS_HIGH = 0.9
-    MIN_FACE_SIZE = 80
+    # Quality issue codes and thresholds (normalized 0-100 scale)
+    BLUR_THRESHOLD = 50.0  # Normalized: 50+ is acceptable
+    BRIGHTNESS_LOW = 30.0  # Normalized: 30-90 is good range
+    BRIGHTNESS_HIGH = 90.0
+    MIN_FACE_SIZE = 40.0  # Normalized: 40+ is acceptable (80px/200px*100)
     MAX_FACE_RATIO = 0.8
-    MAX_FACE_ANGLE = 30.0
-    MAX_OCCLUSION = 0.2
+    MAX_FACE_ANGLE = 70.0  # Normalized: 70+ is frontal (inverse scale)
+    MAX_OCCLUSION = 20.0  # Normalized: <20% occlusion
 
     def __init__(
         self,
@@ -93,24 +93,34 @@ class AnalyzeQualityUseCase:
     def _calculate_metrics(
         self, image: np.ndarray, detection_result
     ) -> QualityMetrics:
-        """Calculate quality metrics from image."""
+        """Calculate quality metrics from image.
+
+        Returns normalized metrics (0-100) for consistent frontend display.
+        """
         # Convert to grayscale for blur detection
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
 
-        # Blur score (Laplacian variance)
-        blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+        # Blur score (Laplacian variance) - normalize to 0-100
+        raw_blur = cv2.Laplacian(gray, cv2.CV_64F).var()
+        # Map 0-100 raw → 0-50, 100-500 raw → 50-100 (same as quality assessor)
+        if raw_blur < 100:
+            blur_score = (raw_blur / 100) * 50
+        else:
+            capped_blur = min(raw_blur, 500)
+            blur_score = 50 + ((capped_blur - 100) / 400) * 50
 
-        # Brightness (normalized mean)
-        brightness = np.mean(gray) / 255.0
+        # Brightness (normalized to 0-100)
+        brightness = (np.mean(gray) / 255.0) * 100
 
-        # Face size
+        # Face size - normalize to 0-100 (based on 200px reference)
         if detection_result.bounding_box:
             x, y, w, h = detection_result.bounding_box
-            face_size = max(w, h)
+            raw_face_size = max(w, h)
+            face_size = min(100, (raw_face_size / 200) * 100)
         else:
             face_size = 0
 
-        # Face angle (estimate from landmarks if available)
+        # Face angle (estimate from landmarks if available) - keep as percentage of max angle
         face_angle = 0.0
         if hasattr(detection_result, "landmarks") and detection_result.landmarks:
             # Simple angle estimation from eye positions
@@ -119,10 +129,12 @@ class AnalyzeQualityUseCase:
             if left_eye and right_eye:
                 dy = right_eye[1] - left_eye[1]
                 dx = right_eye[0] - left_eye[0]
-                face_angle = abs(np.degrees(np.arctan2(dy, dx)))
+                raw_angle = abs(np.degrees(np.arctan2(dy, dx)))
+                # Normalize to 0-100 (0 degrees = 100%, 30+ degrees = 0%)
+                face_angle = max(0, 100 - (raw_angle / 30) * 100)
 
-        # Occlusion (placeholder - would need segmentation model)
-        occlusion = 0.0
+        # Occlusion (placeholder - normalize to 0-100)
+        occlusion = 0.0  # 0% occlusion = good
 
         return QualityMetrics(
             blur_score=blur_score,
@@ -230,7 +242,10 @@ class AnalyzeQualityUseCase:
         return issues
 
     def _calculate_overall_score(self, metrics: QualityMetrics) -> float:
-        """Calculate overall quality score (0-100)."""
+        """Calculate overall quality score (0-100).
+
+        Metrics are already normalized to 0-100, so just calculate weighted average.
+        """
         # Weighted scoring
         weights = {
             "blur": 0.3,
@@ -240,20 +255,20 @@ class AnalyzeQualityUseCase:
             "occlusion": 0.1,
         }
 
-        # Normalize each metric to 0-100
-        blur_score = min(100, (metrics.blur_score / self.BLUR_THRESHOLD) * 100)
+        # Metrics are already normalized to 0-100
+        blur_score = metrics.blur_score
 
-        # Brightness optimal at 0.5
-        brightness_score = 100 - abs(metrics.brightness - 0.5) * 200
+        # Brightness: optimal at 50, penalize deviation
+        brightness_score = 100 - abs(metrics.brightness - 50) * 2
 
-        # Face size score
-        face_size_score = min(100, (metrics.face_size / self.MIN_FACE_SIZE) * 100)
+        # Face size already normalized
+        face_size_score = metrics.face_size
 
-        # Angle score
-        angle_score = max(0, 100 - (metrics.face_angle / self.MAX_FACE_ANGLE) * 100)
+        # Angle already normalized (100 = frontal, 0 = tilted)
+        angle_score = metrics.face_angle
 
-        # Occlusion score
-        occlusion_score = max(0, 100 - (metrics.occlusion / self.MAX_OCCLUSION) * 100)
+        # Occlusion already normalized (0 = no occlusion, 100 = fully occluded)
+        occlusion_score = 100 - metrics.occlusion
 
         # Weighted average
         overall = (

@@ -78,30 +78,19 @@ async function analyzeQuality(request: QualityRequest): Promise<QualityResponse>
 
     const data: BackendQualityResponse = await response.json();
 
-    // Helper function to normalize blur score (matches backend logic)
-    // Backend: 0-100 raw → 0-50 normalized, 100-500 raw → 50-100 normalized
-    const normalizeBlurScore = (blur: number): number => {
-      if (blur < 100) {
-        return (blur / 100) * 50;
-      } else {
-        const capped = Math.min(blur, 500);
-        return 50 + ((capped - 100) / 400) * 50;
-      }
-    };
-
-    // Transform to UI-friendly format
+    // Backend now returns all metrics normalized to 0-100
     return {
       overall_score: data.overall_score,
       is_acceptable: data.passed,
       metrics: {
-        sharpness: normalizeBlurScore(data.metrics.blur_score), // Normalize blur to 0-100
-        brightness: data.metrics.brightness * 100, // Normalize to 0-100
+        sharpness: data.metrics.blur_score, // Already normalized 0-100
+        brightness: data.metrics.brightness, // Already normalized 0-100
         contrast: 75, // Not provided by backend, use default
-        face_size: Math.min(100, (data.metrics.face_size / 200) * 100), // Normalize
-        pose_frontal: Math.max(0, 100 - data.metrics.face_angle * 3), // Convert angle to score
+        face_size: data.metrics.face_size, // Already normalized 0-100
+        pose_frontal: data.metrics.face_angle, // Already normalized 0-100 (100 = frontal)
         eyes_open: 100, // Not provided by backend
         mouth_closed: 100, // Not provided by backend
-        no_occlusion: Math.max(0, 100 - data.metrics.occlusion * 100),
+        no_occlusion: 100 - data.metrics.occlusion, // Invert (0 occlusion = 100% good)
       },
       recommendations: data.issues.map((issue) => issue.suggestion),
       issues: data.issues.map((issue) => ({

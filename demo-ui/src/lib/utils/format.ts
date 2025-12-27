@@ -1,21 +1,17 @@
 /**
  * Formats a score value to a percentage string.
- * Handles both 0-1 (decimal) and 0-100 (percentage) ranges from backend.
+ * Backend now returns all metrics normalized to 0-100 scale.
  *
- * @param value - The score value from backend
+ * @param value - The score value from backend (0-100)
  * @param decimals - Number of decimal places (default: 1)
  * @returns Formatted percentage number (not string, no % sign)
  */
 export function toPercent(value: number | undefined | null, decimals: number = 1): number {
   if (value === undefined || value === null) return 0;
 
-  // If value is <= 1, assume it's in 0-1 range and convert to percentage
-  // If value is > 1, assume it's already a percentage (0-100 range)
-  const percent = value <= 1 ? value * 100 : value;
-
-  // Round to specified decimals
+  // Backend returns normalized 0-100 values, just round
   const multiplier = Math.pow(10, decimals);
-  return Math.round(percent * multiplier) / multiplier;
+  return Math.round(value * multiplier) / multiplier;
 }
 
 /**
