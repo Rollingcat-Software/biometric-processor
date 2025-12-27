@@ -1,8 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api/client';
-import { API_CONFIG } from '@/config/api.config';
-
-const API_URL = API_CONFIG.BASE_URL;
 
 interface Embedding {
   id: string;
@@ -29,17 +26,11 @@ interface EmbeddingListResponse {
 
 async function fetchEmbeddings(params: EmbeddingListParams): Promise<EmbeddingListResponse> {
   try {
-    // Use the export endpoint and transform the response
-    const response = await fetch(
-      `${API_URL}/api/v1/embeddings/export?tenant_id=default`,
-      { method: 'GET' }
-    );
+    // Use centralized API client
+    const data = await apiClient.get<{ embeddings: any[] }>('/api/v1/embeddings/export', {
+      params: { tenant_id: 'default' }
+    });
 
-    if (!response.ok) {
-      throw new Error('Failed to fetch embeddings');
-    }
-
-    const data = await response.json();
     const embeddings = data.embeddings || [];
 
     // Transform to expected format with pagination

@@ -1,8 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api/client';
-import { API_CONFIG } from '@/config/api.config';
-
-const API_URL = API_CONFIG.BASE_URL;
 
 interface SystemStats {
   total_enrollments: number;
@@ -45,16 +42,7 @@ interface RecentActivity {
 }
 
 async function fetchSystemStats(): Promise<SystemStats> {
-  const response = await fetch(
-    `${API_URL}/api/v1/admin/stats`,
-    { method: 'GET' }
-  );
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch system stats');
-  }
-
-  return response.json();
+  return apiClient.get<SystemStats>('/api/v1/admin/stats');
 }
 
 async function fetchHealthStatus(): Promise<HealthStatus> {
@@ -63,16 +51,7 @@ async function fetchHealthStatus(): Promise<HealthStatus> {
 }
 
 async function fetchRecentActivity(): Promise<RecentActivity> {
-  const response = await fetch(
-    `${API_URL}/api/v1/admin/activity`,
-    { method: 'GET' }
-  );
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch recent activity');
-  }
-
-  return response.json();
+  return apiClient.get<RecentActivity>('/api/v1/admin/activity');
 }
 
 export function useSystemStats() {

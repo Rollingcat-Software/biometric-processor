@@ -1,8 +1,9 @@
 import { useState, useCallback, useRef } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { apiClient } from '@/lib/api/client';
 import { API_CONFIG } from '@/config/api.config';
 
-const API_URL = API_CONFIG.BASE_URL;
+const REQUEST_TIMEOUT = API_CONFIG.TIMEOUT.LONG;
 
 // Default tenant ID for demo purposes
 const DEFAULT_TENANT_ID = 'demo-tenant';
@@ -58,104 +59,47 @@ interface UseProctoringSessionOptions {
 }
 
 async function createSessionApi(request: CreateSessionRequest): Promise<Session> {
-  const response = await fetch(`${API_URL}/api/v1/proctoring/sessions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Tenant-ID': DEFAULT_TENANT_ID,
-    },
-    body: JSON.stringify(request),
+  return apiClient.post<Session>('/api/v1/proctoring/sessions', request, {
+    headers: { 'X-Tenant-ID': DEFAULT_TENANT_ID }
   });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || 'Failed to create session');
-  }
-  return response.json();
 }
 
 async function startSessionApi(sessionId: string, baselineImage?: string): Promise<Session> {
   console.log('Starting session:', sessionId, baselineImage ? '(with baseline image)' : '(no baseline)');
 
-  // Add timeout to prevent infinite waiting
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-
-  try {
-    const response = await fetch(`${API_URL}/api/v1/proctoring/sessions/${sessionId}/start`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Tenant-ID': DEFAULT_TENANT_ID,
-      },
-      body: JSON.stringify(baselineImage ? { baseline_image_base64: baselineImage } : {}),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-    console.log('Start session response:', response.status);
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      console.error('Start session error:', error);
-      throw new Error(error.detail || error.message || 'Failed to start session');
+  const body = baselineImage ? { baseline_image_base64: baselineImage } : {};
+  const response = await apiClient.post<Session>(
+    `/api/v1/proctoring/sessions/${sessionId}/start`,
+    body,
+    {
+      headers: { 'X-Tenant-ID': DEFAULT_TENANT_ID },
+      timeout: 30000
     }
-    return response.json();
-  } catch (err) {
-    clearTimeout(timeoutId);
-    if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error('Request timeout - server took too long to respond');
-    }
-    throw err;
-  }
+  );
+
+  console.log('Start session response received');
+  return response;
 }
 
 async function pauseSessionApi(sessionId: string): Promise<void> {
   console.log('pauseSessionApi called for session:', sessionId);
-  const response = await fetch(`${API_URL}/api/v1/proctoring/sessions/${sessionId}/pause`, {
-    method: 'POST',
-    headers: {
-      'X-Tenant-ID': DEFAULT_TENANT_ID,
-    },
+  await apiClient.post(`/api/v1/proctoring/sessions/${sessionId}/pause`, {}, {
+    headers: { 'X-Tenant-ID': DEFAULT_TENANT_ID }
   });
-  console.log('pauseSessionApi response status:', response.status);
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    console.error('pauseSessionApi error:', error);
-    throw new Error(error.detail || 'Failed to pause session');
-  }
   console.log('pauseSessionApi success');
 }
 
 async function resumeSessionApi(sessionId: string): Promise<void> {
-  const response = await fetch(`${API_URL}/api/v1/proctoring/sessions/${sessionId}/resume`, {
-    method: 'POST',
-    headers: {
-      'X-Tenant-ID': DEFAULT_TENANT_ID,
-    },
+  await apiClient.post(`/api/v1/proctoring/sessions/${sessionId}/resume`, {}, {
+    headers: { 'X-Tenant-ID': DEFAULT_TENANT_ID }
   });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || 'Failed to resume session');
-  }
 }
 
 async function endSessionApi(sessionId: string): Promise<Session> {
   console.log('endSessionApi called for session:', sessionId);
-  const response = await fetch(`${API_URL}/api/v1/proctoring/sessions/${sessionId}/end`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Tenant-ID': DEFAULT_TENANT_ID,
-    },
-    body: JSON.stringify({}),
+  const result = await apiClient.post<Session>(`/api/v1/proctoring/sessions/${sessionId}/end`, {}, {
+    headers: { 'X-Tenant-ID': DEFAULT_TENANT_ID }
   });
-  console.log('endSessionApi response status:', response.status);
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    console.error('endSessionApi error:', error);
-    throw new Error(error.detail || 'Failed to end session');
-  }
-  const result = await response.json();
   console.log('endSessionApi success:', result);
   return result;
 }
@@ -165,52 +109,30 @@ async function submitFrameApi(
   frameBase64: string,
   frameNumber: number
 ): Promise<FrameResult> {
-  const response = await fetch(`${API_URL}/api/v1/proctoring/sessions/${sessionId}/frames`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Tenant-ID': DEFAULT_TENANT_ID,
-    },
-    body: JSON.stringify({
+  return apiClient.post<FrameResult>(
+    `/api/v1/proctoring/sessions/${sessionId}/frames`,
+    {
       frame_base64: frameBase64,
       frame_number: frameNumber,
-    }),
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || 'Failed to submit frame');
-  }
-  return response.json();
+    },
+    {
+      headers: { 'X-Tenant-ID': DEFAULT_TENANT_ID },
+      timeout: REQUEST_TIMEOUT
+    }
+  );
 }
 
 async function fetchSessions(params?: { page?: number; page_size?: number }): Promise<SessionListResponse> {
-  const searchParams = new URLSearchParams();
-  if (params?.page) searchParams.set('page', params.page.toString());
-  if (params?.page_size) searchParams.set('page_size', params.page_size.toString());
-
-  const response = await fetch(`${API_URL}/api/v1/proctoring/sessions?${searchParams}`, {
-    headers: {
-      'X-Tenant-ID': DEFAULT_TENANT_ID,
-    },
+  return apiClient.get<SessionListResponse>('/api/v1/proctoring/sessions', {
+    params,
+    headers: { 'X-Tenant-ID': DEFAULT_TENANT_ID }
   });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || 'Failed to fetch sessions');
-  }
-  return response.json();
 }
 
 async function fetchSession(sessionId: string): Promise<Session> {
-  const response = await fetch(`${API_URL}/api/v1/proctoring/sessions/${sessionId}`, {
-    headers: {
-      'X-Tenant-ID': DEFAULT_TENANT_ID,
-    },
+  return apiClient.get<Session>(`/api/v1/proctoring/sessions/${sessionId}`, {
+    headers: { 'X-Tenant-ID': DEFAULT_TENANT_ID }
   });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || 'Failed to fetch session');
-  }
-  return response.json();
 }
 
 export function useProctoringSession(options?: UseProctoringSessionOptions) {
