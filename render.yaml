@@ -41,7 +41,7 @@ services:
 databases:
   # PostgreSQL 16 with pgvector support
   - name: biometric-db
-    plan: starter        # $7/month, 1GB storage
+    plan: basic-1gb      # New flexible plan
     region: frankfurt
     databaseName: biometric
     user: biometric
