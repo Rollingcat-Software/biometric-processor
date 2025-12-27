@@ -30,6 +30,13 @@ services:
           type: redis
           property: connectionString
 
+  # Redis Cache
+  - type: redis
+    name: biometric-cache
+    region: frankfurt
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+
 databases:
   # PostgreSQL 16 with pgvector support
   - name: biometric-db
@@ -40,10 +47,3 @@ databases:
     postgresMajorVersion: "16"
     # After deploy, enable pgvector:
     # psql $DATABASE_URL -c "CREATE EXTENSION IF NOT EXISTS vector;"
-
-  # Redis Cache
-  - type: redis
-    name: biometric-cache
-    region: frankfurt
-    plan: free           # Free tier available
-    maxmemoryPolicy: allkeys-lru
