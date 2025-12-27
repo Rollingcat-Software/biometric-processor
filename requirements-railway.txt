@@ -1,6 +1,6 @@
 # Railway deployment - CPU-only (smaller image size)
-# Install tensorflow-cpu FIRST before deepface to prevent GPU version
-tensorflow-cpu>=2.15.0
+# NOTE: deepface is installed separately with --no-deps in buildCommand
+# to prevent tensorflow GPU version from being installed
 
 # Core API
 fastapi==0.104.1
@@ -18,9 +18,15 @@ psutil>=5.9.0
 structlog>=24.0.0
 aiofiles>=24.1.0
 
-# Face recognition (uses opencv detector by default, no YOLO needed)
-deepface>=0.0.79
+# DeepFace dependencies (manually listed since we use --no-deps)
 mediapipe>=0.10.0
+mtcnn>=0.1.0
+retina-face>=0.0.1
+gdown>=4.0.0
+tqdm>=4.0.0
+pandas>=2.0.0
+Flask>=1.1.2
+keras>=2.2.0
 
 # PostgreSQL with pgvector
 asyncpg>=0.29.0

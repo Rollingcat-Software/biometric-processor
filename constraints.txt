@@ -1,0 +1,3 @@
+# Force CPU-only versions
+tensorflow-cpu>=2.15.0
+tensorflow==0.0.0  # Block GPU tensorflow from being installed
