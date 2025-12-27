@@ -12,6 +12,7 @@ from app.domain.exceptions.face_errors import (
     MultipleFacesError,
     PoorImageQualityError,
 )
+from app.domain.exceptions.feature_errors import DemographicsError, LandmarkError
 from app.domain.exceptions.liveness_errors import LivenessCheckError, LivenessCheckFailedError
 from app.domain.exceptions.repository_errors import EmbeddingAlreadyExistsError, RepositoryError
 from app.domain.exceptions.storage_errors import FileStorageError
@@ -51,6 +52,8 @@ def setup_exception_handlers(app) -> None:
             FaceNotDetectedError: status.HTTP_400_BAD_REQUEST,
             MultipleFacesError: status.HTTP_400_BAD_REQUEST,
             PoorImageQualityError: status.HTTP_400_BAD_REQUEST,
+            DemographicsError: status.HTTP_400_BAD_REQUEST,
+            LandmarkError: status.HTTP_400_BAD_REQUEST,
             EmbeddingExtractionError: status.HTTP_500_INTERNAL_SERVER_ERROR,
             EmbeddingNotFoundError: status.HTTP_404_NOT_FOUND,
             VerificationFailedError: status.HTTP_401_UNAUTHORIZED,

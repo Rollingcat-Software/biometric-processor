@@ -200,15 +200,9 @@ export function LiveCameraStream({
       await startCamera();
     }
 
-    // Connect WebSocket
+    // Connect WebSocket (interval will start automatically when connected via useEffect)
     connect();
-
-    // Start sending frames at ~10 FPS (adjust based on performance)
-    const frameInterval = 100; // 100ms = 10 FPS
-    frameIntervalRef.current = setInterval(() => {
-      captureAndSendFrame();
-    }, frameInterval);
-  }, [isStreaming, startCamera, connect, captureAndSendFrame]);
+  }, [isStreaming, startCamera, connect]);
 
   const stopStreaming = useCallback(() => {
     if (frameIntervalRef.current) {
@@ -219,6 +213,24 @@ export function LiveCameraStream({
     disconnect();
     stopCamera();
   }, [disconnect, stopCamera]);
+
+  // Start/stop frame capture interval based on WebSocket connection status
+  useEffect(() => {
+    if (isConnected && isStreaming) {
+      // Start sending frames at ~10 FPS (adjust based on performance)
+      const frameInterval = 100; // 100ms = 10 FPS
+      frameIntervalRef.current = setInterval(() => {
+        captureAndSendFrame();
+      }, frameInterval);
+
+      return () => {
+        if (frameIntervalRef.current) {
+          clearInterval(frameIntervalRef.current);
+          frameIntervalRef.current = null;
+        }
+      };
+    }
+  }, [isConnected, isStreaming, captureAndSendFrame]);
 
   // Cleanup on unmount
   useEffect(() => {

@@ -13,6 +13,7 @@ Clients send camera frames via WebSocket and receive instant feedback.
 import asyncio
 import base64
 import io
+import json
 import logging
 import time
 from typing import Optional
@@ -269,8 +270,22 @@ async def live_analysis_websocket(
 
     try:
         while True:
-            # Receive message from client
-            message = await websocket.receive_json()
+            # Receive message from client (handle both text and JSON)
+            try:
+                # Try to receive as text first to handle plain "ping" messages
+                raw_message = await websocket.receive_text()
+
+                # Check if it's a plain ping heartbeat
+                if raw_message == "ping":
+                    await websocket.send_text("pong")
+                    continue
+
+                # Otherwise, parse as JSON
+                message = json.loads(raw_message)
+            except json.JSONDecodeError:
+                logger.warning(f"Received invalid JSON: {raw_message[:100]}")
+                continue
+
             msg_type = message.get("type")
             msg_data = message.get("data")
 
@@ -303,7 +318,7 @@ async def live_analysis_websocket(
                 })
 
             elif msg_type == "ping":
-                # Keepalive
+                # Keepalive (JSON format)
                 await websocket.send_json({"type": "pong"})
 
             else:
