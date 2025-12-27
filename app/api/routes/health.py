@@ -3,6 +3,7 @@
 import logging
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -207,6 +208,37 @@ async def detailed_health_check(
         overall_status = "unhealthy"
         status_code = 503
         logger.error("ML models health check failed - system cannot process requests")
+
+    # Frontend check
+    try:
+        # Check if frontend is built and available
+        base_dir = Path(__file__).resolve().parent.parent.parent.parent
+        frontend_dir = base_dir / "demo-ui" / "out"
+        index_html = frontend_dir / "index.html"
+
+        if frontend_dir.exists() and index_html.is_file():
+            checks["frontend"] = {
+                "status": "healthy",
+                "available": True,
+                "path": str(frontend_dir),
+            }
+        else:
+            checks["frontend"] = {
+                "status": "not_built",
+                "available": False,
+                "message": "Frontend not built. Run 'npm run build' in demo-ui/"
+            }
+            if overall_status == "healthy":
+                overall_status = "degraded"
+    except Exception as e:
+        logger.error(f"Frontend health check failed: {str(e)}")
+        checks["frontend"] = {
+            "status": "error",
+            "available": False,
+            "error": str(e),
+        }
+        if overall_status == "healthy":
+            overall_status = "degraded"
 
     # Configuration check
     checks["configuration"] = {

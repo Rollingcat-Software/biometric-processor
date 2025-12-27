@@ -59,16 +59,19 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         self._referrer_policy = referrer_policy
         self._exclude_paths = exclude_paths or []
 
-        # Default CSP policy
+        # Default CSP policy (Next.js-compatible)
         self._csp_policy = csp_policy or (
             "default-src 'self'; "
-            "img-src 'self' data:; "
-            "script-src 'self'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "font-src 'self'; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "  # Next.js requires unsafe-inline/eval
+            "style-src 'self' 'unsafe-inline'; "  # CSS-in-JS requires unsafe-inline
+            "img-src 'self' data: blob: https:; "  # Allow data URIs, blobs, and HTTPS images
+            "font-src 'self' data:; "
+            "connect-src 'self' ws: wss:; "  # WebSocket support for real-time features
+            "frame-ancestors 'self'; "  # Equivalent to X-Frame-Options
             "object-src 'none'; "
             "base-uri 'self'; "
-            "form-action 'self'"
+            "form-action 'self'; "
+            "upgrade-insecure-requests"  # Upgrade HTTP to HTTPS
         )
 
         logger.info("SecurityHeadersMiddleware initialized")
