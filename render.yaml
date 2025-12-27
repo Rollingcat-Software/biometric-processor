@@ -41,8 +41,7 @@ databases:
     # After deploy, enable pgvector:
     # psql $DATABASE_URL -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
-# Redis Cache
-services:
+  # Redis Cache
   - type: redis
     name: biometric-cache
     region: frankfurt
