@@ -1,8 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
-import { ApiClientError } from '@/lib/api/client';
+import { apiClient } from '@/lib/api/client';
 import { API_CONFIG } from '@/config/api.config';
 
-const API_URL = API_CONFIG.BASE_URL;
 const REQUEST_TIMEOUT = API_CONFIG.TIMEOUT.LONG; // 2 minutes for first-time model loading
 
 interface DemographicsRequest {
@@ -61,61 +60,35 @@ async function analyzeDemographics(request: DemographicsRequest): Promise<Demogr
   const filename = request.image instanceof File ? request.image.name : 'capture.jpg';
   formData.append('file', request.image, filename);
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+  // Use centralized API client with built-in retry, timeout, and error handling
+  const data = await apiClient.upload<BackendDemographicsResponse>('/api/v1/demographics/analyze', formData, {
+    timeout: REQUEST_TIMEOUT,
+  });
 
-  try {
-    const response = await fetch(`${API_URL}/api/v1/demographics/analyze`, {
-      method: 'POST',
-      body: formData,
-      signal: controller.signal,
-    });
+  // Transform emotion scores to expected format
+  const emotionScores: EmotionScores = {
+    happy: data.emotion?.all?.happy ?? 0,
+    sad: data.emotion?.all?.sad ?? 0,
+    angry: data.emotion?.all?.angry ?? 0,
+    surprise: data.emotion?.all?.surprise ?? 0,
+    fear: data.emotion?.all?.fear ?? 0,
+    disgust: data.emotion?.all?.disgust ?? 0,
+    neutral: data.emotion?.all?.neutral ?? 0,
+  };
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: 'Demographics analysis failed' }));
-      throw new ApiClientError(response.status, error.message || error.detail, {
-        code: error.error_code,
-        details: error,
-      });
-    }
-
-    const data: BackendDemographicsResponse = await response.json();
-
-    // Transform emotion scores to expected format
-    const emotionScores: EmotionScores = {
-      happy: data.emotion?.all?.happy ?? 0,
-      sad: data.emotion?.all?.sad ?? 0,
-      angry: data.emotion?.all?.angry ?? 0,
-      surprise: data.emotion?.all?.surprise ?? 0,
-      fear: data.emotion?.all?.fear ?? 0,
-      disgust: data.emotion?.all?.disgust ?? 0,
-      neutral: data.emotion?.all?.neutral ?? 0,
-    };
-
-    // Transform to UI-friendly format
-    return {
-      age: data.age.value,
-      age_range: { min: data.age.range[0], max: data.age.range[1] },
-      age_confidence: data.age.confidence,
-      gender: data.gender.value,
-      gender_confidence: data.gender.confidence,
-      dominant_emotion: data.emotion?.dominant ?? 'unknown',
-      emotion_confidence: data.emotion?.confidence ?? 0,
-      emotion_scores: emotionScores,
-      race: data.race?.dominant,
-      race_confidence: data.race?.confidence,
-    };
-  } catch (error) {
-    if (error instanceof ApiClientError) {
-      throw error;
-    }
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new ApiClientError(408, 'Request timeout - demographics analysis took too long (model may be loading)');
-    }
-    throw new ApiClientError(0, error instanceof Error ? error.message : 'Unknown error');
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  // Transform to UI-friendly format
+  return {
+    age: data.age.value,
+    age_range: { min: data.age.range[0], max: data.age.range[1] },
+    age_confidence: data.age.confidence,
+    gender: data.gender.value,
+    gender_confidence: data.gender.confidence,
+    dominant_emotion: data.emotion?.dominant ?? 'unknown',
+    emotion_confidence: data.emotion?.confidence ?? 0,
+    emotion_scores: emotionScores,
+    race: data.race?.dominant,
+    race_confidence: data.race?.confidence,
+  };
 }
 
 export function useDemographicsAnalysis() {

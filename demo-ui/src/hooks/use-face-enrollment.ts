@@ -1,8 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ApiClientError } from '@/lib/api/client';
+import { apiClient } from '@/lib/api/client';
 import { API_CONFIG } from '@/config/api.config';
 
-const API_URL = API_CONFIG.BASE_URL;
 const REQUEST_TIMEOUT = API_CONFIG.TIMEOUT.DEFAULT;
 
 interface EnrollmentParams {
@@ -29,6 +28,9 @@ interface EnrollmentResponse {
   message: string;
   quality_score?: number;
   created_at?: string;
+  // Add missing properties that UI expects
+  face_id: string;
+  person_id: string;
 }
 
 async function enrollFace(params: EnrollmentParams): Promise<EnrollmentResponse> {
@@ -43,64 +45,23 @@ async function enrollFace(params: EnrollmentParams): Promise<EnrollmentResponse>
     formData.append('tenant_id', params.metadata.tenant_id as string);
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+  // Use centralized API client with built-in retry, timeout, and error handling
+  const data = await apiClient.upload<BackendEnrollmentResponse>('/api/v1/enroll', formData, {
+    timeout: REQUEST_TIMEOUT,
+  });
 
-  try {
-    const response = await fetch(`${API_URL}/api/v1/enroll`, {
-      method: 'POST',
-      body: formData,
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: 'Enrollment failed' }));
-
-      // Handle specific error codes
-      if (error.error_code === 'USER_ALREADY_EXISTS') {
-        throw new ApiClientError(response.status, error.message, {
-          code: error.error_code,
-          details: error,
-          userMessage: 'This user ID is already enrolled. Use a different ID or delete the existing enrollment first.',
-        });
-      }
-
-      if (error.error_code === 'FACE_NOT_DETECTED') {
-        throw new ApiClientError(response.status, error.message, {
-          code: error.error_code,
-          details: error,
-          userMessage: 'No face detected in the image. Please use a clear photo with a visible face.',
-        });
-      }
-
-      throw new ApiClientError(response.status, error.message || error.detail, {
-        code: error.error_code,
-        details: error,
-      });
-    }
-
-    const data: BackendEnrollmentResponse = await response.json();
-
-    // Return as-is since backend and UI formats are similar
-    return {
-      user_id: data.user_id,
-      embedding_id: data.embedding_id,
-      success: data.success,
-      message: data.message,
-      quality_score: data.quality_score,
-      created_at: data.created_at,
-    };
-  } catch (error) {
-    if (error instanceof ApiClientError) {
-      throw error;
-    }
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new ApiClientError(408, 'Request timeout - enrollment took too long');
-    }
-    throw new ApiClientError(0, error instanceof Error ? error.message : 'Unknown error');
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  // Transform backend response to UI-friendly format
+  return {
+    user_id: data.user_id,
+    embedding_id: data.embedding_id,
+    success: data.success,
+    message: data.message,
+    quality_score: data.quality_score,
+    created_at: data.created_at,
+    // Map to UI expected properties
+    face_id: data.embedding_id,
+    person_id: data.user_id,
+  };
 }
 
 export function useFaceEnrollment() {

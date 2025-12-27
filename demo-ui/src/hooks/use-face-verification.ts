@@ -1,7 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
+import { apiClient } from '@/lib/api/client';
 import { API_CONFIG } from '@/config/api.config';
 
-const API_URL = API_CONFIG.BASE_URL;
 const REQUEST_TIMEOUT = API_CONFIG.TIMEOUT.DEFAULT;
 
 interface VerificationRequest {
@@ -43,43 +43,29 @@ async function verifyFace(request: VerificationRequest): Promise<VerificationRes
   formData.append('file', request.image, filename);
   formData.append('user_id', request.user_id);
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
-
-  try {
-    const response = await fetch(
-      `${API_URL}/api/v1/verify`,
-      {
-        method: 'POST',
-        body: formData,
-        signal: controller.signal,
-      }
-    );
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ message: 'Verification failed' }));
-      throw new Error(error.message || error.detail);
-    }
-
-    const data: BackendVerificationResponse = await response.json();
-
-    // Map backend response to frontend expected format
-    return {
-      // Frontend expected fields
-      match: data.verified,
-      similarity: data.confidence, // confidence is 0-1, maps to similarity
-      // Common fields
-      threshold: data.threshold,
-      user_id: data.user_id,
-      confidence: data.confidence,
-      processing_time_ms: data.processing_time_ms || 0,
-      // Preserve original backend fields
-      verified: data.verified,
-      distance: data.distance,
-    };
-  } finally {
-    clearTimeout(timeoutId);
+  if (request.threshold !== undefined) {
+    formData.append('threshold', request.threshold.toString());
   }
+
+  // Use centralized API client with built-in retry, timeout, and error handling
+  const data = await apiClient.upload<BackendVerificationResponse>('/api/v1/verify', formData, {
+    timeout: REQUEST_TIMEOUT,
+  });
+
+  // Transform backend response to frontend expected format
+  return {
+    // Frontend expected fields
+    match: data.verified,
+    similarity: data.confidence, // confidence is 0-1, maps to similarity
+    // Common fields
+    threshold: data.threshold,
+    user_id: data.user_id,
+    confidence: data.confidence,
+    processing_time_ms: data.processing_time_ms || 0,
+    // Preserve original backend fields
+    verified: data.verified,
+    distance: data.distance,
+  };
 }
 
 export function useFaceVerification() {
