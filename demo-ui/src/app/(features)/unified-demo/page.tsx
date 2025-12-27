@@ -152,7 +152,7 @@ export default function UnifiedDemoPage() {
       formData.append('file', image);
 
       const endpoint = getEndpointForMode(analysisMode);
-      const response = await fetch(`http://localhost:8000${endpoint}`, {
+      const response = await fetch(`http://localhost:8001${endpoint}`, {
         method: 'POST',
         body: formData,
       });
@@ -194,7 +194,7 @@ export default function UnifiedDemoPage() {
         formData.append('file', image);
 
         const endpoint = getEndpointForMode(analysisMode);
-        const response = await fetch(`http://localhost:8000${endpoint}`, {
+        const response = await fetch(`http://localhost:8001${endpoint}`, {
           method: 'POST',
           body: formData,
         });
@@ -220,25 +220,25 @@ export default function UnifiedDemoPage() {
   const getEndpointForMode = (mode: AnalysisMode): string => {
     switch (mode) {
       case 'face_detection':
-        return '/detect';
+        return '/api/v1/faces/detect-all';
       case 'quality':
-        return '/quality';
+        return '/api/v1/quality/analyze';
       case 'demographics':
-        return '/demographics';
+        return '/api/v1/demographics/analyze';
       case 'liveness':
-        return '/liveness';
+        return '/api/v1/liveness';
       case 'enrollment_ready':
-        return '/enrollment/ready';
+        return '/api/v1/quality/analyze';
       case 'verification':
-        return '/verification';
+        return '/api/v1/verify';
       case 'search':
-        return '/search';
+        return '/api/v1/search';
       case 'landmarks':
-        return '/landmarks';
+        return '/api/v1/landmarks/detect';
       case 'full':
-        return '/analyze/full';
+        return '/api/v1/quality/analyze';
       default:
-        return '/quality';
+        return '/api/v1/quality/analyze';
     }
   };
 

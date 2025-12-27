@@ -447,7 +447,11 @@ async def list_incidents(
         )
 
         return IncidentListResponse(
-            incidents=[IncidentResponse(**i.to_dict()) for i in incidents],
+            incidents=[
+                IncidentResponse(**i) if isinstance(i, dict)
+                else IncidentResponse(**i.to_dict())
+                for i in incidents
+            ],
             total=len(incidents),
         )
 

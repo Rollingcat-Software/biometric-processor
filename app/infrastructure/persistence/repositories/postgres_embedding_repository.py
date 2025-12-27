@@ -61,6 +61,22 @@ class PostgresEmbeddingRepository:
             f"(dim={embedding_dimension}, pool_size={pool_size})"
         )
 
+    async def _setup_connection(self, conn) -> None:
+        """Setup connection configuration for pgvector.
+
+        This method is called for each new connection in the pool.
+        Configures connection-specific settings for optimal performance.
+
+        Args:
+            conn: asyncpg connection to configure
+        """
+        from pgvector.asyncpg import register_vector
+
+        # Register vector type for pgvector extension
+        # This ensures vectors are properly handled by asyncpg
+        await register_vector(conn)
+        logger.debug(f"Configured connection {id(conn)} for pgvector")
+
     async def connect(self) -> None:
         """Establish database connection pool.
 
@@ -74,6 +90,7 @@ class PostgresEmbeddingRepository:
                 self._database_url,
                 min_size=2,
                 max_size=self._pool_size,
+                setup=self._setup_connection,
             )
             logger.info("PostgreSQL connection pool established")
         except ImportError:
@@ -119,10 +136,10 @@ class PostgresEmbeddingRepository:
 
         query = """
             INSERT INTO face_embeddings (user_id, tenant_id, embedding, quality_score, updated_at)
-            VALUES ($1, $2, $3::vector, $4, NOW())
+            VALUES ($1, $2, $3, $4, NOW())
             ON CONFLICT (user_id, tenant_id)
             DO UPDATE SET
-                embedding = $3::vector,
+                embedding = $3,
                 quality_score = $4,
                 updated_at = NOW()
         """
@@ -133,7 +150,7 @@ class PostgresEmbeddingRepository:
                     query,
                     user_id,
                     tenant_id,
-                    str(embedding_list),
+                    embedding_list,
                     quality_score,
                 )
             logger.debug(f"Saved embedding for user_id={user_id}")
@@ -207,24 +224,24 @@ class PostgresEmbeddingRepository:
 
         if tenant_id:
             query = """
-                SELECT user_id, embedding <=> $1::vector AS distance
+                SELECT user_id, embedding <=> $1 AS distance
                 FROM face_embeddings
                 WHERE tenant_id = $2
-                  AND embedding <=> $1::vector < $3
+                  AND embedding <=> $1 < $3
                 ORDER BY distance
                 LIMIT $4
             """
-            params = (str(embedding_list), tenant_id, threshold, limit)
+            params = (embedding_list, tenant_id, threshold, limit)
         else:
             query = """
-                SELECT user_id, embedding <=> $1::vector AS distance
+                SELECT user_id, embedding <=> $1 AS distance
                 FROM face_embeddings
                 WHERE tenant_id IS NULL
-                  AND embedding <=> $1::vector < $2
+                  AND embedding <=> $1 < $2
                 ORDER BY distance
                 LIMIT $3
             """
-            params = (str(embedding_list), threshold, limit)
+            params = (embedding_list, threshold, limit)
 
         try:
             async with self._pool.acquire() as conn:

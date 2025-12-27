@@ -50,9 +50,11 @@ from app.infrastructure.resilience.session_rate_limiter import (
 )
 
 # Repository implementations
-from app.infrastructure.persistence.repositories.memory_proctor_repository import (
-    InMemoryProctorSessionRepository,
-    InMemoryProctorIncidentRepository,
+from app.infrastructure.persistence.repositories.postgres_session_repository import (
+    PostgresSessionRepository,
+)
+from app.infrastructure.persistence.repositories.postgres_incident_repository import (
+    PostgresIncidentRepository,
 )
 
 logger = logging.getLogger(__name__)
@@ -189,22 +191,13 @@ def get_proctor_session_repository() -> IProctorSessionRepository:
     storage_type = settings.PROCTOR_STORAGE_TYPE
 
     if storage_type == "postgres" and settings.DATABASE_URL:
-        # For PostgreSQL, we need async initialization
-        # Return a lazy wrapper that initializes on first use
         logger.info("Creating proctoring session repository (PostgreSQL)")
-        from app.infrastructure.persistence.repositories.postgres_session_repository import (
-            PostgresSessionRepository,
-        )
-        # Note: Pool will be injected when database is available
-        # For now, return in-memory as fallback
-        logger.warning(
-            "PostgreSQL pool not available yet, using in-memory repository. "
-            "Restart after database initialization for PostgreSQL storage."
-        )
-        return InMemoryProctorSessionRepository()
+        return PostgresSessionRepository(database_url=settings.DATABASE_URL)
     else:
-        logger.info("Creating proctoring session repository (in-memory)")
-        return InMemoryProctorSessionRepository()
+        raise ValueError(
+            "PROCTOR_STORAGE_TYPE must be 'postgres' and DATABASE_URL must be configured. "
+            "In-memory repositories have been removed for production safety."
+        )
 
 
 @lru_cache()
@@ -219,18 +212,12 @@ def get_proctor_incident_repository() -> IProctorIncidentRepository:
 
     if storage_type == "postgres" and settings.DATABASE_URL:
         logger.info("Creating proctoring incident repository (PostgreSQL)")
-        from app.infrastructure.persistence.repositories.postgres_incident_repository import (
-            PostgresIncidentRepository,
-        )
-        # Note: Pool will be injected when database is available
-        logger.warning(
-            "PostgreSQL pool not available yet, using in-memory repository. "
-            "Restart after database initialization for PostgreSQL storage."
-        )
-        return InMemoryProctorIncidentRepository()
+        return PostgresIncidentRepository(database_url=settings.DATABASE_URL)
     else:
-        logger.info("Creating proctoring incident repository (in-memory)")
-        return InMemoryProctorIncidentRepository()
+        raise ValueError(
+            "PROCTOR_STORAGE_TYPE must be 'postgres' and DATABASE_URL must be configured. "
+            "In-memory repositories have been removed for production safety."
+        )
 
 
 # ============================================================================

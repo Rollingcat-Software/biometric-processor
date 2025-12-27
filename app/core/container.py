@@ -247,6 +247,71 @@ def get_card_type_detector() -> ICardTypeDetector:
 
 
 @lru_cache()
+def get_demographics_analyzer():
+    """Get demographics analyzer instance (singleton).
+
+    Returns:
+        Demographics analyzer implementation (DeepFace-based)
+
+    Note:
+        Analyzes age, gender, and optionally emotion from faces.
+        Race estimation is disabled by default for ethical reasons.
+    """
+    from app.infrastructure.ml.factories.demographics_factory import DemographicsAnalyzerFactory
+
+    logger.info("Creating demographics analyzer (DeepFace-based)")
+    return DemographicsAnalyzerFactory.create(
+        backend="deepface",
+        include_race=False,
+        include_emotion=True,
+        min_image_size=224,
+        age_margin=10,
+        age_confidence=0.65,
+    )
+
+
+@lru_cache()
+def get_landmark_detector():
+    """Get landmark detector instance (singleton).
+
+    Returns:
+        Landmark detector implementation (MediaPipe 468-point by default)
+
+    Note:
+        Detects facial landmarks for various applications:
+        - Face mesh (468 points with MediaPipe)
+        - Eye tracking
+        - Gaze estimation
+        - Expression analysis
+    """
+    from app.infrastructure.ml.factories.landmark_factory import LandmarkDetectorFactory
+
+    logger.info("Creating landmark detector (MediaPipe 468-point)")
+    return LandmarkDetectorFactory.create(model="mediapipe_468")
+
+
+@lru_cache()
+def get_webhook_sender():
+    """Get webhook sender instance (singleton).
+
+    Returns:
+        Webhook sender implementation (HTTP-based)
+
+    Note:
+        Sends event notifications to external systems via HTTP webhooks.
+        Includes automatic retry logic with exponential backoff.
+    """
+    from app.infrastructure.webhooks.webhook_factory import WebhookSenderFactory
+
+    logger.info("Creating webhook sender (HTTP)")
+    return WebhookSenderFactory.create(
+        transport="http",
+        timeout=10,
+        retry_count=3,
+    )
+
+
+@lru_cache()
 def get_event_bus() -> IEventBus:
     """Get event bus instance (singleton).
 
@@ -425,6 +490,132 @@ def get_batch_verification_use_case() -> BatchVerificationUseCase:
         similarity_calculator=get_similarity_calculator(),
         max_concurrent=5,
         default_threshold=settings.VERIFICATION_THRESHOLD,
+    )
+
+
+def get_analyze_quality_use_case():
+    """Get analyze quality use case instance.
+
+    Returns:
+        AnalyzeQualityUseCase with all dependencies injected
+    """
+    from app.application.use_cases.analyze_quality import AnalyzeQualityUseCase
+
+    return AnalyzeQualityUseCase(
+        detector=get_face_detector(),
+        quality_assessor=get_quality_assessor(),
+    )
+
+
+def get_detect_multi_face_use_case():
+    """Get detect multi-face use case instance.
+
+    Returns:
+        DetectMultiFaceUseCase with all dependencies injected
+    """
+    from app.application.use_cases.detect_multi_face import DetectMultiFaceUseCase
+
+    return DetectMultiFaceUseCase(
+        detector=get_face_detector(),
+        quality_assessor=get_quality_assessor(),
+    )
+
+
+def get_analyze_demographics_use_case():
+    """Get analyze demographics use case instance.
+
+    Returns:
+        AnalyzeDemographicsUseCase with all dependencies injected
+    """
+    from app.application.use_cases.analyze_demographics import AnalyzeDemographicsUseCase
+
+    return AnalyzeDemographicsUseCase(
+        detector=get_face_detector(),
+        demographics_analyzer=get_demographics_analyzer(),
+    )
+
+
+def get_compare_faces_use_case():
+    """Get compare faces use case instance.
+
+    Returns:
+        CompareFacesUseCase with all dependencies injected
+    """
+    from app.application.use_cases.compare_faces import CompareFacesUseCase
+
+    return CompareFacesUseCase(
+        detector=get_face_detector(),
+        extractor=get_embedding_extractor(),
+        similarity_calculator=get_similarity_calculator(),
+        quality_assessor=get_quality_assessor(),
+    )
+
+
+def get_compute_similarity_matrix_use_case():
+    """Get compute similarity matrix use case instance.
+
+    Returns:
+        ComputeSimilarityMatrixUseCase with all dependencies injected
+    """
+    from app.application.use_cases.compute_similarity_matrix import ComputeSimilarityMatrixUseCase
+
+    return ComputeSimilarityMatrixUseCase(
+        detector=get_face_detector(),
+        extractor=get_embedding_extractor(),
+        similarity_calculator=get_similarity_calculator(),
+    )
+
+
+def get_detect_landmarks_use_case():
+    """Get detect landmarks use case instance.
+
+    Returns:
+        DetectLandmarksUseCase with all dependencies injected
+    """
+    from app.application.use_cases.detect_landmarks import DetectLandmarksUseCase
+
+    return DetectLandmarksUseCase(
+        detector=get_face_detector(),
+        landmark_detector=get_landmark_detector(),
+    )
+
+
+def get_export_embeddings_use_case():
+    """Get export embeddings use case instance.
+
+    Returns:
+        ExportEmbeddingsUseCase with all dependencies injected
+    """
+    from app.application.use_cases.export_embeddings import ExportEmbeddingsUseCase
+
+    return ExportEmbeddingsUseCase(
+        repository=get_embedding_repository(),
+    )
+
+
+def get_import_embeddings_use_case():
+    """Get import embeddings use case instance.
+
+    Returns:
+        ImportEmbeddingsUseCase with all dependencies injected
+    """
+    from app.application.use_cases.import_embeddings import ImportEmbeddingsUseCase
+
+    return ImportEmbeddingsUseCase(
+        repository=get_embedding_repository(),
+    )
+
+
+def get_send_webhook_use_case():
+    """Get send webhook use case instance.
+
+    Returns:
+        SendWebhookUseCase with all dependencies injected
+    """
+    from app.application.use_cases.send_webhook import SendWebhookUseCase
+
+    return SendWebhookUseCase(
+        webhook_sender=get_webhook_sender(),
     )
 
 

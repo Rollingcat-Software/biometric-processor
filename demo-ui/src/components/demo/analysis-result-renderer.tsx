@@ -2,7 +2,7 @@
 
 import { motion } from 'framer-motion';
 import { CheckCircle2, XCircle, AlertTriangle, Info, Users, MapPin } from 'lucide-react';
-import { Badge } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { formatPercent, toPercent } from '@/lib/utils/format';
 import type { LiveAnalysisResult, AnalysisMode } from '@/hooks/use-live-camera-analysis';

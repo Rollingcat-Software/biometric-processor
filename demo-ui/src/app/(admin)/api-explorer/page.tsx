@@ -100,7 +100,7 @@ export default function ApiExplorerPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
 
   const handleSelectEndpoint = (endpoint: any) => {
     setSelectedEndpoint(endpoint);

@@ -153,8 +153,11 @@ class PgVectorEmbeddingRepository:
         Args:
             conn: asyncpg connection to configure
         """
+        from pgvector.asyncpg import register_vector
+
         # Register vector type for pgvector extension
         # This ensures vectors are properly handled by asyncpg
+        await register_vector(conn)
         await conn.execute("SET statement_timeout = '30s'")
         logger.debug(f"Configured connection {id(conn)} for pgvector")
 
