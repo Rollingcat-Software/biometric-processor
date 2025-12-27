@@ -163,39 +163,57 @@ function renderQuality(result: any) {
 function renderDemographics(result: any) {
   const demo = result.demographics || result;
 
+  // Extract values - handle both nested objects and flat values from API
+  const ageValue = typeof demo.age === 'object' ? demo.age?.value : demo.age;
+  const ageRange = typeof demo.age === 'object' ? demo.age?.range : demo.age_range;
+  const ageConfidence = typeof demo.age === 'object' ? demo.age?.confidence : null;
+
+  const genderValue = typeof demo.gender === 'object' ? demo.gender?.value : demo.gender;
+  const genderConfidence = typeof demo.gender === 'object' ? demo.gender?.confidence : demo.gender_confidence;
+
+  const emotionValue = typeof demo.emotion === 'object' ? demo.emotion?.dominant : demo.emotion;
+  const emotionScores = typeof demo.emotion === 'object' ? demo.emotion?.all : demo.emotion_scores;
+
   return (
     <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2">
-        {demo.age !== null && demo.age !== undefined && (
+        {ageValue !== null && ageValue !== undefined && (
           <div className="rounded-lg border bg-gradient-to-br from-blue-500/10 to-blue-500/5 p-4">
             <p className="text-sm text-muted-foreground">Age</p>
-            <p className="text-3xl font-bold text-blue-600">{demo.age}</p>
-            {demo.age_range && <p className="text-xs text-muted-foreground">Range: {demo.age_range}</p>}
-          </div>
-        )}
-
-        {demo.gender && (
-          <div className="rounded-lg border bg-gradient-to-br from-purple-500/10 to-purple-500/5 p-4">
-            <p className="text-sm text-muted-foreground">Gender</p>
-            <p className="text-3xl font-bold capitalize text-purple-600">{demo.gender}</p>
-            {demo.gender_confidence && (
-              <p className="text-xs text-muted-foreground">{formatPercent(demo.gender_confidence)}</p>
+            <p className="text-3xl font-bold text-blue-600">{ageValue}</p>
+            {ageRange && (
+              <p className="text-xs text-muted-foreground">
+                Range: {Array.isArray(ageRange) ? `${ageRange[0]}-${ageRange[1]}` : ageRange}
+              </p>
+            )}
+            {ageConfidence && (
+              <p className="text-xs text-muted-foreground">Confidence: {formatPercent(ageConfidence)}</p>
             )}
           </div>
         )}
 
-        {demo.emotion && (
+        {genderValue && (
+          <div className="rounded-lg border bg-gradient-to-br from-purple-500/10 to-purple-500/5 p-4">
+            <p className="text-sm text-muted-foreground">Gender</p>
+            <p className="text-3xl font-bold capitalize text-purple-600">{genderValue}</p>
+            {genderConfidence && (
+              <p className="text-xs text-muted-foreground">{formatPercent(genderConfidence)}</p>
+            )}
+          </div>
+        )}
+
+        {emotionValue && (
           <div className="rounded-lg border bg-gradient-to-br from-pink-500/10 to-pink-500/5 p-4 sm:col-span-2">
             <p className="text-sm text-muted-foreground">Dominant Emotion</p>
-            <p className="text-3xl font-bold capitalize text-pink-600">{demo.emotion}</p>
+            <p className="text-3xl font-bold capitalize text-pink-600">{emotionValue}</p>
           </div>
         )}
       </div>
 
-      {demo.emotion_scores && Object.keys(demo.emotion_scores).length > 0 && (
+      {emotionScores && Object.keys(emotionScores).length > 0 && (
         <div className="space-y-2">
           <p className="text-sm font-medium">All Emotions</p>
-          {Object.entries(demo.emotion_scores).map(([emotion, score]: [string, any]) => (
+          {Object.entries(emotionScores).map(([emotion, score]: [string, any]) => (
             <div key={emotion} className="space-y-1">
               <div className="flex justify-between text-sm">
                 <span className="capitalize">{emotion}</span>
