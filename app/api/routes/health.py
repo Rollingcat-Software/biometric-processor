@@ -158,7 +158,7 @@ async def detailed_health_check(
         checks["database"] = {
             "status": "healthy",
             "embeddings_count": count,
-            "type": "pgvector" if settings.USE_PGVECTOR else "in-memory",
+            "type": "pgvector",
         }
     except Exception as e:
         logger.error(f"Database health check failed: {str(e)}")
