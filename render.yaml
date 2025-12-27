@@ -36,6 +36,7 @@ services:
     region: frankfurt
     plan: free
     maxmemoryPolicy: allkeys-lru
+    ipAllowList: []  # Empty = allow all Render services
 
 databases:
   # PostgreSQL 16 with pgvector support
