@@ -262,11 +262,11 @@ def get_demographics_analyzer():
     logger.info("Creating demographics analyzer (DeepFace-based)")
     return DemographicsAnalyzerFactory.create(
         backend="deepface",
-        include_race=False,
-        include_emotion=True,
-        min_image_size=224,
-        age_margin=10,
-        age_confidence=0.65,
+        include_race=settings.DEMOGRAPHICS_INCLUDE_RACE,
+        include_emotion=settings.DEMOGRAPHICS_INCLUDE_EMOTION,
+        min_image_size=settings.DEMOGRAPHICS_MIN_IMAGE_SIZE,
+        age_margin=settings.DEMOGRAPHICS_AGE_MARGIN,
+        age_confidence=settings.DEMOGRAPHICS_AGE_CONFIDENCE,
     )
 
 
