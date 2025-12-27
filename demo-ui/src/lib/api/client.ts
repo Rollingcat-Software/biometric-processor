@@ -46,7 +46,8 @@ export interface RequestOptions extends Omit<RequestInit, 'body'> {
  * Default configuration
  */
 const DEFAULT_CONFIG: Required<Omit<ApiClientConfig, 'onRequest' | 'onResponse' | 'onError'>> = {
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
+  // Use same origin when NEXT_PUBLIC_API_URL is empty (static export served by FastAPI)
+  baseURL: process.env.NEXT_PUBLIC_API_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8001'),
   timeout: 30000, // 30 seconds
   retryAttempts: 3,
   retryDelay: 1000, // 1 second base delay

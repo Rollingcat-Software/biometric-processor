@@ -171,10 +171,11 @@ export default function LivenessPage() {
                   </Button>
                   {(isSuccess || isError) && (
                     <Button variant="outline" onClick={handleReset}>
-                    {t('common.reset')}
-                  </Button>
-                )}
-              </div>
+                      {t('common.reset')}
+                    </Button>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         </motion.div>

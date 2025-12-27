@@ -32,7 +32,8 @@ class Settings(BaseSettings):
     API_WORKERS: int = Field(default=4, ge=1, le=32)
 
     # CORS Settings (NO WILDCARD!)
-    CORS_ORIGINS: List[str] = Field(default=["http://localhost:3000", "http://localhost:3001", "http://localhost:8080"])
+    # Frontend is now served from same origin (port 8001), no need for separate ports
+    CORS_ORIGINS: List[str] = Field(default=["http://localhost:8001", "http://localhost:8080"])
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
@@ -316,8 +317,8 @@ class Settings(BaseSettings):
     API_KEY_REQUIRE_AUTH: bool = Field(default=False)
     API_KEY_HEADER: str = Field(default="X-API-Key")
 
-    # Metrics
-    METRICS_ENABLED: bool = Field(default=True)
+    # Metrics (disabled for PaaS deployment)
+    METRICS_ENABLED: bool = Field(default=False)
     METRICS_PATH: str = Field(default="/metrics")
 
     # ============================================================================

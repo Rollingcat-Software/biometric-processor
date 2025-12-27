@@ -23,6 +23,11 @@ const DEFAULTS = {
 function buildApiUrl(): string {
   // Priority: environment variable > default construction
   if (process.env.NEXT_PUBLIC_API_URL) {
+    // If explicitly set (even if empty), use it
+    if (process.env.NEXT_PUBLIC_API_URL === '') {
+      // Empty means same origin (static export served by FastAPI)
+      return typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8001';
+    }
     return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, '');
   }
 
@@ -39,6 +44,12 @@ function buildApiUrl(): string {
 function buildWsUrl(): string {
   if (process.env.NEXT_PUBLIC_WS_URL) {
     return process.env.NEXT_PUBLIC_WS_URL.replace(/\/$/, '');
+  }
+
+  // If API URL is empty (same origin), derive WebSocket URL from current location
+  if (process.env.NEXT_PUBLIC_API_URL === '' && typeof window !== 'undefined') {
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${protocol}://${window.location.host}`;
   }
 
   const protocol = process.env.NEXT_PUBLIC_WS_PROTOCOL || DEFAULTS.WS_PROTOCOL;
