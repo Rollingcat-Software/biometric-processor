@@ -515,7 +515,6 @@ class Settings(BaseSettings):
         environment variable. This property checks for PORT first, then
         falls back to API_PORT.
         """
-        import os
         return int(os.getenv("PORT", self.API_PORT))
 
 
