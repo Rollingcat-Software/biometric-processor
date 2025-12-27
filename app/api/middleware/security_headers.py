@@ -126,13 +126,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Content-Security-Policy"] = self._csp_policy
 
         # Permissions Policy (modern replacement for Feature-Policy)
+        # Allow camera and microphone for biometric features
         response.headers["Permissions-Policy"] = (
             "accelerometer=(), "
-            "camera=(), "
+            "camera=(self), "  # Allow camera from same origin for biometrics
             "geolocation=(), "
             "gyroscope=(), "
             "magnetometer=(), "
-            "microphone=(), "
+            "microphone=(self), "  # Allow microphone from same origin
             "payment=(), "
             "usb=()"
         )

@@ -78,12 +78,23 @@ async function analyzeQuality(request: QualityRequest): Promise<QualityResponse>
 
     const data: BackendQualityResponse = await response.json();
 
+    // Helper function to normalize blur score (matches backend logic)
+    // Backend: 0-100 raw → 0-50 normalized, 100-500 raw → 50-100 normalized
+    const normalizeBlurScore = (blur: number): number => {
+      if (blur < 100) {
+        return (blur / 100) * 50;
+      } else {
+        const capped = Math.min(blur, 500);
+        return 50 + ((capped - 100) / 400) * 50;
+      }
+    };
+
     // Transform to UI-friendly format
     return {
       overall_score: data.overall_score,
       is_acceptable: data.passed,
       metrics: {
-        sharpness: Math.min(100, data.metrics.blur_score / 10), // Normalize blur to 0-100
+        sharpness: normalizeBlurScore(data.metrics.blur_score), // Normalize blur to 0-100
         brightness: data.metrics.brightness * 100, // Normalize to 0-100
         contrast: 75, // Not provided by backend, use default
         face_size: Math.min(100, (data.metrics.face_size / 200) * 100), // Normalize
