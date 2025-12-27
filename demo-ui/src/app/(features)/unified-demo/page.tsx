@@ -33,6 +33,7 @@ import { EnhancedLiveStream } from '@/components/demo/enhanced-live-stream';
 import { toast } from 'sonner';
 import type { LiveAnalysisResult, AnalysisMode } from '@/hooks/use-live-camera-analysis';
 import { AnalysisResultRenderer } from '@/components/demo/analysis-result-renderer';
+import { API_CONFIG } from '@/config/api.config';
 
 // Analysis mode configuration
 const ANALYSIS_MODES: {
@@ -152,7 +153,7 @@ export default function UnifiedDemoPage() {
       formData.append('file', image);
 
       const endpoint = getEndpointForMode(analysisMode);
-      const response = await fetch(`http://localhost:8001${endpoint}`, {
+      const response = await fetch(`${API_CONFIG.BASE_URL}${endpoint}`, {
         method: 'POST',
         body: formData,
       });
@@ -194,7 +195,7 @@ export default function UnifiedDemoPage() {
         formData.append('file', image);
 
         const endpoint = getEndpointForMode(analysisMode);
-        const response = await fetch(`http://localhost:8001${endpoint}`, {
+        const response = await fetch(`${API_CONFIG.BASE_URL}${endpoint}`, {
           method: 'POST',
           body: formData,
         });

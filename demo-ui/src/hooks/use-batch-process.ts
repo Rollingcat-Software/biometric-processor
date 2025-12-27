@@ -231,7 +231,78 @@ interface BatchProcessResponse {
   processing_time_ms: number;
 }
 
+// Process single file for quality/demographics (used for parallel batch processing)
+async function processSingleFile(
+  file: File,
+  endpoint: string,
+  controller: AbortController
+): Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const response = await fetch(`${API_URL}${endpoint}`, {
+      method: 'POST',
+      body: formData,
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: 'Processing failed' }));
+      return { success: false, error: error.message || error.detail || 'Processing failed' };
+    }
+
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      return { success: false, error: 'Request timeout' };
+    }
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
 async function batchProcess(request: BatchProcessRequest): Promise<BatchProcessResponse> {
+  const startTime = Date.now();
+
+  // For quality and demographics, process files in parallel using single-file endpoints
+  if (request.operation === 'quality' || request.operation === 'demographics') {
+    const endpoint = request.operation === 'quality'
+      ? '/api/v1/quality/analyze'
+      : '/api/v1/demographics/analyze';
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
+    try {
+      // Process all files in parallel
+      const promises = request.files.map((file) => processSingleFile(file, endpoint, controller));
+      const results = await Promise.all(promises);
+
+      const batchResults: BatchResult[] = results.map((result, index) => ({
+        index,
+        success: result.success,
+        error: result.error,
+        // Include analysis data for display
+        ...(result.data as Record<string, unknown>),
+      }));
+
+      const successful = results.filter((r) => r.success).length;
+      const failed = results.filter((r) => !r.success).length;
+
+      return {
+        results: batchResults,
+        total: request.files.length,
+        successful,
+        failed,
+        processing_time_ms: Date.now() - startTime,
+      };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  // For enroll/verify, use the batch endpoints
   const formData = new FormData();
 
   // Backend expects 'files' field name
@@ -252,8 +323,6 @@ async function batchProcess(request: BatchProcessRequest): Promise<BatchProcessR
   const endpoints: Record<string, string> = {
     enroll: '/api/v1/batch/enroll',
     verify: '/api/v1/batch/verify',
-    quality: '/api/v1/batch/quality',
-    demographics: '/api/v1/batch/demographics',
   };
 
   const controller = new AbortController();

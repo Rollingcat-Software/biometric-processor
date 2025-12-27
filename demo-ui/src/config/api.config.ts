@@ -8,7 +8,7 @@
 
 // Default configuration values
 const DEFAULTS = {
-  API_PORT: 8000,
+  API_PORT: 8001,
   API_HOST: 'localhost',
   API_PROTOCOL: 'http',
   WS_PROTOCOL: 'ws',
