@@ -1,0 +1,29 @@
+{
+  "displayName": "Biometric API Health Check",
+  "monitoredResource": {
+    "type": "uptime_url",
+    "labels": {
+      "project_id": "fivucsas",
+      "host": "biometric-api-902542798396.europe-west1.run.app"
+    }
+  },
+  "httpCheck": {
+    "path": "/api/v1/health",
+    "port": 443,
+    "useSsl": true,
+    "validateSsl": true,
+    "requestMethod": "GET",
+    "acceptedResponseStatusCodes": [
+      {
+        "statusClass": "STATUS_CLASS_2XX"
+      }
+    ]
+  },
+  "period": "300s",
+  "timeout": "10s",
+  "checkerType": "STATIC_IP_CHECKERS",
+  "selectedRegions": [
+    "EUROPE",
+    "USA"
+  ]
+}
