@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useRef, useEffect } from 'react';
 import { useWebSocket } from './use-websocket';
 import { API_CONFIG } from '@/config/api.config';
 
@@ -122,12 +122,31 @@ export function useLiveCameraAnalysis() {
   const [error, setError] = useState<string | null>(null);
   const [isConfigured, setIsConfigured] = useState(false);
 
+  // Refs for stable access without re-renders
+  const wsRef = useRef<any>(null);
+  const pendingFramesRef = useRef(0);
+  const maxPendingFrames = 2; // Backpressure limit
+
+  // Throttle result updates to reduce re-renders
+  const lastResultUpdateRef = useRef(0);
+  const resultUpdateInterval = 50; // Update UI max 20 FPS
+
   const handleMessage = useCallback((message: LiveAnalysisMessage) => {
     if (!message || !message.type) return;
 
     switch (message.type) {
       case 'result':
-        setCurrentResult(message.data as LiveAnalysisResult);
+        // Decrement pending frames (backpressure)
+        if (pendingFramesRef.current > 0) {
+          pendingFramesRef.current--;
+        }
+
+        // Throttle result updates to reduce re-renders
+        const now = Date.now();
+        if (now - lastResultUpdateRef.current > resultUpdateInterval) {
+          setCurrentResult(message.data as LiveAnalysisResult);
+          lastResultUpdateRef.current = now;
+        }
         setError(null);
         break;
       case 'error':
@@ -151,44 +170,67 @@ export function useLiveCameraAnalysis() {
     reconnectAttempts: 3,
   });
 
-  const updateConfig = useCallback((newConfig: Partial<LiveAnalysisConfig>) => {
-    const updatedConfig = { ...config, ...newConfig };
-    setConfig(updatedConfig);
+  // Store ws in ref for stable access
+  useEffect(() => {
+    wsRef.current = ws;
+  }, [ws]);
 
-    if (ws.isConnected) {
-      ws.send({
-        type: 'config',
-        data: updatedConfig,
-      });
-    }
-  }, [config, ws]);
+  // Fix infinite loop: use functional setState and no deps
+  const updateConfig = useCallback((newConfig: Partial<LiveAnalysisConfig>) => {
+    setConfig((prev) => {
+      const updatedConfig = { ...prev, ...newConfig };
+
+      // Send to server if connected
+      if (wsRef.current?.isConnected) {
+        wsRef.current.send({
+          type: 'config',
+          data: updatedConfig,
+        });
+      }
+
+      return updatedConfig;
+    });
+  }, []); // Empty deps - stable reference!
 
   const sendFrame = useCallback((imageData: string) => {
-    if (!ws.isConnected) {
+    if (!wsRef.current?.isConnected) {
       setError('WebSocket not connected');
+      return;
+    }
+
+    // Backpressure: skip frame if too many pending
+    if (pendingFramesRef.current >= maxPendingFrames) {
+      console.warn('Skipping frame - server is behind');
       return;
     }
 
     // Send config first if not configured
     if (!isConfigured) {
-      ws.send({
-        type: 'config',
-        data: config,
+      setConfig((currentConfig) => {
+        wsRef.current.send({
+          type: 'config',
+          data: currentConfig,
+        });
+        return currentConfig;
       });
     }
 
     // Send frame
-    ws.send({
+    wsRef.current.send({
       type: 'frame',
       data: imageData,
     });
-  }, [ws, config, isConfigured]);
+
+    // Increment pending frames (backpressure tracking)
+    pendingFramesRef.current++;
+  }, [isConfigured]);
 
   const connect = useCallback(() => {
     setIsConfigured(false);
     setError(null);
     setCurrentResult(null);
     setSessionStats(null);
+    pendingFramesRef.current = 0; // Reset backpressure
     ws.connect();
   }, [ws]);
 
@@ -198,6 +240,7 @@ export function useLiveCameraAnalysis() {
     setError(null);
     setCurrentResult(null);
     setSessionStats(null);
+    pendingFramesRef.current = 0; // Reset backpressure
   }, [ws]);
 
   return {
@@ -222,5 +265,8 @@ export function useLiveCameraAnalysis() {
 
     // Reconnection info
     reconnectCount: ws.reconnectCount,
+
+    // Backpressure stats
+    pendingFrames: pendingFramesRef.current,
   };
 }

@@ -403,7 +403,7 @@ class BiometricDemo:
 
         # Landmarks cache for performance
         self._landmarks_cache = []
-        self._landmarks_interval = 0.1  # Update landmarks every 100ms
+        self._landmarks_interval = 0.2  # Update landmarks every 200ms (5 FPS, still smooth)
         self._last_landmarks_time = 0
 
         # Face detection cache
@@ -596,8 +596,8 @@ class BiometricDemo:
             if current_time - cached['time'] < self._demographics_interval:
                 return cached['data']
 
-        # Throttle analysis
-        if current_time - self._last_demographics_time < 0.3:
+        # Throttle analysis (more aggressive to prevent overlap)
+        if current_time - self._last_demographics_time < 0.8:
             return self._demographics_cache.get(face_id, {}).get('data', {})
 
         self._last_demographics_time = current_time
@@ -1357,6 +1357,10 @@ class BiometricDemo:
             area = face.get('facial_area', {})
             region = {'x': area.get('x', 0), 'y': area.get('y', 0), 'w': area.get('w', 100), 'h': area.get('h', 100)}
 
+            # Extract face image once and reuse (performance optimization)
+            face_img = frame[max(0,region['y']):region['y']+region['h'],
+                            max(0,region['x']):region['x']+region['w']]
+
             info = {}
             color = self.COLORS['green']
 
@@ -1371,8 +1375,6 @@ class BiometricDemo:
 
                 if cache_key not in self._quality_cache or \
                    current_time - self._quality_cache[cache_key]['time'] > self._cache_interval:
-                    face_img = frame[max(0,region['y']):region['y']+region['h'],
-                                    max(0,region['x']):region['x']+region['w']]
                     if face_img.size > 0:
                         q = self._quality_assessor.assess(face_img)
                         self._quality_cache[cache_key] = {'data': q, 'time': current_time}
@@ -1400,8 +1402,6 @@ class BiometricDemo:
 
                 if cache_key not in self._liveness_cache or \
                    current_time - self._liveness_cache[cache_key]['time'] > self._cache_interval:
-                    face_img = frame[max(0,region['y']):region['y']+region['h'],
-                                    max(0,region['x']):region['x']+region['w']]
                     if face_img.size > 0:
                         live = self._liveness_detector.check(face_img)
                         self._liveness_cache[cache_key] = {'data': live, 'time': current_time}

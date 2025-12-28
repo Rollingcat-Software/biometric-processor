@@ -63,7 +63,7 @@ export function LiveCameraStream({
     updateConfig,
   } = useLiveCameraAnalysis();
 
-  // Update config when props change
+  // Update config when props change (FIX: removed updateConfig from deps to prevent loop)
   useEffect(() => {
     updateConfig({
       mode,
@@ -72,7 +72,8 @@ export function LiveCameraStream({
       frame_skip: frameSkip,
       quality_threshold: qualityThreshold,
     });
-  }, [mode, userId, tenantId, frameSkip, qualityThreshold, updateConfig]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, userId, tenantId, frameSkip, qualityThreshold]);
 
   // Call onResult when we get a new result
   useEffect(() => {
@@ -166,32 +167,21 @@ export function LiveCameraStream({
     const video = videoRef.current;
     const canvas = canvasRef.current;
 
-    // Set canvas size to match video
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    // Set canvas size only if changed (avoid layout reflow)
+    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
 
     const ctx = canvas.getContext('2d');
     if (ctx) {
       // Draw current video frame to canvas
       ctx.drawImage(video, 0, 0);
 
-      // Convert to base64 and send to WebSocket
-      canvas.toBlob(
-        (blob) => {
-          if (blob) {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              const base64data = reader.result as string;
-              // Remove data:image/jpeg;base64, prefix
-              const base64Image = base64data.split(',')[1];
-              sendFrame(base64Image);
-            };
-            reader.readAsDataURL(blob);
-          }
-        },
-        'image/jpeg',
-        0.85 // Quality
-      );
+      // Use synchronous toDataURL instead of async toBlob (fixes race conditions)
+      const base64data = canvas.toDataURL('image/jpeg', 0.85);
+      const base64Image = base64data.split(',')[1];
+      sendFrame(base64Image);
     }
   }, [isConnected, sendFrame]);
 
