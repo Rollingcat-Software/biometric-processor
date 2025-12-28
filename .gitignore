@@ -214,3 +214,11 @@ demo-ui/node_modules/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Demo local data
+face_db.pkl
+face_landmarker.task
+analysis_*.json
+recording_*.mp4
+screenshot_*.jpg
+NUL
