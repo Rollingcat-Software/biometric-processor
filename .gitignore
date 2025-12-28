@@ -211,3 +211,6 @@ demo-ui/node_modules/
 *.temp
 .cache/
 .claude/settings.local.json
+
+# Claude Code local settings
+.claude/settings.local.json
