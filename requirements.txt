@@ -1,26 +1,57 @@
+# GCP Cloud Run - CPU-only ML dependencies
+# Note: opencv-python-headless and deepface are installed
+# separately in Dockerfile to avoid dependency conflicts
+
+# ===========================================
+# Core API Framework
+# ===========================================
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
-pillow>=10.3.0
-numpy>=1.26.0
-opencv-python>=4.8.0
-scikit-image>=0.21.0
-deepface>=0.0.79
-tf-keras>=2.15.0
 pydantic>=2.5.0
 pydantic-settings>=2.0.0
 python-dotenv>=1.0.0
-ultralytics>=8.0.0
-mediapipe>=0.10.0
 httpx>=0.26.0
-psutil>=5.9.0
-locust>=2.20.0
-structlog>=24.0.0
 aiofiles>=24.1.0
+structlog>=24.0.0
 
-# PostgreSQL with pgvector for face embedding storage
+# ===========================================
+# Image Processing
+# ===========================================
+pillow>=10.3.0
+numpy>=1.26.0,<2.0
+scikit-image>=0.21.0
+
+# ===========================================
+# Machine Learning - TensorFlow CPU Only
+# ===========================================
+tensorflow-cpu==2.15.0
+mediapipe==0.10.14
+
+# DeepFace dependencies (deepface itself installed via --no-deps)
+tqdm>=4.0.0
+gdown>=4.0.0
+pandas>=2.0.0
+flask>=1.1.2
+keras>=2.2.0
+mtcnn>=0.1.0
+retina-face>=0.0.1
+
+# ===========================================
+# Database - PostgreSQL + pgvector
+# ===========================================
 asyncpg>=0.29.0
 pgvector>=0.2.4
+psycopg2-binary>=2.9.0
+cloud-sql-python-connector[asyncpg]>=1.0.0
 
-# Redis for event bus and caching
+# ===========================================
+# Caching - Redis
+# ===========================================
 redis>=5.0.0
+
+# ===========================================
+# Utilities
+# ===========================================
+psutil>=5.9.0
+gunicorn>=21.0.0

@@ -23,25 +23,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy requirements
 COPY requirements.txt .
 
-# Install dependencies with careful ordering:
+# Create constraint file to prevent numpy 2.x installation
+RUN echo "numpy<2.0" > /tmp/constraints.txt
+
+# Install dependencies with constraints to prevent numpy upgrade:
 # 1. Pin numpy to compatible version (TensorFlow 2.15 requires numpy<2.0)
-RUN pip install --no-cache-dir "numpy>=1.23.5,<2.0"
+RUN pip install --no-cache-dir -c /tmp/constraints.txt "numpy>=1.26.0,<2.0"
 
 # 2. First install opencv-python-headless to claim cv2 namespace
-RUN pip install --no-cache-dir opencv-python-headless>=4.8.0
+RUN pip install --no-cache-dir -c /tmp/constraints.txt opencv-python-headless>=4.8.0
 
 # 3. Install tensorflow-cpu (big dependency)
-RUN pip install --no-cache-dir tensorflow-cpu==2.15.0
+RUN pip install --no-cache-dir -c /tmp/constraints.txt tensorflow-cpu==2.15.0
 
 # 4. Install deepface WITHOUT dependencies to avoid opencv-python
 RUN pip install --no-cache-dir --no-deps deepface>=0.0.79
 
-# 5. Install remaining requirements
-RUN pip install --no-cache-dir -r requirements.txt
+# 5. Install remaining requirements with constraints
+RUN pip install --no-cache-dir -c /tmp/constraints.txt -r requirements.txt
 
 # 6. Force uninstall opencv-python if it got installed, reinstall headless
 RUN pip uninstall -y opencv-python opencv-contrib-python 2>/dev/null || true && \
-    pip install --no-cache-dir --force-reinstall opencv-python-headless>=4.8.0
+    pip install --no-cache-dir -c /tmp/constraints.txt --force-reinstall opencv-python-headless>=4.8.0
 
 # Verify dependencies work together
 RUN python -c "import cv2; print('OpenCV version:', cv2.__version__)" && \
