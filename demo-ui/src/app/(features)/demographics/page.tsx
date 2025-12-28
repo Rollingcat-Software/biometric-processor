@@ -1,20 +1,20 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
 import { Users, Upload, Camera, AlertCircle, User, Video } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
+import { Badge as _Badge } from '@/components/ui/badge';
+import { Progress as _Progress } from '@/components/ui/progress';
 import { ImageUploader } from '@/components/media/image-uploader';
 import { WebcamCapture } from '@/components/media/webcam-capture';
 import { LiveCameraStream } from '@/components/media/live-camera-stream';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useDemographicsAnalysis } from '@/hooks/use-demographics-analysis';
 import { toast } from 'sonner';
-import { formatPercent, toPercent } from '@/lib/utils/format';
+import { formatPercent as _formatPercent, toPercent as _toPercent } from '@/lib/utils/format';
 import type { LiveAnalysisResult } from '@/hooks/use-live-camera-analysis';
 
 const emotionEmojis: Record<string, string> = {
@@ -70,12 +70,19 @@ export default function DemographicsPage() {
     reset();
   };
 
-  const handleLiveResult = (result: LiveAnalysisResult) => {
+  const handleLiveResult = useCallback((result: LiveAnalysisResult) => {
     setLiveResult(result);
-  };
+  }, []);
 
   // Use live result if in live mode
-  const displayData = inputMode === 'live' && liveResult?.demographics ? liveResult.demographics : data;
+  // Note: Live mode uses 'emotion', API response uses 'dominant_emotion'
+  const rawDisplayData = inputMode === 'live' && liveResult?.demographics ? liveResult.demographics : data;
+  const displayData = rawDisplayData ? {
+    ...rawDisplayData,
+    // Normalize emotion field (live mode uses 'emotion', API uses 'dominant_emotion')
+    emotion: (rawDisplayData as { emotion?: string }).emotion ||
+             (rawDisplayData as { dominant_emotion?: string }).dominant_emotion,
+  } : null;
 
   return (
     <div className="space-y-6">

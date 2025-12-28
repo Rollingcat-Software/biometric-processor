@@ -163,6 +163,45 @@ export function WebcamCapture({
               playsInline
               muted
             />
+            {/* Face positioning oval overlay */}
+            {isStreaming && (
+              <div className="absolute inset-0 pointer-events-none">
+                <svg
+                  className="w-full h-full"
+                  viewBox="0 0 100 100"
+                  preserveAspectRatio="xMidYMid slice"
+                >
+                  <defs>
+                    <mask id="faceMask">
+                      <rect x="0" y="0" width="100" height="100" fill="white" />
+                      <ellipse cx="50" cy="42" rx="24" ry="32" fill="black" />
+                    </mask>
+                  </defs>
+                  <rect
+                    x="0"
+                    y="0"
+                    width="100"
+                    height="100"
+                    fill="rgba(0,0,0,0.5)"
+                    mask="url(#faceMask)"
+                  />
+                  <ellipse
+                    cx="50"
+                    cy="42"
+                    rx="24"
+                    ry="32"
+                    fill="none"
+                    stroke="white"
+                    strokeWidth="0.5"
+                  />
+                </svg>
+                <div className="absolute bottom-3 left-0 right-0 text-center">
+                  <span className="bg-black/70 px-3 py-1 rounded-full text-xs text-white">
+                    {t('camera.positionFace')}
+                  </span>
+                </div>
+              </div>
+            )}
             {!isStreaming && (
               <div className="flex h-64 flex-col items-center justify-center gap-4 bg-muted">
                 {error ? (

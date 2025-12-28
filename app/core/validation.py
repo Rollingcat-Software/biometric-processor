@@ -9,10 +9,46 @@ This module provides validation functions for user inputs to prevent:
 - File type spoofing
 """
 
-import imghdr
 import re
 from pathlib import Path
 from typing import Optional
+
+
+def _detect_image_type(file_path: str) -> Optional[str]:
+    """Detect image type from file magic bytes.
+
+    Replacement for deprecated imghdr module (removed in Python 3.13).
+
+    Args:
+        file_path: Path to the file
+
+    Returns:
+        Image type string ('jpeg', 'png', 'gif', 'bmp') or None if not an image
+    """
+    # Magic byte signatures for common image formats
+    signatures = {
+        b'\xff\xd8\xff': 'jpeg',
+        b'\x89PNG\r\n\x1a\n': 'png',
+        b'GIF87a': 'gif',
+        b'GIF89a': 'gif',
+        b'BM': 'bmp',
+        b'RIFF': 'webp',  # WebP starts with RIFF
+    }
+
+    try:
+        with open(file_path, 'rb') as f:
+            header = f.read(12)  # Read enough bytes for all signatures
+
+        for magic, img_type in signatures.items():
+            if header.startswith(magic):
+                # Special check for WebP (RIFF....WEBP)
+                if img_type == 'webp' and header[8:12] != b'WEBP':
+                    continue
+                return img_type
+
+        return None
+    except (OSError, IOError):
+        return None
 
 # Patterns for validation
 # User ID and Tenant ID: alphanumeric, hyphens, underscores only
@@ -329,7 +365,7 @@ def validate_image_file(file_path: str, allowed_formats: list[str] = None) -> st
 
     # Detect actual file type using magic bytes
     try:
-        detected_type = imghdr.what(file_path)
+        detected_type = _detect_image_type(file_path)
     except Exception as e:
         raise ValidationError(f"Failed to detect image type: {str(e)}")
 

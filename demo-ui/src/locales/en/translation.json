@@ -178,7 +178,8 @@
     "retake": "Retake",
     "permissionDenied": "Camera permission denied",
     "notSupported": "Camera not supported",
-    "switchCamera": "Switch Camera"
+    "switchCamera": "Switch Camera",
+    "positionFace": "Position your face within the oval"
   },
   "upload": {
     "dragDrop": "Drag and drop an image here",

@@ -6,6 +6,7 @@
 
 export interface ApiErrorDetails {
   error_code?: string;
+  code?: string;  // Alias for error_code
   details?: Record<string, unknown>;
   request_id?: string;
   timestamp?: string;

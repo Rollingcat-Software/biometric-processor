@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useRef, useState, useEffect } from 'react';
-import { Video, VideoOff, Play, StopCircle, Settings, Activity, Zap } from 'lucide-react';
+import { Video, VideoOff, Play, StopCircle, Activity, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils/cn';
 import { Button } from '@/components/ui/button';
@@ -12,14 +12,6 @@ import {
   type AnalysisMode,
   type LiveAnalysisResult,
 } from '@/hooks/use-live-camera-analysis';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Label } from '@/components/ui/label';
 
 interface LiveCameraStreamProps {
   mode: AnalysisMode;
@@ -43,10 +35,11 @@ export function LiveCameraStream({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const frameIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const onResultRef = useRef(onResult);
+  const configSentRef = useRef(false);
 
   const [isStreaming, setIsStreaming] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const [frameSkip, setFrameSkip] = useState(0);
   const [fps, setFps] = useState(0);
 
   const { cameraFacingMode, cameraResolution } = useAppStore();
@@ -63,32 +56,56 @@ export function LiveCameraStream({
     updateConfig,
   } = useLiveCameraAnalysis();
 
-  // Update config when props change
+  // Store updateConfig in a ref to avoid dependency issues
+  const updateConfigRef = useRef(updateConfig);
+  updateConfigRef.current = updateConfig;
+
+  // Keep onResult ref up to date (no effect, just assignment)
+  onResultRef.current = onResult;
+
+  // Store current config props in a ref
+  const configPropsRef = useRef({ mode, userId, tenantId, qualityThreshold });
+  configPropsRef.current = { mode, userId, tenantId, qualityThreshold };
+
+  // Update config only once on mount and when connection becomes active
   useEffect(() => {
-    updateConfig({
-      mode,
-      user_id: userId,
-      tenant_id: tenantId,
-      frame_skip: frameSkip,
-      quality_threshold: qualityThreshold,
-    });
-  }, [mode, userId, tenantId, frameSkip, qualityThreshold, updateConfig]);
+    // Only send config if connected and not already sent
+    if (isConnected && !configSentRef.current) {
+      const config = {
+        mode: configPropsRef.current.mode,
+        user_id: configPropsRef.current.userId,
+        tenant_id: configPropsRef.current.tenantId,
+        frame_skip: 0,
+        quality_threshold: configPropsRef.current.qualityThreshold,
+      };
+      console.log('[LiveCameraStream] Sending config:', config);
+      updateConfigRef.current(config);
+      configSentRef.current = true;
+    }
+
+    // Reset when disconnected
+    if (!isConnected) {
+      configSentRef.current = false;
+    }
+  }, [isConnected]);
 
   // Call onResult when we get a new result
   useEffect(() => {
-    if (currentResult && onResult) {
-      onResult(currentResult);
+    if (currentResult && onResultRef.current) {
+      onResultRef.current(currentResult);
     }
-  }, [currentResult, onResult]);
+  }, [currentResult]);
 
-  // Update FPS display
+  // Update FPS display - calculate from processing time
   useEffect(() => {
-    if (sessionStats) {
-      setFps(Math.round(sessionStats.average_fps));
+    if (sessionStats && sessionStats.average_processing_time_ms > 0) {
+      // Calculate FPS: 1000ms / avg_processing_time = theoretical max FPS
+      const calculatedFps = Math.min(10, Math.round(1000 / sessionStats.average_processing_time_ms));
+      setFps(calculatedFps);
     }
   }, [sessionStats]);
 
-  const getResolutionConstraints = () => {
+  const getResolutionConstraints = useCallback(() => {
     switch (cameraResolution) {
       case 'fhd':
         return { width: 1920, height: 1080 };
@@ -97,14 +114,14 @@ export function LiveCameraStream({
       default:
         return { width: 1280, height: 720 };
     }
-  };
+  }, [cameraResolution]);
 
   const startCamera = useCallback(async () => {
     setCameraError(null);
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setCameraError('Camera API not available. Please use a modern browser with HTTPS.');
-      return;
+      return false;
     }
 
     try {
@@ -133,7 +150,9 @@ export function LiveCameraStream({
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
         setIsStreaming(true);
+        return true;
       }
+      return false;
     } catch (err) {
       if (err instanceof Error) {
         if (err.name === 'NotAllowedError') {
@@ -146,8 +165,9 @@ export function LiveCameraStream({
           setCameraError(`Camera error: ${err.message}`);
         }
       }
+      return false;
     }
-  }, [cameraFacingMode, cameraResolution, t]);
+  }, [cameraFacingMode, getResolutionConstraints, t]);
 
   const stopCamera = useCallback(() => {
     if (streamRef.current) {
@@ -196,19 +216,18 @@ export function LiveCameraStream({
   }, [isConnected, sendFrame]);
 
   const startStreaming = useCallback(async () => {
-    if (!isStreaming) {
-      await startCamera();
-    }
+    const cameraStarted = await startCamera();
+    if (!cameraStarted) return;
 
     // Connect WebSocket
     connect();
 
-    // Start sending frames at ~10 FPS (adjust based on performance)
+    // Start sending frames at ~10 FPS
     const frameInterval = 100; // 100ms = 10 FPS
     frameIntervalRef.current = setInterval(() => {
       captureAndSendFrame();
     }, frameInterval);
-  }, [isStreaming, startCamera, connect, captureAndSendFrame]);
+  }, [startCamera, connect, captureAndSendFrame]);
 
   const stopStreaming = useCallback(() => {
     if (frameIntervalRef.current) {
@@ -220,62 +239,23 @@ export function LiveCameraStream({
     stopCamera();
   }, [disconnect, stopCamera]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount only
   useEffect(() => {
     return () => {
-      stopStreaming();
+      if (frameIntervalRef.current) {
+        clearInterval(frameIntervalRef.current);
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+      }
     };
-  }, [stopStreaming]);
+  }, []);
 
   const isProcessing = isConnected && isStreaming;
   const connectionStatus = status === 'connected' ? 'Connected' : status === 'connecting' ? 'Connecting...' : status === 'reconnecting' ? 'Reconnecting...' : 'Disconnected';
 
-  // Draw bounding box on video if face detected
-  useEffect(() => {
-    if (!videoRef.current || !currentResult?.face) return;
-
-    const video = videoRef.current;
-    const overlay = document.getElementById('face-overlay');
-    if (!overlay) return;
-
-    const face = currentResult.face;
-    const scaleX = video.offsetWidth / video.videoWidth;
-    const scaleY = video.offsetHeight / video.videoHeight;
-
-    // Position overlay
-    overlay.style.left = `${face.x * scaleX}px`;
-    overlay.style.top = `${face.y * scaleY}px`;
-    overlay.style.width = `${face.width * scaleX}px`;
-    overlay.style.height = `${face.height * scaleY}px`;
-    overlay.style.display = 'block';
-  }, [currentResult]);
-
   return (
     <div className="space-y-4">
-      {/* Settings */}
-      <div className="flex items-center justify-between rounded-lg border bg-card p-3">
-        <div className="flex items-center gap-2">
-          <Settings className="h-4 w-4 text-muted-foreground" />
-          <Label className="text-sm">Frame Skip</Label>
-        </div>
-        <Select
-          value={frameSkip.toString()}
-          onValueChange={(v) => setFrameSkip(parseInt(v))}
-          disabled={isProcessing}
-        >
-          <SelectTrigger className="w-32">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="0">None (Slower)</SelectItem>
-            <SelectItem value="1">Skip 1</SelectItem>
-            <SelectItem value="2">Skip 2</SelectItem>
-            <SelectItem value="3">Skip 3 (Faster)</SelectItem>
-            <SelectItem value="5">Skip 5 (Fastest)</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-
       {/* Video Preview */}
       <div className="relative overflow-hidden rounded-lg bg-black">
         <video
@@ -288,15 +268,6 @@ export function LiveCameraStream({
           playsInline
           muted
         />
-
-        {/* Face Detection Overlay */}
-        {isStreaming && (
-          <div
-            id="face-overlay"
-            className="pointer-events-none absolute hidden border-2 border-green-500"
-            style={{ display: 'none' }}
-          />
-        )}
 
         {!isStreaming && (
           <div className="flex h-96 flex-col items-center justify-center gap-4 bg-muted">

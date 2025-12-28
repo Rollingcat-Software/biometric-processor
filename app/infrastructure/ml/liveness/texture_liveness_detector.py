@@ -9,11 +9,12 @@ such as printed photos or screen displays. It uses multiple heuristics:
 """
 
 import logging
+from typing import Optional
 
 import cv2
 import numpy as np
 
-from app.domain.entities.liveness_result import LivenessResult
+from app.domain.entities.liveness_result import LivenessCheck, LivenessResult
 from app.domain.interfaces.liveness_detector import ILivenessDetector
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,38 @@ class TextureLivenessDetector(ILivenessDetector):
 
         is_live = liveness_score >= self._liveness_threshold
 
+        # Create individual check results
+        check_threshold = 50.0
+        checks = (
+            LivenessCheck(
+                name="texture",
+                passed=texture_score >= check_threshold,
+                score=texture_score,
+                details=self._get_texture_details(texture_score),
+            ),
+            LivenessCheck(
+                name="color",
+                passed=color_score >= check_threshold,
+                score=color_score,
+                details=self._get_color_details(color_score),
+            ),
+            LivenessCheck(
+                name="frequency",
+                passed=frequency_score >= check_threshold,
+                score=frequency_score,
+                details=self._get_frequency_details(frequency_score),
+            ),
+            LivenessCheck(
+                name="moire",
+                passed=moire_score >= check_threshold,
+                score=moire_score,
+                details=self._get_moire_details(moire_score),
+            ),
+        )
+
+        # Determine spoof type based on failed checks
+        spoof_type = self._determine_spoof_type(checks, is_live)
+
         logger.info(
             f"Liveness detection complete: score={liveness_score:.2f}, "
             f"is_live={is_live} (texture={texture_score:.2f}, "
@@ -120,7 +153,72 @@ class TextureLivenessDetector(ILivenessDetector):
             liveness_score=liveness_score,
             challenge=challenge,
             challenge_completed=True,
+            checks=checks,
+            spoof_type=spoof_type,
         )
+
+    def _get_texture_details(self, score: float) -> str:
+        """Get human-readable details for texture check."""
+        if score >= 80:
+            return "High texture variance - natural skin detected"
+        elif score >= 60:
+            return "Moderate texture variance"
+        elif score >= 40:
+            return "Low texture variance - possible print"
+        else:
+            return "Very low texture - likely printed photo"
+
+    def _get_color_details(self, score: float) -> str:
+        """Get human-readable details for color check."""
+        if score >= 80:
+            return "Natural color distribution"
+        elif score >= 60:
+            return "Acceptable color distribution"
+        elif score >= 40:
+            return "Unnatural color distribution"
+        else:
+            return "Highly unnatural colors - possible screen/print"
+
+    def _get_frequency_details(self, score: float) -> str:
+        """Get human-readable details for frequency check."""
+        if score >= 80:
+            return "No print patterns detected"
+        elif score >= 60:
+            return "Minimal frequency artifacts"
+        elif score >= 40:
+            return "Some frequency patterns detected"
+        else:
+            return "Strong print patterns detected"
+
+    def _get_moire_details(self, score: float) -> str:
+        """Get human-readable details for moire check."""
+        if score >= 80:
+            return "No screen patterns detected"
+        elif score >= 60:
+            return "Minimal periodic patterns"
+        elif score >= 40:
+            return "Some periodic patterns detected"
+        else:
+            return "Strong moire patterns - likely screen display"
+
+    def _determine_spoof_type(self, checks: tuple, is_live: bool) -> Optional[str]:
+        """Determine the type of spoof attack based on failed checks."""
+        if is_live:
+            return None
+
+        # Find the lowest scoring check
+        lowest_check = min(checks, key=lambda c: c.score)
+
+        if lowest_check.name == "moire" and lowest_check.score < 50:
+            return "screen_replay"
+        elif lowest_check.name == "texture" and lowest_check.score < 50:
+            return "printed_photo"
+        elif lowest_check.name == "color" and lowest_check.score < 50:
+            return "digital_manipulation"
+        elif lowest_check.name == "frequency" and lowest_check.score < 50:
+            return "printed_photo"
+        else:
+            return "suspected_spoof"
 
     def _calculate_texture_score(self, image: np.ndarray) -> float:
         """Calculate texture score using Laplacian variance.

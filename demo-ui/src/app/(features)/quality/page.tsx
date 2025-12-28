@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
 import { Activity, Upload, Camera, AlertCircle, CheckCircle2, AlertTriangle, XCircle, Video } from 'lucide-react';
@@ -67,9 +67,9 @@ export default function QualityPage() {
     reset();
   };
 
-  const handleLiveResult = (result: LiveAnalysisResult) => {
+  const handleLiveResult = useCallback((result: LiveAnalysisResult) => {
     setLiveResult(result);
-  };
+  }, []);
 
   const getGradeFromScore = (score: number) => {
     if (score >= 0.9) return 'excellent';
@@ -80,7 +80,22 @@ export default function QualityPage() {
   };
 
   // Use live result if in live mode, otherwise use static result
-  const displayData = inputMode === 'live' && liveResult?.quality ? liveResult.quality : data;
+  // Note: Live mode has different field structure than API response
+  const rawDisplayData = inputMode === 'live' && liveResult?.quality ? liveResult.quality : data;
+  const displayData = rawDisplayData ? {
+    ...rawDisplayData,
+    // Normalize quality metrics (live mode has flat structure, API has nested metrics)
+    brightness: (rawDisplayData as { brightness?: number }).brightness ??
+                (rawDisplayData as { metrics?: { brightness?: number } }).metrics?.brightness,
+    sharpness: (rawDisplayData as { sharpness?: number }).sharpness ??
+               (rawDisplayData as { metrics?: { sharpness?: number } }).metrics?.sharpness,
+    face_size: (rawDisplayData as { face_size?: number }).face_size ??
+               (rawDisplayData as { metrics?: { face_size?: number } }).metrics?.face_size,
+    centering: (rawDisplayData as { centering?: number }).centering,
+    // Normalize recommendation (live mode has recommendation, API has recommendations array)
+    recommendation: (rawDisplayData as { recommendation?: string }).recommendation ??
+                    (rawDisplayData as { recommendations?: string[] }).recommendations?.[0],
+  } : null;
   const grade = displayData ? getGradeFromScore(displayData.overall_score) : null;
   const gradeConfig = grade ? qualityGradeConfig[grade as keyof typeof qualityGradeConfig] : null;
   const GradeIcon = gradeConfig?.icon || CheckCircle2;

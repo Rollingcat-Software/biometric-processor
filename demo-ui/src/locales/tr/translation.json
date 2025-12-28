@@ -178,7 +178,8 @@
     "retake": "Tekrar Çek",
     "permissionDenied": "Kamera izni reddedildi",
     "notSupported": "Kamera desteklenmiyor",
-    "switchCamera": "Kamerayı Değiştir"
+    "switchCamera": "Kamerayı Değiştir",
+    "positionFace": "Yüzünüzü oval içine yerleştirin"
   },
   "upload": {
     "dragDrop": "Bir görüntüyü buraya sürükleyip bırakın",

@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion } from 'framer-motion';
-import { Video, Play, Square, Camera, Activity } from 'lucide-react';
+import { Video, Play, Square, Activity } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -25,7 +25,7 @@ type AnalysisType =
   | 'landmarks';
 
 export default function LiveDemoPage() {
-  const { t } = useTranslation();
+  const { t: _t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -133,7 +133,7 @@ export default function LiveDemoPage() {
       formData.append('file', frameBlob, 'frame.jpg');
 
       let endpoint = '';
-      let additionalParams: Record<string, string> = {};
+      const additionalParams: Record<string, string> = {};
 
       switch (analysisType) {
         case 'quality':

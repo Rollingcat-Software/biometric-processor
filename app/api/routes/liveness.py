@@ -1,10 +1,11 @@
 """Liveness check API routes."""
 
 import logging
+import time
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
-from app.api.schemas.liveness import LivenessResponse
+from app.api.schemas.liveness import LivenessCheck, LivenessResponse
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
 from app.core.container import get_check_liveness_use_case, get_file_storage
 from app.domain.interfaces.file_storage import IFileStorage
@@ -44,6 +45,7 @@ async def check_liveness(
         Will be updated in Sprint 3 with real smile/blink detection.
     """
     image_path = None
+    start_time = time.perf_counter()
 
     try:
         logger.info("Liveness check request")
@@ -58,7 +60,34 @@ async def check_liveness(
         # Execute liveness check use case
         result = await use_case.execute(image_path=image_path)
 
-        message = "Liveness check passed" if result.is_live else "Liveness check failed"
+        # Calculate processing time
+        processing_time_ms = (time.perf_counter() - start_time) * 1000
+
+        # Build message based on result
+        if result.is_live:
+            message = "Liveness check passed - live person detected"
+        elif result.spoof_type:
+            spoof_messages = {
+                "screen_replay": "Screen replay attack detected",
+                "printed_photo": "Printed photo detected",
+                "digital_manipulation": "Digital manipulation detected",
+                "static_image": "Static image detected - no natural features",
+                "suspected_spoof": "Suspected spoof attempt",
+            }
+            message = f"Liveness check failed - {spoof_messages.get(result.spoof_type, 'Spoof detected')}"
+        else:
+            message = "Liveness check failed"
+
+        # Convert domain checks to API checks
+        api_checks = [
+            LivenessCheck(
+                name=check.name,
+                passed=check.passed,
+                score=check.score,
+                details=check.details,
+            )
+            for check in result.checks
+        ]
 
         return LivenessResponse(
             is_live=result.is_live,
@@ -66,6 +95,9 @@ async def check_liveness(
             challenge=result.challenge,
             challenge_completed=result.challenge_completed,
             message=message,
+            checks=api_checks,
+            spoof_type=result.spoof_type,
+            processing_time_ms=processing_time_ms,
         )
 
     finally:

@@ -12,7 +12,8 @@ class AnalysisMode(str, Enum):
     FACE_DETECTION = "face_detection"  # Just detect face
     QUALITY_ONLY = "quality"  # Face + quality assessment
     DEMOGRAPHICS = "demographics"  # Face + demographics
-    LIVENESS = "liveness"  # Face + liveness check
+    LIVENESS = "liveness"  # Face + passive liveness check
+    ACTIVE_LIVENESS = "active_liveness"  # Active liveness with challenges
     ENROLLMENT_READY = "enrollment_ready"  # All checks for enrollment
     VERIFICATION = "verification"  # 1:1 face verification
     SEARCH = "search"  # 1:N face search/identification
@@ -131,6 +132,30 @@ class LandmarksResult(BaseModel):
     confidence: float = Field(..., ge=0, le=1, description="Landmark detection confidence")
 
 
+class ActiveLivenessResult(BaseModel):
+    """Active liveness detection result with challenges."""
+
+    # Current challenge
+    current_challenge: Optional[str] = Field(None, description="Current challenge type")
+    instruction: str = Field(default="", description="Instruction to display to user")
+    feedback: str = Field(default="", description="Feedback on user's action")
+    time_remaining: float = Field(default=0.0, description="Seconds remaining for challenge")
+
+    # Progress
+    challenges_completed: int = Field(default=0)
+    challenges_total: int = Field(default=0)
+    challenge_progress: float = Field(default=0.0, description="Progress 0-1")
+
+    # Detection
+    action_detected: bool = Field(default=False, description="Whether the action was detected")
+    action_confidence: float = Field(default=0.0, ge=0, le=1)
+
+    # Session state
+    session_complete: bool = Field(default=False)
+    session_passed: bool = Field(default=False)
+    overall_score: float = Field(default=0.0)
+
+
 class LiveAnalysisResponse(BaseModel):
     """Response for each analyzed frame."""
 
@@ -143,6 +168,7 @@ class LiveAnalysisResponse(BaseModel):
     quality: Optional[QualityResult] = None
     demographics: Optional[DemographicsResult] = None
     liveness: Optional[LivenessResult] = None
+    active_liveness: Optional[ActiveLivenessResult] = None
     enrollment_ready: Optional[EnrollmentReadyResult] = None
     verification: Optional[VerificationResult] = None
     search: Optional[SearchResult] = None

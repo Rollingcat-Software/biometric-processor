@@ -90,8 +90,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                     Oops! Something went wrong
                   </h1>
                   <p className="mt-2 text-red-800 dark:text-red-200">
-                    We're sorry, but something unexpected happened. The error has been logged
-                    and we'll look into it.
+                    We&apos;re sorry, but something unexpected happened. The error has been logged
+                    and we&apos;ll look into it.
                   </p>
                 </div>
               </div>

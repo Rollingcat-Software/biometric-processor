@@ -1,7 +1,17 @@
 """Liveness detection result entity."""
 
-from dataclasses import dataclass
-from typing import Any, Dict
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+
+@dataclass(frozen=True)
+class LivenessCheck:
+    """Individual liveness check result."""
+
+    name: str
+    passed: bool
+    score: float
+    details: str
 
 
 @dataclass(frozen=True)
@@ -16,6 +26,8 @@ class LivenessResult:
         liveness_score: Liveness score (0-100), higher = more likely live
         challenge: Type of challenge used (e.g., "smile", "blink")
         challenge_completed: Whether the challenge was successfully completed
+        checks: List of individual check results
+        spoof_type: Detected spoof type if applicable
 
     Liveness Score Guidelines:
         - 0-50: Likely spoof (reject)
@@ -30,6 +42,8 @@ class LivenessResult:
     liveness_score: float
     challenge: str
     challenge_completed: bool
+    checks: tuple = field(default_factory=tuple)
+    spoof_type: Optional[str] = None
 
     def __post_init__(self) -> None:
         """Validate liveness result data."""
@@ -85,6 +99,11 @@ class LivenessResult:
             "liveness_score": self.liveness_score,
             "challenge": self.challenge,
             "challenge_completed": self.challenge_completed,
+            "checks": [
+                {"name": c.name, "passed": c.passed, "score": c.score, "details": c.details}
+                for c in self.checks
+            ],
+            "spoof_type": self.spoof_type,
             "confidence_level": self.get_confidence_level(),
             "spoof_suspected": self.is_spoof_suspected(),
             "requires_additional_verification": self.requires_additional_verification(),

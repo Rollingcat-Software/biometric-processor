@@ -2,14 +2,12 @@
 
 This page demonstrates anti-spoofing capabilities:
     - Passive liveness (texture analysis)
-    - Active liveness (blink/smile detection)
+    - Active liveness (facial landmark analysis)
     - Combined mode
-    - Challenge-response testing
     - Spoof detection visualization
 
 API Endpoints Used:
-    - POST /api/v1/liveness/detect - Main liveness check
-    - POST /api/v1/liveness/challenge - Active challenge
+    - POST /api/v1/liveness - Main liveness check
 """
 
 from __future__ import annotations
@@ -286,12 +284,8 @@ class LivenessDetectionPage(BasePage):
         settings = get_settings()
 
         result = await api_client.post(
-            f"{settings.api_version}/liveness/detect",
-            data={
-                "challenge": challenge,
-                "threshold": threshold,
-            },
-            files={"image": image_bytes},
+            f"{settings.api_version}/liveness",
+            files={"file": ("image.jpg", image_bytes, "image/jpeg")},
         )
         return result
 
@@ -404,74 +398,68 @@ class LivenessDetectionPage(BasePage):
 
         st.markdown("**Score Components**")
 
-        # Extract scores
-        texture_score = result.get("texture_score", 0)
-        behavioral_score = result.get("behavioral_score", 0)
-        depth_score = result.get("depth_score", 0)
-        reflection_score = result.get("reflection_score", 0)
+        # Extract checks from response
+        checks = result.get("checks", [])
 
-        # Display metrics
-        col1, col2, col3, col4 = st.columns(4)
+        if not checks:
+            st.info("No individual check results available.")
+            return
 
-        with col1:
-            render_metric(
-                label="Texture",
-                value=f"{texture_score:.1f}%",
-                delta="Pass" if texture_score >= 70 else "Fail",
+        # Display metrics in columns (up to 4 per row)
+        num_checks = len(checks)
+        cols = st.columns(min(num_checks, 4))
+
+        for i, check in enumerate(checks[:4]):
+            with cols[i]:
+                render_metric(
+                    label=check.get("name", "Unknown").replace("_", " ").title(),
+                    value=f"{check.get('score', 0):.1f}%",
+                    delta="Pass" if check.get("passed", False) else "Fail",
+                )
+
+        # If more than 4 checks, show another row
+        if num_checks > 4:
+            cols2 = st.columns(min(num_checks - 4, 4))
+            for i, check in enumerate(checks[4:8]):
+                with cols2[i]:
+                    render_metric(
+                        label=check.get("name", "Unknown").replace("_", " ").title(),
+                        value=f"{check.get('score', 0):.1f}%",
+                        delta="Pass" if check.get("passed", False) else "Fail",
+                    )
+
+        # Radar chart with actual checks
+        if checks:
+            categories = [c.get("name", "").replace("_", " ").title() for c in checks]
+            values = [c.get("score", 0) for c in checks]
+
+            fig = go.Figure()
+
+            fig.add_trace(go.Scatterpolar(
+                r=values + [values[0]],  # Close the polygon
+                theta=categories + [categories[0]],
+                fill='toself',
+                name='Liveness Scores',
+                line_color='green' if result.get("is_live") else 'red',
+            ))
+
+            # Add threshold line
+            threshold = st.session_state.get("liveness_threshold", 70.0)
+            fig.add_trace(go.Scatterpolar(
+                r=[threshold] * (len(categories) + 1),
+                theta=categories + [categories[0]],
+                name='Threshold',
+                line_color='blue',
+                line_dash='dash',
+            ))
+
+            fig.update_layout(
+                polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+                showlegend=True,
+                height=350,
             )
 
-        with col2:
-            render_metric(
-                label="Behavioral",
-                value=f"{behavioral_score:.1f}%",
-                delta="Pass" if behavioral_score >= 70 else "Fail",
-            )
-
-        with col3:
-            render_metric(
-                label="Depth",
-                value=f"{depth_score:.1f}%",
-                delta="Pass" if depth_score >= 70 else "Fail",
-            )
-
-        with col4:
-            render_metric(
-                label="Reflection",
-                value=f"{reflection_score:.1f}%",
-                delta="Pass" if reflection_score >= 70 else "Fail",
-            )
-
-        # Radar chart
-        categories = ['Texture', 'Behavioral', 'Depth', 'Reflection']
-        values = [texture_score, behavioral_score, depth_score, reflection_score]
-
-        fig = go.Figure()
-
-        fig.add_trace(go.Scatterpolar(
-            r=values + [values[0]],  # Close the polygon
-            theta=categories + [categories[0]],
-            fill='toself',
-            name='Liveness Scores',
-            line_color='green' if result.get("is_live") else 'red',
-        ))
-
-        # Add threshold line
-        threshold = st.session_state.get("liveness_threshold", 70.0)
-        fig.add_trace(go.Scatterpolar(
-            r=[threshold] * 5,
-            theta=categories + [categories[0]],
-            name='Threshold',
-            line_color='blue',
-            line_dash='dash',
-        ))
-
-        fig.update_layout(
-            polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
-            showlegend=True,
-            height=350,
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True)
 
     def _render_texture_analysis(self, result: dict[str, Any]) -> None:
         """Render texture analysis details.
@@ -483,37 +471,47 @@ class LivenessDetectionPage(BasePage):
             st.info("Enable 'Show Texture Analysis' in sidebar.")
             return
 
-        st.markdown("**Texture Analysis**")
+        st.markdown("**Check Details**")
 
-        texture_data = result.get("texture_analysis", {})
+        checks = result.get("checks", [])
 
-        if not texture_data:
-            st.info("Detailed texture analysis not available in response.")
+        if not checks:
+            st.info("No check details available.")
+            return
 
-            # Show mock data for demonstration
-            st.markdown("*Demonstration data shown below:*")
-            texture_data = {
-                "moire_detected": False,
-                "screen_artifacts": False,
-                "print_artifacts": False,
-                "frequency_analysis": "normal",
-                "color_consistency": 0.92,
-                "edge_sharpness": 0.88,
-            }
+        # Group checks by type
+        texture_checks = [c for c in checks if c.get("name") in ["texture", "color", "frequency", "moire"]]
+        active_checks = [c for c in checks if c.get("name") in ["face_landmarks", "eyes_open", "natural_features"]]
 
         col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown("**Artifact Detection**")
-            st.markdown(f"- Moiré Patterns: {'❌ Detected' if texture_data.get('moire_detected') else '✅ None'}")
-            st.markdown(f"- Screen Artifacts: {'❌ Detected' if texture_data.get('screen_artifacts') else '✅ None'}")
-            st.markdown(f"- Print Artifacts: {'❌ Detected' if texture_data.get('print_artifacts') else '✅ None'}")
+            st.markdown("**Texture Analysis Checks**")
+            if texture_checks:
+                for check in texture_checks:
+                    name = check.get("name", "").replace("_", " ").title()
+                    passed = check.get("passed", False)
+                    score = check.get("score", 0)
+                    details = check.get("details", "")
+                    icon = "✅" if passed else "❌"
+                    st.markdown(f"{icon} **{name}**: {score:.1f}%")
+                    st.caption(f"   {details}")
+            else:
+                st.info("No texture checks in this result.")
 
         with col2:
-            st.markdown("**Quality Metrics**")
-            st.markdown(f"- Frequency Analysis: `{texture_data.get('frequency_analysis', 'N/A')}`")
-            st.markdown(f"- Color Consistency: `{texture_data.get('color_consistency', 0)*100:.1f}%`")
-            st.markdown(f"- Edge Sharpness: `{texture_data.get('edge_sharpness', 0)*100:.1f}%`")
+            st.markdown("**Active Analysis Checks**")
+            if active_checks:
+                for check in active_checks:
+                    name = check.get("name", "").replace("_", " ").title()
+                    passed = check.get("passed", False)
+                    score = check.get("score", 0)
+                    details = check.get("details", "")
+                    icon = "✅" if passed else "❌"
+                    st.markdown(f"{icon} **{name}**: {score:.1f}%")
+                    st.caption(f"   {details}")
+            else:
+                st.info("No active checks in this result.")
 
     def _render_detection_details(self, result: dict[str, Any]) -> None:
         """Render detailed detection information.
@@ -532,34 +530,37 @@ class LivenessDetectionPage(BasePage):
                 "liveness_score": result.get("liveness_score"),
                 "challenge": result.get("challenge"),
                 "challenge_completed": result.get("challenge_completed"),
+                "message": result.get("message"),
             })
 
         with col2:
             st.markdown("**Processing Info**")
+            processing_time = result.get("processing_time_ms")
             st.json({
-                "processing_time_ms": result.get("processing_time_ms"),
-                "model_version": result.get("model_version", "1.0.0"),
-                "confidence": result.get("confidence"),
+                "processing_time_ms": f"{processing_time:.2f}" if processing_time else "N/A",
+                "spoof_type": result.get("spoof_type"),
+                "num_checks": len(result.get("checks", [])),
             })
 
-        # Spoof probability breakdown
-        spoof_probs = result.get("spoof_probabilities", {})
-        if spoof_probs:
-            st.markdown("**Spoof Type Probabilities**")
+        # Spoof type display
+        spoof_type = result.get("spoof_type")
+        if spoof_type and not result.get("is_live"):
+            st.markdown("**Detected Spoof Type**")
 
-            prob_data = list(spoof_probs.items())
-            labels = [p[0].replace("_", " ").title() for p in prob_data]
-            values = [p[1] * 100 for p in prob_data]
+            spoof_descriptions = {
+                "screen_replay": "📱 Screen Replay - Face displayed on a screen/monitor",
+                "printed_photo": "📸 Printed Photo - Physical printout of a face",
+                "digital_manipulation": "🎨 Digital Manipulation - Artificially altered image",
+                "static_image": "🖼️ Static Image - No natural facial features detected",
+                "suspected_spoof": "⚠️ Suspected Spoof - General anomaly detected",
+            }
 
-            fig = px.bar(
-                x=values,
-                y=labels,
-                orientation='h',
-                labels={"x": "Probability (%)", "y": "Spoof Type"},
-                title="Probability of Each Spoof Type",
+            description = spoof_descriptions.get(
+                spoof_type,
+                f"⚠️ {spoof_type.replace('_', ' ').title()}"
             )
-            fig.update_layout(height=300)
-            st.plotly_chart(fig, use_container_width=True)
+
+            st.warning(description)
 
         # Raw response
         with st.expander("View Raw API Response"):

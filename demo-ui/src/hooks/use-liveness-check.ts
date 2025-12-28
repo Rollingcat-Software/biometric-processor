@@ -10,13 +10,23 @@ interface LivenessRequest {
   strict_mode?: boolean;
 }
 
-// Matches actual backend response
+interface LivenessCheck {
+  name: string;
+  passed: boolean;
+  score: number;
+  details: string;
+}
+
+// Matches actual backend response (enhanced)
 interface LivenessResponse {
   is_live: boolean;
   liveness_score: number;
   challenge: string;
   challenge_completed: boolean;
   message: string;
+  checks: LivenessCheck[];
+  spoof_type: string | null;
+  processing_time_ms: number | null;
 }
 
 // Extended response for UI display
@@ -26,12 +36,10 @@ interface LivenessResult {
   challenge: string;
   challenge_completed: boolean;
   message: string;
-  checks: Array<{
-    name: string;
-    passed: boolean;
-    score: number;
-    details?: string;
-  }>;
+  checks: LivenessCheck[];
+  spoof_type: string | null;
+  processing_time_ms: number | null;
+  recommendation?: string;
 }
 
 async function checkLiveness(request: LivenessRequest): Promise<LivenessResult> {
@@ -59,6 +67,23 @@ async function checkLiveness(request: LivenessRequest): Promise<LivenessResult> 
 
     const data: LivenessResponse = await response.json();
 
+    // Generate recommendation based on result
+    let recommendation: string | undefined;
+    if (data.is_live) {
+      recommendation = 'Liveness verified. Face is ready for enrollment or verification.';
+    } else if (data.spoof_type) {
+      const spoofRecommendations: Record<string, string> = {
+        screen_replay: 'Please use a real camera, not a screen recording.',
+        printed_photo: 'Please capture a live face, not a printed photo.',
+        digital_manipulation: 'Image appears manipulated. Please capture a natural photo.',
+        static_image: 'Please ensure natural facial movement during capture.',
+        suspected_spoof: 'Capture appears suspicious. Try better lighting and positioning.',
+      };
+      recommendation = spoofRecommendations[data.spoof_type] || 'Please try again with a clearer capture.';
+    } else {
+      recommendation = 'Liveness could not be verified. Please try again with better lighting.';
+    }
+
     // Transform to UI-friendly format
     return {
       is_live: data.is_live,
@@ -66,14 +91,10 @@ async function checkLiveness(request: LivenessRequest): Promise<LivenessResult> 
       challenge: data.challenge,
       challenge_completed: data.challenge_completed,
       message: data.message,
-      checks: [
-        {
-          name: data.challenge === 'texture' ? 'Texture Analysis' : 'Combined Analysis',
-          passed: data.is_live,
-          score: data.liveness_score,
-          details: data.message,
-        },
-      ],
+      checks: data.checks || [],
+      spoof_type: data.spoof_type,
+      processing_time_ms: data.processing_time_ms,
+      recommendation,
     };
   } catch (error) {
     if (error instanceof ApiClientError) {

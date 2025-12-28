@@ -88,7 +88,7 @@ export default function EnrollmentPage() {
       {
         onSuccess: (result) => {
           toast.success(t('enrollment.success'), {
-            description: `Face enrolled with quality score: ${(result.quality_score * 100).toFixed(1)}%`,
+            description: `Face enrolled with quality score: ${((result.quality_score ?? 0) * 100).toFixed(1)}%`,
           });
         },
         onError: (err) => {
@@ -353,17 +353,17 @@ export default function EnrollmentPage() {
                   </div>
                   <div className="space-y-2 rounded-lg bg-muted p-4">
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">Face ID</span>
-                      <span className="font-mono text-sm">{singleData.face_id}</span>
+                      <span className="text-muted-foreground">Embedding ID</span>
+                      <span className="font-mono text-sm">{singleData.embedding_id}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">Person ID</span>
-                      <span className="font-mono text-sm">{singleData.person_id}</span>
+                      <span className="text-muted-foreground">User ID</span>
+                      <span className="font-mono text-sm">{singleData.user_id}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Quality Score</span>
                       <span className="font-semibold">
-                        {(singleData.quality_score * 100).toFixed(1)}%
+                        {((singleData.quality_score ?? 0) * 100).toFixed(1)}%
                       </span>
                     </div>
                   </div>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { API_CONFIG } from '@/config/api.config';
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const WS_URL = API_CONFIG.WS_URL;
 
 type WebSocketStatus = 'connecting' | 'connected' | 'disconnected' | 'error' | 'reconnecting';
@@ -48,6 +49,18 @@ export function useWebSocket({
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
   const heartbeatTimeoutRef = useRef<NodeJS.Timeout>();
 
+  // Use refs for callbacks to avoid dependency issues
+  const onMessageRef = useRef(onMessage);
+  const onOpenRef = useRef(onOpen);
+  const onCloseRef = useRef(onClose);
+  const onErrorRef = useRef(onError);
+
+  // Keep refs up to date
+  onMessageRef.current = onMessage;
+  onOpenRef.current = onOpen;
+  onCloseRef.current = onClose;
+  onErrorRef.current = onError;
+
   // Start heartbeat
   const startHeartbeat = useCallback(() => {
     if (heartbeatTimeoutRef.current) {
@@ -56,10 +69,11 @@ export function useWebSocket({
 
     heartbeatTimeoutRef.current = setInterval(() => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(heartbeatMessage);
+        // Send heartbeat as JSON to match backend expectations
+        wsRef.current.send(JSON.stringify({ type: 'ping' }));
       }
     }, heartbeatInterval);
-  }, [heartbeatInterval, heartbeatMessage]);
+  }, [heartbeatInterval]);
 
   // Stop heartbeat
   const stopHeartbeat = useCallback(() => {
@@ -83,7 +97,7 @@ export function useWebSocket({
         setReconnectCount(0);
         reconnectCountRef.current = 0;
         startHeartbeat(); // Start heartbeat on connection
-        onOpen?.();
+        onOpenRef.current?.();
       };
 
       wsRef.current.onmessage = (event) => {
@@ -92,13 +106,13 @@ export function useWebSocket({
           // Ignore pong responses
           if (data !== 'pong' && event.data !== 'pong') {
             setLastMessage(data);
-            onMessage?.(data);
+            onMessageRef.current?.(data);
           }
         } catch {
           // Handle non-JSON messages
           if (event.data !== 'pong') {
             setLastMessage(event.data);
-            onMessage?.(event.data);
+            onMessageRef.current?.(event.data);
           }
         }
       };
@@ -106,7 +120,7 @@ export function useWebSocket({
       wsRef.current.onclose = () => {
         setStatus('disconnected');
         stopHeartbeat(); // Stop heartbeat on disconnect
-        onClose?.();
+        onCloseRef.current?.();
 
         if (reconnect && reconnectCountRef.current < reconnectAttempts) {
           reconnectCountRef.current++;
@@ -127,13 +141,13 @@ export function useWebSocket({
       wsRef.current.onerror = (error) => {
         setStatus('error');
         stopHeartbeat();
-        onError?.(error);
+        onErrorRef.current?.(error);
       };
     } catch {
       setStatus('error');
       stopHeartbeat();
     }
-  }, [url, onMessage, onOpen, onClose, onError, reconnect, reconnectInterval, reconnectAttempts, startHeartbeat, stopHeartbeat]);
+  }, [url, reconnect, reconnectInterval, reconnectAttempts, startHeartbeat, stopHeartbeat]);
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {

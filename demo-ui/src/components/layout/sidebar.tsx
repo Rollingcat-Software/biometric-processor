@@ -28,7 +28,6 @@ import {
   Grid2X2,
   CreditCard,
   Database,
-  Play,
   Sparkles,
 } from 'lucide-react';
 import { cn } from '@/lib/utils/cn';

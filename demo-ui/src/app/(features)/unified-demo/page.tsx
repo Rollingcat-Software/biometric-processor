@@ -10,7 +10,6 @@ import {
   Video,
   FileStack,
   Play,
-  Square,
   Settings2,
   Info,
 } from 'lucide-react';
@@ -24,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { ImageUploader } from '@/components/media/image-uploader';
@@ -110,7 +109,7 @@ const ANALYSIS_MODES: {
 type InputMode = 'upload' | 'batch' | 'camera' | 'live';
 
 export default function UnifiedDemoPage() {
-  const { t } = useTranslation();
+  const { t: _t } = useTranslation();
 
   // Analysis configuration
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>('quality');

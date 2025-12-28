@@ -297,7 +297,7 @@ export default function SimilarityPage() {
               )}
               {files.length >= 2 && !allValidated && !isValidating && (
                 <p className="text-xs text-muted-foreground text-center">
-                  Click "Validate Images" to check for face detection issues
+                  Click &quot;Validate Images&quot; to check for face detection issues
                 </p>
               )}
             </CardContent>

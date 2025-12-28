@@ -10,7 +10,7 @@ from typing import List, Tuple
 import cv2
 import numpy as np
 
-from app.domain.entities.liveness_result import LivenessResult
+from app.domain.entities.liveness_result import LivenessCheck, LivenessResult
 from app.domain.interfaces.liveness_detector import ILivenessDetector
 
 logger = logging.getLogger(__name__)
@@ -125,11 +125,21 @@ class ActiveLivenessDetector(ILivenessDetector):
 
         if not results.multi_face_landmarks:
             logger.warning("No face landmarks detected")
+            checks = (
+                LivenessCheck(
+                    name="face_landmarks",
+                    passed=False,
+                    score=0.0,
+                    details="No face landmarks detected",
+                ),
+            )
             return LivenessResult(
                 is_live=False,
                 liveness_score=0.0,
                 challenge=challenge,
                 challenge_completed=False,
+                checks=checks,
+                spoof_type="static_image",
             )
 
         landmarks = results.multi_face_landmarks[0].landmark
@@ -159,6 +169,40 @@ class ActiveLivenessDetector(ILivenessDetector):
 
         is_live = liveness_score >= self._liveness_threshold
 
+        # Create individual check results
+        landmarks_score = 100.0 if results.multi_face_landmarks else 0.0
+        eyes_score = 85.0 if eyes_open else 30.0
+        if 0.2 <= avg_ear <= 0.35:
+            eyes_score = 95.0
+        elif 0.15 <= avg_ear <= 0.4:
+            eyes_score = 75.0
+
+        natural_features_score = 80.0 if 0.2 <= mar <= 0.8 else 50.0
+
+        checks = (
+            LivenessCheck(
+                name="face_landmarks",
+                passed=True,
+                score=landmarks_score,
+                details="Face landmarks detected successfully",
+            ),
+            LivenessCheck(
+                name="eyes_open",
+                passed=eyes_open,
+                score=eyes_score,
+                details=f"Eyes {'open' if eyes_open else 'closed'} (EAR: {avg_ear:.2f})",
+            ),
+            LivenessCheck(
+                name="natural_features",
+                passed=natural_features_score >= 50,
+                score=natural_features_score,
+                details=f"Natural facial proportions {'detected' if natural_features_score >= 50 else 'not detected'}",
+            ),
+        )
+
+        # Determine spoof type
+        spoof_type = None if is_live else "static_image"
+
         logger.info(
             f"Active liveness detection complete: "
             f"score={liveness_score:.2f}, is_live={is_live}, "
@@ -171,6 +215,8 @@ class ActiveLivenessDetector(ILivenessDetector):
             liveness_score=liveness_score,
             challenge=challenge,
             challenge_completed=is_live,
+            checks=checks,
+            spoof_type=spoof_type,
         )
 
     def _calculate_ear(
@@ -261,11 +307,15 @@ class ActiveLivenessDetector(ILivenessDetector):
     ) -> float:
         """Calculate overall liveness score.
 
-        Scoring factors:
-        - Eyes open: 40 points
-        - Natural EAR range (0.2-0.35): 20 points
-        - Smile detected: 30 points
-        - Natural MAR range: 10 points
+        Scoring factors (smile is optional bonus, not required):
+        - Base (landmarks detected): 30 points
+        - Eyes open: 35 points
+        - Natural EAR range (0.2-0.35): 15 points
+        - Natural facial proportions: 20 points
+        - Smile bonus (optional): 5 points
+
+        Total without smile: up to 100 points
+        This ensures neutral expressions can pass.
 
         Args:
             ear: Eye Aspect Ratio
@@ -278,23 +328,28 @@ class ActiveLivenessDetector(ILivenessDetector):
         """
         score = 0.0
 
-        # Eyes open score (40 points max)
+        # Base score for having detectable landmarks (30 points)
+        score += 30.0
+
+        # Eyes open score (35 points max)
         if eyes_open:
-            score += 40.0
+            score += 35.0
             # Bonus for natural EAR range (typical: 0.2-0.35)
             if 0.2 <= ear <= 0.35:
-                score += 20.0
+                score += 15.0
             elif 0.15 <= ear <= 0.4:
-                score += 10.0
+                score += 7.5
 
-        # Smile score (30 points max)
-        if is_smiling:
-            score += 30.0
-
-        # Natural facial proportions (10 points)
-        # MAR typically ranges 0.3-0.8 for natural expressions
-        if 0.3 <= mar <= 0.8:
+        # Natural facial proportions (20 points)
+        # MAR typically ranges 0.2-0.8 for natural expressions
+        if 0.2 <= mar <= 0.8:
+            score += 20.0
+        elif 0.1 <= mar <= 1.0:
             score += 10.0
+
+        # Smile bonus (optional, 5 points) - NOT required for passing
+        if is_smiling:
+            score += 5.0
 
         return min(100.0, score)
 

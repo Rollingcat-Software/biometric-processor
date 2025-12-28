@@ -16,6 +16,7 @@ export interface HealthCheckResponse {
   version: string;
   timestamp: string;
   services?: Record<string, ServiceHealth>;
+  latency?: number;
 }
 
 export interface ServiceHealth {
@@ -386,4 +387,105 @@ export interface ErrorResponse {
   details?: Record<string, unknown>;
   request_id?: string;
   field_errors?: Record<string, string[]>;
+}
+
+// ============================================================================
+// Liveness Puzzle Types
+// ============================================================================
+
+export type PuzzleDifficulty = 'easy' | 'standard' | 'hard';
+
+export type ChallengeType =
+  | 'blink'
+  | 'smile'
+  | 'turn_left'
+  | 'turn_right'
+  | 'nod'
+  | 'open_mouth'
+  | 'raise_eyebrows';
+
+export interface PuzzleStep {
+  action: ChallengeType;
+  duration_seconds: number;
+  order: number;
+}
+
+export interface PuzzleThresholds {
+  ear_threshold: number;
+  mar_threshold: number;
+  head_turn_threshold: number;
+  mouth_open_threshold: number;
+  eyebrow_threshold: number;
+}
+
+export interface GeneratePuzzleRequest {
+  difficulty?: PuzzleDifficulty;
+  min_steps?: number;
+  max_steps?: number;
+  timeout_seconds?: number;
+  tenant_id?: string;
+  user_id?: string;
+}
+
+export interface GeneratePuzzleResponse {
+  puzzle_id: string;
+  steps: PuzzleStep[];
+  timeout_seconds: number;
+  expires_at: string;
+  thresholds: PuzzleThresholds;
+}
+
+export interface StepEvidence {
+  action: string;
+  start_timestamp: number;
+  end_timestamp: number;
+  confidence: number;
+  metrics: Record<string, number>;
+}
+
+export interface ClientMeta {
+  browser?: string;
+  device?: string;
+  fps_estimate?: number;
+  camera_resolution?: string;
+}
+
+export interface VerifyPuzzleRequest {
+  puzzle_id: string;
+  results: StepEvidence[];
+  final_frame?: string;
+  client_meta?: ClientMeta;
+}
+
+export interface VerifyPuzzleResponse {
+  success: boolean;
+  liveness_confirmed: boolean;
+  steps_completed: number;
+  total_steps: number;
+  completion_time_seconds: number;
+  reason_codes: string[];
+  overall_score: number;
+  message: string;
+}
+
+// Puzzle state machine types
+export type PuzzleState =
+  | 'idle'
+  | 'loading'
+  | 'ready'
+  | 'running'
+  | 'step_complete'
+  | 'verifying'
+  | 'success'
+  | 'failed'
+  | 'timeout'
+  | 'error';
+
+export interface PuzzleSessionState {
+  state: PuzzleState;
+  puzzle: GeneratePuzzleResponse | null;
+  currentStepIndex: number;
+  stepResults: StepEvidence[];
+  error: string | null;
+  verificationResult: VerifyPuzzleResponse | null;
 }

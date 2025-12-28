@@ -8,7 +8,7 @@ import logging
 
 import numpy as np
 
-from app.domain.entities.liveness_result import LivenessResult
+from app.domain.entities.liveness_result import LivenessCheck, LivenessResult
 from app.domain.interfaces.liveness_detector import ILivenessDetector
 from app.infrastructure.ml.liveness.active_liveness_detector import ActiveLivenessDetector
 from app.infrastructure.ml.liveness.texture_liveness_detector import TextureLivenessDetector
@@ -116,6 +116,10 @@ class CombinedLivenessDetector(ILivenessDetector):
                 active_result.challenge_completed
             )
             used_challenge = challenge
+
+            # Merge checks from both detectors
+            all_checks = tuple(texture_result.checks) + tuple(active_result.checks)
+
             logger.info(
                 f"Combined liveness detection complete: "
                 f"score={combined_score:.2f}, "
@@ -127,6 +131,7 @@ class CombinedLivenessDetector(ILivenessDetector):
             combined_score = texture_result.liveness_score
             challenge_completed = texture_result.challenge_completed
             used_challenge = "texture"
+            all_checks = tuple(texture_result.checks)
             logger.info(
                 f"Texture-only liveness detection complete: "
                 f"score={combined_score:.2f}"
@@ -135,11 +140,24 @@ class CombinedLivenessDetector(ILivenessDetector):
         # Determine liveness
         is_live = combined_score >= self._liveness_threshold
 
+        # Determine spoof type from sub-detectors
+        spoof_type = None
+        if not is_live:
+            # Prefer texture's spoof type as it's more specific
+            if texture_result.spoof_type:
+                spoof_type = texture_result.spoof_type
+            elif active_result and active_result.spoof_type:
+                spoof_type = active_result.spoof_type
+            else:
+                spoof_type = "suspected_spoof"
+
         return LivenessResult(
             is_live=is_live,
             liveness_score=combined_score,
             challenge=used_challenge,
             challenge_completed=challenge_completed,
+            checks=all_checks,
+            spoof_type=spoof_type,
         )
 
     def get_challenge_type(self) -> str:

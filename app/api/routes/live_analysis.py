@@ -30,6 +30,7 @@ from app.api.schemas.live_analysis import (
     QualityResult,
     DemographicsResult,
     LivenessResult,
+    ActiveLivenessResult,
     EnrollmentReadyResult,
     VerificationResult,
     SearchResult,
@@ -37,6 +38,8 @@ from app.api.schemas.live_analysis import (
     SessionStats,
 )
 from app.application.use_cases.live_camera_analysis import LiveCameraAnalysisUseCase
+from app.application.services.active_liveness_manager import ActiveLivenessManager
+from app.api.schemas.active_liveness import ActiveLivenessConfig
 from app.core.container import (
     get_face_detector,
     get_quality_assessor,
@@ -93,6 +96,9 @@ class LiveAnalysisSession:
         # Use case
         self.use_case: Optional[LiveCameraAnalysisUseCase] = None
 
+        # Active liveness manager
+        self.active_liveness_manager: Optional[ActiveLivenessManager] = None
+
     async def initialize(self, config: LiveAnalysisRequest):
         """Initialize session with configuration."""
         self.mode = config.mode
@@ -110,6 +116,17 @@ class LiveAnalysisSession:
             embedding_repository=self.embedding_repository,
             similarity_calculator=self.similarity_calculator,
         )
+
+        # Initialize active liveness manager if mode is active_liveness
+        if self.mode == AnalysisMode.ACTIVE_LIVENESS:
+            self.active_liveness_manager = ActiveLivenessManager()
+            active_config = ActiveLivenessConfig(
+                num_challenges=3,
+                challenge_timeout=6.0,
+                randomize=True,
+            )
+            self.active_liveness_manager.create_session(active_config)
+            logger.info("Active liveness session created with 3 challenges")
 
         logger.info(
             f"Live analysis session initialized: mode={self.mode}, "
@@ -129,15 +146,16 @@ class LiveAnalysisSession:
         self.frame_number += 1
         self.stats.frames_received += 1
 
-        # Check if we should skip this frame
-        if self.frame_skip > 0 and self.frame_number % (self.frame_skip + 1) != 0:
-            self.stats.frames_skipped += 1
-            return LiveAnalysisResponse(
-                frame_number=self.frame_number,
-                timestamp=start_time,
-                processing_time_ms=0,
-                skipped=True,
-            )
+        # Check if we should skip this frame (not for active liveness)
+        if self.mode != AnalysisMode.ACTIVE_LIVENESS:
+            if self.frame_skip > 0 and self.frame_number % (self.frame_skip + 1) != 0:
+                self.stats.frames_skipped += 1
+                return LiveAnalysisResponse(
+                    frame_number=self.frame_number,
+                    timestamp=start_time,
+                    processing_time_ms=0,
+                    skipped=True,
+                )
 
         try:
             # Decode base64 image
@@ -148,6 +166,10 @@ class LiveAnalysisSession:
             # Convert RGB to BGR for OpenCV
             if len(image_np.shape) == 3 and image_np.shape[2] == 3:
                 image_np = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+
+            # Handle active liveness mode separately
+            if self.mode == AnalysisMode.ACTIVE_LIVENESS and self.active_liveness_manager:
+                return await self._process_active_liveness(image_np, start_time)
 
             # Process based on mode
             result = await self.use_case.analyze_frame(
@@ -183,6 +205,65 @@ class LiveAnalysisSession:
 
         except Exception as e:
             logger.error(f"Error processing frame {self.frame_number}: {str(e)}")
+            return LiveAnalysisResponse(
+                frame_number=self.frame_number,
+                timestamp=start_time,
+                processing_time_ms=(time.time() - start_time) * 1000,
+                error=str(e),
+            )
+
+    async def _process_active_liveness(
+        self,
+        image_np: np.ndarray,
+        start_time: float,
+    ) -> LiveAnalysisResponse:
+        """Process frame for active liveness challenges.
+
+        Args:
+            image_np: Image as numpy array (BGR format)
+            start_time: Processing start time
+
+        Returns:
+            LiveAnalysisResponse with active liveness results
+        """
+        logger.info(f"Processing active liveness frame {self.frame_number}")
+        try:
+            # Process the frame through active liveness manager
+            active_result = await self.active_liveness_manager.process_frame(image_np)
+            logger.info(f"Active liveness result: instruction={active_result.instruction}, challenge={active_result.current_challenge}")
+
+            processing_time = (time.time() - start_time) * 1000
+            self.processing_times.append(processing_time)
+            self.stats.frames_processed += 1
+            self.stats.average_processing_time_ms = sum(self.processing_times) / len(
+                self.processing_times
+            )
+
+            # Convert to ActiveLivenessResult
+            active_liveness_result = ActiveLivenessResult(
+                current_challenge=active_result.current_challenge.type.value if active_result.current_challenge else None,
+                instruction=active_result.instruction,
+                feedback=active_result.feedback,
+                time_remaining=active_result.time_remaining,
+                challenges_completed=active_result.challenges_completed,
+                challenges_total=active_result.challenges_total,
+                challenge_progress=active_result.challenge_progress,
+                action_detected=active_result.detection.detected if active_result.detection else False,
+                action_confidence=active_result.detection.confidence if active_result.detection else 0.0,
+                session_complete=active_result.session_complete,
+                session_passed=active_result.session_passed,
+                overall_score=active_result.overall_score,
+            )
+
+            return LiveAnalysisResponse(
+                frame_number=self.frame_number,
+                timestamp=start_time,
+                processing_time_ms=processing_time,
+                active_liveness=active_liveness_result,
+            )
+
+        except Exception as e:
+            logger.error(f"Error processing active liveness frame: {str(e)}", exc_info=True)
             return LiveAnalysisResponse(
                 frame_number=self.frame_number,
                 timestamp=start_time,
@@ -276,12 +357,14 @@ async def live_analysis_websocket(
 
             if msg_type == "config":
                 # Initialize session with config
+                logger.info(f"Received config: {msg_data}")
                 config = LiveAnalysisRequest(**msg_data)
+                logger.info(f"Parsed config mode: {config.mode}")
                 await session.initialize(config)
 
                 await websocket.send_json({
                     "type": "config_ack",
-                    "data": {"status": "configured", "mode": config.mode}
+                    "data": {"status": "configured", "mode": config.mode.value}
                 })
 
             elif msg_type == "frame":

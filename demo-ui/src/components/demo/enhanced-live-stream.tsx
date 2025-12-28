@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Video, Square, Settings2, Eye, EyeOff, Activity } from 'lucide-react';
+import { Video, Square, Settings2, Activity } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
@@ -39,7 +39,7 @@ interface StreamStats {
   startTime: number;
 }
 
-export function EnhancedLiveStream({ mode, onResult, userId, tenantId }: EnhancedLiveStreamProps) {
+export function EnhancedLiveStream({ mode, onResult, userId: _userId, tenantId: _tenantId }: EnhancedLiveStreamProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -317,7 +317,7 @@ export function EnhancedLiveStream({ mode, onResult, userId, tenantId }: Enhance
       let metricsY = 30;
 
       // Overall quality
-      drawMetricBar(ctx, 'Quality', quality.score, metricsX, metricsY, width - 20);
+      drawMetricBar(ctx, 'Quality', quality.overall_score, metricsX, metricsY, width - 20);
       metricsY += 35;
 
       // Individual metrics

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useRef } from 'react';
 import { useWebSocket } from './use-websocket';
 import { API_CONFIG } from '@/config/api.config';
 
@@ -7,6 +7,7 @@ export type AnalysisMode =
   | 'quality'
   | 'demographics'
   | 'liveness'
+  | 'active_liveness'
   | 'enrollment_ready'
   | 'verification'
   | 'search'
@@ -28,6 +29,14 @@ export interface FaceDetectionData {
   height: number;
   confidence: number;
   landmarks?: Record<string, [number, number]>;
+  detected?: boolean;
+  // Convenience alias for components that expect bbox
+  bbox?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
 }
 
 export interface QualityData {
@@ -37,6 +46,8 @@ export interface QualityData {
   face_size: number;
   centering: number;
   recommendation?: string;
+  // Optional nested metrics for components expecting nested structure
+  metrics?: Record<string, number>;
 }
 
 export interface DemographicsData {
@@ -49,7 +60,31 @@ export interface DemographicsData {
 export interface LivenessData {
   is_live: boolean;
   confidence: number;
+  method?: string;
+  checks?: Record<string, boolean>;
   recommendation?: string;
+}
+
+export interface ActiveLivenessData {
+  // Current challenge
+  current_challenge: string | null;
+  instruction: string;
+  feedback: string;
+  time_remaining: number;
+
+  // Progress
+  challenges_completed: number;
+  challenges_total: number;
+  challenge_progress: number;
+
+  // Detection
+  action_detected: boolean;
+  action_confidence: number;
+
+  // Session state
+  session_complete: boolean;
+  session_passed: boolean;
+  overall_score: number;
 }
 
 export interface EnrollmentReadyData {
@@ -89,6 +124,7 @@ export interface LiveAnalysisResult {
   quality?: QualityData;
   demographics?: DemographicsData;
   liveness?: LivenessData;
+  active_liveness?: ActiveLivenessData;
   enrollment_ready?: EnrollmentReadyData;
   verification?: VerificationData;
   search?: SearchData;
@@ -99,11 +135,18 @@ export interface LiveAnalysisResult {
 }
 
 export interface SessionStats {
-  total_frames: number;
-  processed_frames: number;
-  skipped_frames: number;
+  // Backend field names
+  frames_received: number;
+  frames_processed: number;
+  frames_skipped: number;
   average_processing_time_ms: number;
-  average_fps: number;
+  best_quality_score: number;
+  enrollment_ready_count: number;
+  // Computed for UI
+  total_frames?: number;
+  processed_frames?: number;
+  skipped_frames?: number;
+  average_fps?: number;
 }
 
 interface LiveAnalysisMessage {
@@ -122,21 +165,42 @@ export function useLiveCameraAnalysis() {
   const [error, setError] = useState<string | null>(null);
   const [isConfigured, setIsConfigured] = useState(false);
 
+  // Use refs to avoid dependency cycles that cause infinite re-renders
+  const configRef = useRef(config);
+  configRef.current = config;
+  const isConfiguredRef = useRef(isConfigured);
+  isConfiguredRef.current = isConfigured;
+
   const handleMessage = useCallback((message: LiveAnalysisMessage) => {
-    if (!message || !message.type) return;
+    if (!message || !message.type) {
+      console.warn('[LiveAnalysis] Invalid message received:', message);
+      return;
+    }
+
+    // Debug logging for development
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[LiveAnalysis] Message:', message.type, message.data);
+    }
 
     switch (message.type) {
       case 'result':
-        setCurrentResult(message.data as LiveAnalysisResult);
+        const result = message.data as LiveAnalysisResult;
+        // Debug: log active liveness data
+        if (result.active_liveness) {
+          console.log('[LiveAnalysis] Active liveness:', result.active_liveness);
+        }
+        setCurrentResult(result);
         setError(null);
         break;
       case 'error':
+        console.error('[LiveAnalysis] Error:', message.data);
         setError((message.data as { error: string }).error || 'Unknown error');
         break;
       case 'stats':
         setSessionStats(message.data as SessionStats);
         break;
       case 'config_ack':
+        console.log('[LiveAnalysis] Config acknowledged');
         setIsConfigured(true);
         setError(null);
         break;
@@ -151,54 +215,58 @@ export function useLiveCameraAnalysis() {
     reconnectAttempts: 3,
   });
 
+  // Destructure to get stable references (these are memoized in useWebSocket)
+  const { isConnected, send: wsSend, connect: wsConnect, disconnect: wsDisconnect } = ws;
+
+  // updateConfig uses refs to avoid depending on config state
   const updateConfig = useCallback((newConfig: Partial<LiveAnalysisConfig>) => {
-    const updatedConfig = { ...config, ...newConfig };
+    const updatedConfig = { ...configRef.current, ...newConfig };
     setConfig(updatedConfig);
 
-    if (ws.isConnected) {
-      ws.send({
+    if (isConnected) {
+      wsSend({
         type: 'config',
         data: updatedConfig,
       });
     }
-  }, [config, ws]);
+  }, [isConnected, wsSend]);
 
   const sendFrame = useCallback((imageData: string) => {
-    if (!ws.isConnected) {
+    if (!isConnected) {
       setError('WebSocket not connected');
       return;
     }
 
     // Send config first if not configured
-    if (!isConfigured) {
-      ws.send({
+    if (!isConfiguredRef.current) {
+      wsSend({
         type: 'config',
-        data: config,
+        data: configRef.current,
       });
     }
 
     // Send frame
-    ws.send({
+    wsSend({
       type: 'frame',
       data: imageData,
     });
-  }, [ws, config, isConfigured]);
+  }, [isConnected, wsSend]);
 
   const connect = useCallback(() => {
     setIsConfigured(false);
     setError(null);
     setCurrentResult(null);
     setSessionStats(null);
-    ws.connect();
-  }, [ws]);
+    wsConnect();
+  }, [wsConnect]);
 
   const disconnect = useCallback(() => {
-    ws.disconnect();
+    wsDisconnect();
     setIsConfigured(false);
     setError(null);
     setCurrentResult(null);
     setSessionStats(null);
-  }, [ws]);
+  }, [wsDisconnect]);
 
   return {
     // Connection
