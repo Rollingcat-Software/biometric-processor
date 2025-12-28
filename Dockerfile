@@ -23,8 +23,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy requirements
 COPY requirements.txt .
 
-# Create constraint file to prevent numpy 2.x installation
-RUN echo "numpy<2.0" > /tmp/constraints.txt
+# Create constraint file to prevent incompatible package versions
+RUN echo "numpy<2.0" > /tmp/constraints.txt && \
+    echo "keras<3.0" >> /tmp/constraints.txt
 
 # Install dependencies with constraints to prevent numpy upgrade:
 # 1. Pin numpy to compatible version (TensorFlow 2.15 requires numpy<2.0)
