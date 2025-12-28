@@ -1,0 +1,60 @@
+# Cloud Monitoring Alert Policy for Biometric API
+# Deploy with: gcloud alpha monitoring policies create --policy-from-file=infra/monitoring-alert-policy.yaml --project=fivucsas
+
+displayName: "Biometric API Health Check Alert"
+documentation:
+  content: |
+    The Biometric API health check is failing.
+
+    Service URL: https://biometric-api-902542798396.europe-west1.run.app
+
+    Troubleshooting steps:
+    1. Check Cloud Run logs: gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=biometric-api" --project=fivucsas --limit=50
+    2. Check service status: gcloud run services describe biometric-api --project=fivucsas --region=europe-west1
+    3. Check recent deployments for issues
+
+    Common causes:
+    - Container startup failure (check logs for import errors)
+    - Database connection issues
+    - Memory/CPU limits exceeded
+  mimeType: text/markdown
+
+conditions:
+  - displayName: "Cloud Run Service Not Responding"
+    conditionThreshold:
+      filter: >-
+        resource.type="cloud_run_revision"
+        AND resource.labels.service_name="biometric-api"
+        AND metric.type="run.googleapis.com/request_count"
+      aggregations:
+        - alignmentPeriod: "300s"
+          perSeriesAligner: ALIGN_RATE
+          crossSeriesReducer: REDUCE_SUM
+      comparison: COMPARISON_LT
+      thresholdValue: 0.001
+      duration: "300s"
+      trigger:
+        count: 1
+
+  - displayName: "High Error Rate (>10%)"
+    conditionThreshold:
+      filter: >-
+        resource.type="cloud_run_revision"
+        AND resource.labels.service_name="biometric-api"
+        AND metric.type="run.googleapis.com/request_count"
+        AND metric.labels.response_code_class="5xx"
+      aggregations:
+        - alignmentPeriod: "300s"
+          perSeriesAligner: ALIGN_RATE
+          crossSeriesReducer: REDUCE_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 0.1
+      duration: "300s"
+      trigger:
+        count: 1
+
+combiner: OR
+enabled: true
+
+alertStrategy:
+  autoClose: "604800s"  # 7 days

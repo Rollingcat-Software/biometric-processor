@@ -1,0 +1,9 @@
+FROM python:3.11-slim
+
+RUN pip install --no-cache-dir psycopg2-binary
+
+COPY scripts/db-init-job.py /app/init.py
+
+WORKDIR /app
+
+CMD ["python", "init.py"]
