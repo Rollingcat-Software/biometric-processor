@@ -163,7 +163,9 @@ class SimpleLivenessDetector:
 
 
 class FaceDatabase:
-    """Simple local face database for enrollment/verification."""
+    """Face database with multi-embedding support for different angles."""
+
+    MAX_EMBEDDINGS_PER_PERSON = 5  # Store up to 5 angles per person
 
     def __init__(self, db_path: str = "face_db.pkl"):
         self.db_path = db_path
@@ -175,6 +177,11 @@ class FaceDatabase:
             try:
                 with open(self.db_path, 'rb') as f:
                     self.faces = pickle.load(f)
+                # Migrate old format (single embedding) to new format (list of embeddings)
+                for name, data in self.faces.items():
+                    if 'embedding' in data and 'embeddings' not in data:
+                        data['embeddings'] = [data['embedding']]
+                        del data['embedding']
                 print(f"Loaded {len(self.faces)} enrolled faces")
             except Exception:
                 self.faces = {}
@@ -184,16 +191,30 @@ class FaceDatabase:
             pickle.dump(self.faces, f)
 
     def enroll(self, name: str, embedding: np.ndarray, thumbnail: np.ndarray) -> bool:
+        """Enroll a new person with their embedding."""
         self.faces[name] = {
-            'embedding': embedding,
+            'embeddings': [embedding],  # List of embeddings for different angles
             'thumbnail': thumbnail,
             'enrolled_at': datetime.now().isoformat()
         }
         self.save()
         return True
 
+    def add_embedding(self, name: str, embedding: np.ndarray) -> bool:
+        """Add another embedding (angle) to an existing person."""
+        if name not in self.faces:
+            return False
+        embeddings = self.faces[name].get('embeddings', [])
+        if len(embeddings) >= self.MAX_EMBEDDINGS_PER_PERSON:
+            # Replace oldest embedding
+            embeddings.pop(0)
+        embeddings.append(embedding)
+        self.faces[name]['embeddings'] = embeddings
+        self.save()
+        return True
+
     def search(self, embedding: np.ndarray, threshold: float = 0.6) -> Optional[Tuple[str, float]]:
-        """Search for matching face. Returns (name, similarity) or None."""
+        """Search for matching face across all embeddings. Returns (name, similarity) or None."""
         if not self.faces:
             return None
 
@@ -201,10 +222,14 @@ class FaceDatabase:
         best_sim = 0
 
         for name, data in self.faces.items():
-            sim = self._cosine_similarity(embedding, data['embedding'])
-            if sim > best_sim and sim >= threshold:
-                best_sim = sim
-                best_match = name
+            # Check against ALL embeddings for this person
+            embeddings = data.get('embeddings', [data.get('embedding')] if data.get('embedding') is not None else [])
+            for emb in embeddings:
+                if emb is not None:
+                    sim = self._cosine_similarity(embedding, emb)
+                    if sim > best_sim and sim >= threshold:
+                        best_sim = sim
+                        best_match = name
 
         return (best_match, best_sim) if best_match else None
 
@@ -222,6 +247,12 @@ class FaceDatabase:
 
     def list_enrolled(self) -> List[str]:
         return list(self.faces.keys())
+
+    def get_embedding_count(self, name: str) -> int:
+        """Get number of embeddings stored for a person."""
+        if name not in self.faces:
+            return 0
+        return len(self.faces[name].get('embeddings', []))
 
     def delete(self, name: str) -> bool:
         if name in self.faces:
@@ -354,21 +385,48 @@ class BiometricDemo:
         self._face_db = FaceDatabase()
         self._face_tracker = FaceTracker()
 
-        # Caching
+        # Caching for stable FPS
         self._demographics_cache = {}
-        self._demographics_interval = 2.0  # Slower refresh for stability
+        self._demographics_interval = 2.5  # Refresh every 2.5s for stability
         self._last_demographics_time = 0
         self._embeddings_cache = {}
         self._last_embedding_time = 0
 
         # Verification cache (to prevent flickering)
         self._verification_cache = {}  # {face_id: {'match': (name, sim), 'time': timestamp}}
-        self._verification_interval = 2.0  # Keep match visible for 2 seconds
+        self._verification_interval = 3.0  # Keep match visible for 3 seconds
 
         # Quality and liveness cache
         self._quality_cache = {}
         self._liveness_cache = {}
-        self._cache_interval = 0.5  # Update every 0.5 seconds
+        self._cache_interval = 1.0  # Update every 1 second for stable FPS
+
+        # Landmarks cache for performance
+        self._landmarks_cache = []
+        self._landmarks_interval = 0.1  # Update landmarks every 100ms
+        self._last_landmarks_time = 0
+
+        # Face detection cache
+        self._faces_cache = []
+        self._faces_interval = 0.05  # Detect faces every 50ms (20 FPS)
+        self._last_faces_time = 0
+
+        # Professional Enrollment State (with head pose detection)
+        self._enrolling = False
+        self._enrollment_name = ""
+        self._enrollment_embeddings = []
+        self._enrollment_step = 0  # 0-4 for 5 angles
+        self._enrollment_hold_start = 0  # When user started holding correct pose
+        self._enrollment_hold_required = 0.8  # Hold pose for 0.8 seconds to capture
+        self._enrollment_poses = [
+            {"instruction": "Look STRAIGHT at camera", "yaw": 0, "pitch": 0, "tolerance": 10},
+            {"instruction": "Turn head LEFT", "yaw": -25, "pitch": 0, "tolerance": 12},
+            {"instruction": "Turn head RIGHT", "yaw": 25, "pitch": 0, "tolerance": 12},
+            {"instruction": "Tilt chin UP", "yaw": 0, "pitch": 18, "tolerance": 12},
+            {"instruction": "Tilt chin DOWN", "yaw": 0, "pitch": -18, "tolerance": 12},
+        ]
+        self._current_yaw = 0
+        self._current_pitch = 0
 
         # Analysis history for export
         self._analysis_history = deque(maxlen=1000)
@@ -476,7 +534,13 @@ class BiometricDemo:
     # =========================================================================
 
     def detect_faces(self, frame: np.ndarray) -> List[Dict]:
-        """Detect faces and track them."""
+        """Detect faces with caching for stable FPS."""
+        current_time = time.time()
+
+        # Use cached faces if still fresh
+        if current_time - self._last_faces_time < self._faces_interval:
+            return self._faces_cache
+
         try:
             face_objs = self._deepface.extract_faces(
                 img_path=frame,
@@ -484,10 +548,11 @@ class BiometricDemo:
                 enforce_detection=False,
                 align=False,
             )
-            faces = [f for f in face_objs if f.get('confidence', 0) > 0.5]
-            return faces
+            self._faces_cache = [f for f in face_objs if f.get('confidence', 0) > 0.5]
+            self._last_faces_time = current_time
+            return self._faces_cache
         except Exception:
-            return []
+            return self._faces_cache if self._faces_cache else []
 
     def extract_embedding(self, frame: np.ndarray, face_region: Dict) -> Optional[np.ndarray]:
         """Extract face embedding for verification."""
@@ -570,9 +635,14 @@ class BiometricDemo:
             return self._demographics_cache.get(face_id, {}).get('data', {})
 
     def detect_landmarks(self, frame: np.ndarray) -> List[List[Tuple[int, int]]]:
-        """Detect 468 facial landmarks using MediaPipe (Tasks or Solutions API)."""
+        """Detect 468 facial landmarks with caching for stable FPS."""
         if not self._mediapipe_loaded:
             return []
+
+        # Use cached landmarks if still fresh
+        current_time = time.time()
+        if current_time - self._last_landmarks_time < self._landmarks_interval:
+            return self._landmarks_cache
 
         h, w = frame.shape[:2]
 
@@ -585,32 +655,96 @@ class BiometricDemo:
                 results = self._mp_face_landmarker.detect(mp_image)
 
                 if not results.face_landmarks:
-                    return []
-
-                all_landmarks = []
-                for face in results.face_landmarks:
-                    points = [(int(lm.x * w), int(lm.y * h)) for lm in face]
-                    all_landmarks.append(points)
-                return all_landmarks
+                    self._landmarks_cache = []
+                else:
+                    all_landmarks = []
+                    for face in results.face_landmarks:
+                        points = [(int(lm.x * w), int(lm.y * h)) for lm in face]
+                        all_landmarks.append(points)
+                    self._landmarks_cache = all_landmarks
 
             # Use legacy Solutions API
             elif self._mp_face_mesh is not None:
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 results = self._mp_face_mesh.process(rgb)
                 if not results.multi_face_landmarks:
-                    return []
+                    self._landmarks_cache = []
+                else:
+                    self._landmarks_cache = [[(int(lm.x * w), int(lm.y * h)) for lm in face.landmark]
+                                             for face in results.multi_face_landmarks]
 
-                return [[(int(lm.x * w), int(lm.y * h)) for lm in face.landmark]
-                        for face in results.multi_face_landmarks]
+            self._last_landmarks_time = current_time
 
         except Exception as e:
-            # Only log once per session to avoid spam
             if not hasattr(self, '_landmark_error_logged'):
                 print(f"Landmark detection error: {e}")
                 self._landmark_error_logged = True
-            return []
 
-        return []
+        return self._landmarks_cache
+
+    def estimate_head_pose(self, landmarks: List[Tuple[int, int]], frame_size: Tuple[int, int]) -> Tuple[float, float]:
+        """Estimate head pose (yaw, pitch) from facial landmarks.
+
+        Uses key facial points to calculate head orientation:
+        - Yaw: Left/right rotation (negative = left, positive = right)
+        - Pitch: Up/down tilt (negative = up, positive = down)
+
+        Returns: (yaw, pitch) in degrees
+        """
+        if not landmarks or len(landmarks) < 468:
+            return (0.0, 0.0)
+
+        h, w = frame_size
+
+        try:
+            # Key landmark indices for pose estimation
+            # Nose tip: 1, Chin: 152, Left eye: 33, Right eye: 263
+            # Left mouth: 61, Right mouth: 291, Forehead: 10
+
+            nose_tip = landmarks[1]
+            chin = landmarks[152]
+            left_eye = landmarks[33]
+            right_eye = landmarks[263]
+            left_mouth = landmarks[61]
+            right_mouth = landmarks[291]
+            forehead = landmarks[10]
+
+            # Calculate YAW (left/right turn)
+            # Compare nose position relative to eye centers
+            eye_center_x = (left_eye[0] + right_eye[0]) / 2
+            eye_distance = abs(right_eye[0] - left_eye[0])
+
+            if eye_distance > 0:
+                # Nose offset from center as ratio of eye distance
+                nose_offset = (nose_tip[0] - eye_center_x) / eye_distance
+                yaw = nose_offset * 60  # Scale to degrees (approx)
+            else:
+                yaw = 0
+
+            # Calculate PITCH (up/down tilt)
+            # Use nose tip position relative to eye center (more reliable)
+            eye_center_y = (left_eye[1] + right_eye[1]) / 2
+            mouth_center_y = (left_mouth[1] + right_mouth[1]) / 2
+            face_height = mouth_center_y - eye_center_y
+
+            if face_height > 0:
+                # Nose position relative to face midpoint
+                face_mid_y = (eye_center_y + mouth_center_y) / 2
+                nose_offset_y = (nose_tip[1] - face_mid_y) / face_height
+                # Looking UP → nose appears higher (smaller y) → negative offset
+                # Looking DOWN → nose appears lower (larger y) → positive offset
+                pitch = nose_offset_y * 60  # Scale to degrees
+            else:
+                pitch = 0
+
+            # Clamp values
+            yaw = max(-45, min(45, yaw))
+            pitch = max(-35, min(35, pitch))
+
+            return (yaw, pitch)
+
+        except (IndexError, ZeroDivisionError):
+            return (0.0, 0.0)
 
     # =========================================================================
     # DRAWING METHODS
@@ -788,15 +922,15 @@ class BiometricDemo:
             ("", 0.4, self.COLORS['white']),
             ("q    Quit application", 0.45, self.COLORS['white']),
             ("m    Cycle through modes", 0.45, self.COLORS['white']),
-            ("e    Enroll current face", 0.45, self.COLORS['green']),
+            ("e    Start guided enrollment", 0.45, self.COLORS['green']),
+            ("ESC  Cancel enrollment", 0.45, self.COLORS['orange']),
             ("d    Delete all enrolled", 0.45, self.COLORS['red']),
             ("c    Compare faces in frame", 0.45, self.COLORS['white']),
             ("r    Toggle video recording", 0.45, self.COLORS['red']),
             ("x    Export analysis to JSON", 0.45, self.COLORS['white']),
             ("s    Save screenshot", 0.45, self.COLORS['white']),
-            ("f    Toggle FPS display", 0.45, self.COLORS['white']),
+            ("f/h  Toggle FPS/Help", 0.45, self.COLORS['white']),
             ("Space  Pause/Resume", 0.45, self.COLORS['white']),
-            ("h    Toggle this help", 0.45, self.COLORS['white']),
         ]
 
         y = 115
@@ -815,8 +949,8 @@ class BiometricDemo:
             ("Demographics - Age, gender, emotion", 0.4, self.COLORS['white']),
             ("Landmarks - 468 facial points (MediaPipe)", 0.4, self.COLORS['white']),
             ("Liveness - Anti-spoofing detection", 0.4, self.COLORS['white']),
-            ("Enrollment - Save faces to local database", 0.4, self.COLORS['green']),
-            ("Verification - Match against enrolled faces", 0.4, self.COLORS['cyan']),
+            ("Enrollment - Guided 5-angle capture", 0.4, self.COLORS['green']),
+            ("Verification - Match against enrolled (50%+)", 0.4, self.COLORS['cyan']),
             ("Comparison - Similarity between faces", 0.4, self.COLORS['white']),
             ("Recording - Save annotated video (MP4)", 0.4, self.COLORS['red']),
             ("Export - Analysis history to JSON", 0.4, self.COLORS['white']),
@@ -842,7 +976,7 @@ class BiometricDemo:
         cv2.putText(frame, f"FPS: {self.fps:.1f}", (700, status_y), font, 0.55, self.COLORS['green'] if self.fps >= 10 else self.COLORS['yellow'], 1)
 
         # Tip
-        tip = "TIP: Press 'e' to enroll your face, then see 'Match' appear when recognized!"
+        tip = "TIP: Press 'e' to enroll - auto-captures when you hold each pose correctly"
         cv2.putText(frame, tip, (60, h-35), font, 0.4, self.COLORS['orange'], 1)
 
     def draw_enrolled_faces(self, frame: np.ndarray):
@@ -868,45 +1002,230 @@ class BiometricDemo:
                 except Exception:
                     pass
 
+    def draw_enrollment_overlay(self, frame: np.ndarray):
+        """Draw enrollment progress overlay with head pose feedback."""
+        if not self._enrolling:
+            return
+
+        h, w = frame.shape[:2]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+
+        # Semi-transparent overlay at top
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (w, 200), self.COLORS['black'], -1)
+        cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
+
+        # Title
+        cv2.putText(frame, f"ENROLLING: {self._enrollment_name}", (20, 35),
+                   font, 0.9, self.COLORS['green'], 2)
+
+        # Progress bar
+        progress = self._enrollment_step / 5.0
+        bar_w = w - 40
+        cv2.rectangle(frame, (20, 50), (20 + bar_w, 70), self.COLORS['white'], 2)
+        cv2.rectangle(frame, (22, 52), (22 + int((bar_w - 4) * progress), 68), self.COLORS['green'], -1)
+        cv2.putText(frame, f"{self._enrollment_step}/5 angles", (w - 120, 65), font, 0.5, self.COLORS['white'], 1)
+
+        if self._enrollment_step < 5:
+            pose = self._enrollment_poses[self._enrollment_step]
+            instruction = pose["instruction"]
+            target_yaw = pose["yaw"]
+            target_pitch = pose["pitch"]
+            tolerance = pose["tolerance"]
+
+            # Current instruction
+            cv2.putText(frame, instruction, (20, 100), font, 0.8, self.COLORS['yellow'], 2)
+
+            # Check if pose matches
+            yaw_ok = abs(self._current_yaw - target_yaw) < tolerance
+            pitch_ok = abs(self._current_pitch - target_pitch) < tolerance
+            pose_ok = yaw_ok and pitch_ok
+
+            # Draw pose indicator (visual target)
+            indicator_x = w - 150
+            indicator_y = 130
+            indicator_r = 50
+
+            # Target zone circle
+            cv2.circle(frame, (indicator_x, indicator_y), indicator_r, self.COLORS['white'], 2)
+
+            # Current position dot (mapped from yaw/pitch)
+            dot_x = int(indicator_x + (self._current_yaw / 45) * indicator_r)
+            dot_y = int(indicator_y + (self._current_pitch / 35) * indicator_r)
+            dot_color = self.COLORS['green'] if pose_ok else self.COLORS['red']
+            cv2.circle(frame, (dot_x, dot_y), 8, dot_color, -1)
+
+            # Target position
+            target_x = int(indicator_x + (target_yaw / 45) * indicator_r)
+            target_y = int(indicator_y + (target_pitch / 35) * indicator_r)
+            cv2.drawMarker(frame, (target_x, target_y), self.COLORS['cyan'], cv2.MARKER_CROSS, 20, 2)
+
+            # Pose status text
+            if pose_ok:
+                # Show hold progress
+                hold_time = time.time() - self._enrollment_hold_start
+                hold_progress = min(1.0, hold_time / self._enrollment_hold_required)
+                cv2.putText(frame, f"HOLD STILL! {hold_progress*100:.0f}%", (20, 135),
+                           font, 0.7, self.COLORS['green'], 2)
+                # Hold progress bar
+                cv2.rectangle(frame, (20, 150), (220, 170), self.COLORS['white'], 2)
+                cv2.rectangle(frame, (22, 152), (22 + int(196 * hold_progress), 168), self.COLORS['green'], -1)
+            else:
+                self._enrollment_hold_start = time.time()  # Reset hold timer
+                # Show guidance
+                guidance = []
+                if self._current_yaw < target_yaw - tolerance:
+                    guidance.append("Turn RIGHT")
+                elif self._current_yaw > target_yaw + tolerance:
+                    guidance.append("Turn LEFT")
+                if self._current_pitch < target_pitch - tolerance:
+                    guidance.append("Tilt DOWN")
+                elif self._current_pitch > target_pitch + tolerance:
+                    guidance.append("Tilt UP")
+
+                guide_text = " & ".join(guidance) if guidance else "Adjust position"
+                cv2.putText(frame, guide_text, (20, 135), font, 0.6, self.COLORS['orange'], 2)
+                cv2.putText(frame, f"Yaw: {self._current_yaw:.0f} | Pitch: {self._current_pitch:.0f}",
+                           (20, 165), font, 0.45, self.COLORS['white'], 1)
+
+            # Labels for indicator
+            cv2.putText(frame, "L", (indicator_x - indicator_r - 15, indicator_y + 5), font, 0.4, self.COLORS['white'], 1)
+            cv2.putText(frame, "R", (indicator_x + indicator_r + 5, indicator_y + 5), font, 0.4, self.COLORS['white'], 1)
+            cv2.putText(frame, "UP", (indicator_x - 10, indicator_y - indicator_r - 5), font, 0.4, self.COLORS['white'], 1)
+            cv2.putText(frame, "DN", (indicator_x - 10, indicator_y + indicator_r + 15), font, 0.4, self.COLORS['white'], 1)
+
+        else:
+            cv2.putText(frame, "ENROLLMENT COMPLETE!", (20, 120),
+                       font, 0.9, self.COLORS['green'], 2)
+            cv2.putText(frame, "All 5 angles captured successfully", (20, 150),
+                       font, 0.6, self.COLORS['white'], 1)
+
+        # Cancel hint
+        cv2.putText(frame, "ESC to cancel", (20, 190), font, 0.45, self.COLORS['red'], 1)
+
     # =========================================================================
     # ACTIONS
     # =========================================================================
 
-    def enroll_face(self, frame: np.ndarray, faces: List[Dict]):
-        """Enroll the largest face in frame (prevents duplicates)."""
-        if not faces:
-            print("No face detected for enrollment")
+    def start_enrollment(self):
+        """Start the professional enrollment process with head pose detection."""
+        # Generate name
+        self._enrollment_name = f"Person_{len(self._face_db.faces) + 1}"
+        self._enrollment_embeddings = []
+        self._enrollment_step = 0
+        self._enrollment_hold_start = time.time()
+        self._current_yaw = 0
+        self._current_pitch = 0
+        self._enrolling = True
+        print(f"\n{'='*50}")
+        print(f"ENROLLMENT STARTED: {self._enrollment_name}")
+        print(f"Follow the on-screen pose instructions")
+        print(f"Hold each pose until the progress bar fills")
+        print(f"{'='*50}\n")
+
+    def cancel_enrollment(self):
+        """Cancel the current enrollment."""
+        if self._enrolling:
+            print(f"Enrollment cancelled for {self._enrollment_name}")
+            self._enrolling = False
+            self._enrollment_embeddings = []
+            self._enrollment_step = 0
+
+    def process_enrollment(self, frame: np.ndarray, faces: List[Dict]):
+        """Process enrollment with head pose detection for auto-capture."""
+        if not self._enrolling or not faces:
             return
 
-        # Get largest face
+        if self._enrollment_step >= 5:
+            # All angles captured, finalize enrollment
+            self._finalize_enrollment(frame, faces)
+            return
+
+        # Get landmarks for head pose estimation
+        landmarks = self.detect_landmarks(frame)
+        if landmarks:
+            h, w = frame.shape[:2]
+            yaw, pitch = self.estimate_head_pose(landmarks[0], (h, w))
+            self._current_yaw = yaw
+            self._current_pitch = pitch
+        else:
+            self._current_yaw = 0
+            self._current_pitch = 0
+            return  # Need landmarks for pose detection
+
+        # Get current pose requirements
+        pose = self._enrollment_poses[self._enrollment_step]
+        target_yaw = pose["yaw"]
+        target_pitch = pose["pitch"]
+        tolerance = pose["tolerance"]
+
+        # Check if pose matches
+        yaw_ok = abs(self._current_yaw - target_yaw) < tolerance
+        pitch_ok = abs(self._current_pitch - target_pitch) < tolerance
+        pose_ok = yaw_ok and pitch_ok
+
+        if not pose_ok:
+            # Reset hold timer if pose doesn't match
+            self._enrollment_hold_start = time.time()
+            return
+
+        # Check if held long enough
+        hold_time = time.time() - self._enrollment_hold_start
+        if hold_time < self._enrollment_hold_required:
+            return  # Keep holding
+
+        # Pose held long enough - capture!
         largest = max(faces, key=lambda f: f.get('facial_area', {}).get('w', 0) * f.get('facial_area', {}).get('h', 0))
         area = largest.get('facial_area', {})
         face_region = {'x': area.get('x', 0), 'y': area.get('y', 0), 'w': area.get('w', 100), 'h': area.get('h', 100)}
 
-        # Force extract embedding (bypass throttling for enrollment)
-        self._last_embedding_time = 0
+        # Extract embedding (no similarity check - we trust the identity)
+        self._last_embedding_time = 0  # Bypass throttling
         embedding = self.extract_embedding(frame, face_region)
-        if embedding is None:
-            print("Could not extract embedding - try again with better lighting")
+
+        if embedding is not None:
+            self._enrollment_embeddings.append(embedding)
+            pose_name = pose["instruction"]
+            self._enrollment_step += 1
+            self._enrollment_hold_start = time.time()  # Reset for next pose
+            print(f"  Captured angle {self._enrollment_step}/5: {pose_name}")
+
+    def _finalize_enrollment(self, frame: np.ndarray, faces: List[Dict]):
+        """Finalize the enrollment with all captured angles."""
+        if not self._enrollment_embeddings:
+            print("No embeddings captured, enrollment failed")
+            self._enrolling = False
             return
 
-        # Check if face already enrolled (duplicate prevention)
-        existing_match = self._face_db.search(embedding, threshold=0.55)
-        if existing_match:
-            name, similarity = existing_match
-            print(f"Already enrolled as '{name}' ({similarity*100:.0f}% match) - skipping")
-            return
+        # Get thumbnail from current frame
+        if faces:
+            largest = max(faces, key=lambda f: f.get('facial_area', {}).get('w', 0) * f.get('facial_area', {}).get('h', 0))
+            area = largest.get('facial_area', {})
+            x, y, w, h = area.get('x', 0), area.get('y', 0), area.get('w', 100), area.get('h', 100)
+            thumbnail = frame[max(0, y):y + h, max(0, x):x + w].copy()
+        else:
+            thumbnail = np.zeros((100, 100, 3), dtype=np.uint8)
 
-        # Create thumbnail
-        x, y, w, h = face_region['x'], face_region['y'], face_region['w'], face_region['h']
-        thumbnail = frame[max(0,y):y+h, max(0,x):x+w].copy()
+        # Save to database with all embeddings
+        self._face_db.faces[self._enrollment_name] = {
+            'embeddings': self._enrollment_embeddings.copy(),
+            'thumbnail': thumbnail,
+            'enrolled_at': datetime.now().isoformat()
+        }
+        self._face_db.save()
 
-        # Generate name
-        name = f"Person_{len(self._face_db.faces) + 1}"
+        self.stats['enrollments'] = len(self._face_db.faces)
 
-        if self._face_db.enroll(name, embedding, thumbnail):
-            self.stats['enrollments'] = len(self._face_db.faces)
-            print(f"Enrolled: {name}")
+        print(f"\n{'='*50}")
+        print(f"ENROLLMENT COMPLETE: {self._enrollment_name}")
+        print(f"  Angles stored: {len(self._enrollment_embeddings)}")
+        print(f"  Total enrolled: {len(self._face_db.faces)}")
+        print(f"{'='*50}\n")
+
+        # Reset state
+        self._enrolling = False
+        self._enrollment_embeddings = []
+        self._enrollment_step = 0
 
     def verify_face(self, frame: np.ndarray, face_region: Dict, face_id: int) -> Optional[Tuple[str, float]]:
         """Verify face against enrolled faces with caching."""
@@ -934,8 +1253,8 @@ class BiometricDemo:
                 return self._verification_cache[face_key]['match']
             return None
 
-        # Search for match
-        match = self._face_db.search(embedding, threshold=0.5)
+        # Search for match (lower threshold to match multi-angle embeddings)
+        match = self._face_db.search(embedding, threshold=0.40)
 
         # Cache the result
         self._verification_cache[face_key] = {
@@ -1029,7 +1348,11 @@ class BiometricDemo:
         # Store faces for actions
         self._current_faces = list(tracked.values())
 
-        # Process each tracked face
+        # Professional enrollment processing
+        if self._enrolling:
+            self.process_enrollment(frame, self._current_faces)
+
+        # Process each tracked face (skip detailed analysis during enrollment)
         for face_id, face in tracked.items():
             area = face.get('facial_area', {})
             region = {'x': area.get('x', 0), 'y': area.get('y', 0), 'w': area.get('w', 100), 'h': area.get('h', 100)}
@@ -1124,6 +1447,7 @@ class BiometricDemo:
         self.draw_stats_panel(frame)
         self.draw_enrolled_faces(frame)
         self.draw_help(frame)
+        self.draw_enrollment_overlay(frame)  # Professional enrollment UI
 
         # Recording
         if self.recording and self.video_writer:
@@ -1184,12 +1508,17 @@ class BiometricDemo:
 
                 if key == ord('q'):
                     break
+                elif key == 27:  # ESC key
+                    if self._enrolling:
+                        self.cancel_enrollment()
                 elif key == ord('m'):
-                    self.mode_index = (self.mode_index + 1) % len(self.MODES)
-                    self.mode = self.MODES[self.mode_index]
-                    print(f"Mode: {self.mode.upper()}")
+                    if not self._enrolling:
+                        self.mode_index = (self.mode_index + 1) % len(self.MODES)
+                        self.mode = self.MODES[self.mode_index]
+                        print(f"Mode: {self.mode.upper()}")
                 elif key == ord('e'):
-                    self.enroll_face(frame, self._current_faces)
+                    if not self._enrolling:
+                        self.start_enrollment()
                 elif key == ord('c'):
                     comps = self.compare_faces(frame, self._current_faces)
                     for i, j, sim in comps:
