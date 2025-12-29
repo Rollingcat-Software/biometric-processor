@@ -12,6 +12,30 @@
 
 This microservice is part of a larger biometric authentication ecosystem developed as an Engineering Project at Marmara University's Computer Engineering Department.
 
+## Quick Start
+
+The fastest way to test the system is with the local demo:
+
+```bash
+python demo_local.py
+```
+
+**Performance**: 18-30 FPS (CPU), optimized and production-ready!
+
+See [docs/1-getting-started/](docs/1-getting-started/) for detailed guides.
+
+## Documentation
+
+All documentation is organized in the `docs/` directory:
+
+- **[Getting Started](docs/1-getting-started/)** - Installation, quick start, demo usage
+- **[API Documentation](docs/2-api-documentation/)** - Complete API reference
+- **[Deployment](docs/3-deployment/)** - Deployment guides and database setup
+- **[Testing](docs/4-testing/)** - Testing guides and test reports
+- **[Performance](docs/5-performance/)** - Performance analysis and optimizations
+- **[Architecture](docs/6-architecture/)** - Design documents and architecture
+- **[Development](docs/7-development/)** - Bug fixes, changelog, contributing
+
 ## Features
 
 ### Core Biometric Capabilities
