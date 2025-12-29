@@ -59,7 +59,7 @@ import numpy as np
 class SimpleQualityAssessor:
     """Quality assessment using OpenCV."""
 
-    def __init__(self, blur_threshold: float = 100.0, min_face_size: int = 80):
+    def __init__(self, blur_threshold: float = 120.0, min_face_size: int = 90):
         self.blur_threshold = blur_threshold
         self.min_face_size = min_face_size
 
@@ -544,9 +544,9 @@ class BiometricDemo:
         try:
             face_objs = self._deepface.extract_faces(
                 img_path=frame,
-                detector_backend="opencv",
+                detector_backend="mtcnn",
                 enforce_detection=False,
-                align=False,
+                align=True,
             )
             self._faces_cache = [f for f in face_objs if f.get('confidence', 0) > 0.5]
             self._last_faces_time = current_time
@@ -571,9 +571,13 @@ class BiometricDemo:
             if face_img.size == 0 or min(face_img.shape[:2]) < 48:
                 return None
 
+            # Apply preprocessing for better quality
+            face_img = self.normalize_lighting(face_img)
+            face_img = self.align_face(face_img)
+
             embeddings = self._deepface.represent(
                 img_path=face_img,
-                model_name="VGG-Face",
+                model_name="Facenet512",
                 enforce_detection=False,
                 detector_backend="skip"
             )
@@ -633,6 +637,72 @@ class BiometricDemo:
             return {}
         except Exception:
             return self._demographics_cache.get(face_id, {}).get('data', {})
+
+    def normalize_lighting(self, face_img: np.ndarray) -> np.ndarray:
+        """Normalize lighting using CLAHE for better quality in varying conditions."""
+        if face_img is None or face_img.size == 0:
+            return face_img
+
+        try:
+            # Convert to LAB color space
+            lab = cv2.cvtColor(face_img, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+
+            # Apply CLAHE to L channel (lightness)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            l = clahe.apply(l)
+
+            # Merge channels and convert back to BGR
+            lab = cv2.merge([l, a, b])
+            normalized = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+            return normalized
+        except Exception:
+            return face_img
+
+    def align_face(self, face_img: np.ndarray, landmarks=None) -> np.ndarray:
+        """Align face using eye positions for better feature extraction."""
+        if face_img is None or face_img.size == 0:
+            return face_img
+
+        # If no landmarks provided, detect eyes using simple cascade
+        if landmarks is None:
+            try:
+                gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+                opencv_data_dir = os.path.join(cv2.__path__[0], "data")
+                eye_cascade = cv2.CascadeClassifier(
+                    os.path.join(opencv_data_dir, "haarcascade_eye.xml")
+                )
+                eyes = eye_cascade.detectMultiScale(gray, 1.1, 5, minSize=(20, 20))
+
+                if len(eyes) < 2:
+                    return face_img  # Not enough eyes detected
+
+                # Sort eyes by x position (left to right)
+                eyes = sorted(eyes, key=lambda e: e[0])
+
+                # Get eye centers
+                left_eye_center = (eyes[0][0] + eyes[0][2]//2, eyes[0][1] + eyes[0][3]//2)
+                right_eye_center = (eyes[1][0] + eyes[1][2]//2, eyes[1][1] + eyes[1][3]//2)
+
+                # Calculate angle between eyes
+                dY = right_eye_center[1] - left_eye_center[1]
+                dX = right_eye_center[0] - left_eye_center[0]
+                angle = np.degrees(np.arctan2(dY, dX))
+
+                # Rotate image to align eyes horizontally
+                (h, w) = face_img.shape[:2]
+                center = (w // 2, h // 2)
+                M = cv2.getRotationMatrix2D(center, angle, 1.0)
+                aligned = cv2.warpAffine(
+                    face_img, M, (w, h),
+                    flags=cv2.INTER_CUBIC,
+                    borderMode=cv2.BORDER_REPLICATE
+                )
+                return aligned
+            except Exception:
+                return face_img
+
+        return face_img
 
     def detect_landmarks(self, frame: np.ndarray) -> List[List[Tuple[int, int]]]:
         """Detect 468 facial landmarks with caching for stable FPS."""
@@ -1179,6 +1249,17 @@ class BiometricDemo:
         area = largest.get('facial_area', {})
         face_region = {'x': area.get('x', 0), 'y': area.get('y', 0), 'w': area.get('w', 100), 'h': area.get('h', 100)}
 
+        # Check quality before capturing (stricter threshold for enrollment)
+        x, y, w, h = face_region['x'], face_region['y'], face_region['w'], face_region['h']
+        face_img = frame[max(0,y):y+h, max(0,x):x+w]
+        if face_img.size > 0:
+            quality = self._quality_assessor.assess(face_img)
+            quality_score = quality.get('score', 0)
+            if quality_score < 75:  # Stricter threshold for enrollment (was effectively ~50)
+                print(f"  ⚠️  Quality too low: {quality_score:.0f}% (need 75%+) - {quality.get('issues', [])}")
+                self._enrollment_hold_start = time.time()  # Reset timer, wait for better quality
+                return
+
         # Extract embedding (no similarity check - we trust the identity)
         self._last_embedding_time = 0  # Bypass throttling
         embedding = self.extract_embedding(frame, face_region)
@@ -1282,7 +1363,11 @@ class BiometricDemo:
                 x, y, w, h = region['x'], region['y'], region['w'], region['h']
                 face_img = frame[max(0,y-20):y+h+20, max(0,x-20):x+w+20]
                 if face_img.size > 0:
-                    emb = self._deepface.represent(face_img, model_name="VGG-Face",
+                    # Apply preprocessing for better quality
+                    face_img = self.normalize_lighting(face_img)
+                    face_img = self.align_face(face_img)
+
+                    emb = self._deepface.represent(face_img, model_name="Facenet512",
                                                    enforce_detection=False, detector_backend="skip")
                     if emb:
                         embeddings.append(np.array(emb[0]['embedding']))
