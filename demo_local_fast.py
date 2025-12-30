@@ -419,24 +419,24 @@ class BiometricPuzzle:
     NOSE_TIP = 1
     CHIN = 152
 
-    # Challenge definitions: (name, display_text, detection_func, icon)
+    # Challenge definitions: (display_name, key, icon)
     CHALLENGES = {
-        'BLINK': ('Blink Both Eyes', 'blink', '👁️'),
-        'BLINK_LEFT': ('Wink Left Eye', 'blink_left', '😉'),
-        'BLINK_RIGHT': ('Wink Right Eye', 'blink_right', '😉'),
-        'SMILE': ('Smile Wide', 'smile', '😊'),
-        'OPEN_MOUTH': ('Open Your Mouth', 'open_mouth', '😮'),
+        'BLINK': ('Close & Open Eyes', 'blink', '👁️'),
+        'BLINK_LEFT': ('Close Left Eye Only', 'blink_left', '😉'),
+        'BLINK_RIGHT': ('Close Right Eye Only', 'blink_right', '😉'),
+        'SMILE': ('Smile (Show Teeth)', 'smile', '😁'),
+        'OPEN_MOUTH': ('Open Mouth Wide', 'open_mouth', '😮'),
         'TURN_LEFT': ('Turn Head Left', 'turn_left', '👈'),
         'TURN_RIGHT': ('Turn Head Right', 'turn_right', '👉'),
-        'LOOK_UP': ('Tilt Head Back', 'look_up', '👆'),
-        'LOOK_DOWN': ('Tilt Head Forward', 'look_down', '👇'),
+        'LOOK_UP': ('Look Up (Chin Up)', 'look_up', '👆'),
+        'LOOK_DOWN': ('Look Down (Chin Down)', 'look_down', '👇'),
         'RAISE_EYEBROWS': ('Raise Eyebrows', 'raise_eyebrows', '🤨'),
         'NOD': ('Nod Your Head', 'nod', '↕️'),
         'SHAKE_HEAD': ('Shake Your Head', 'shake_head', '↔️'),
-        'CLOSE_EYES': ('Close Eyes', 'close_eyes', '😌'),
-        'TILT_LEFT': ('Tilt Head Left', 'tilt_left', '↩️'),
-        'TILT_RIGHT': ('Tilt Head Right', 'tilt_right', '↪️'),
-        'SQUINT': ('Squint Eyes', 'squint', '😑'),
+        'CLOSE_EYES': ('Keep Eyes Closed', 'close_eyes', '😌'),
+        'CLOSE_LEFT': ('Keep Left Eye Closed', 'close_left', '😉'),
+        'CLOSE_RIGHT': ('Keep Right Eye Closed', 'close_right', '😉'),
+        'SQUINT': ('Squint (Half-Close Eyes)', 'squint', '😑'),
     }
 
     # Thresholds
@@ -479,12 +479,13 @@ class BiometricPuzzle:
         else:
             # Random selection from pool - balanced mix of challenge types
             simple_pool = [
-                'BLINK', 'CLOSE_EYES', 'SQUINT',  # Eye challenges
-                'SMILE', 'OPEN_MOUTH',             # Mouth challenges
-                'TURN_LEFT', 'TURN_RIGHT',         # Head turn challenges
-                'LOOK_UP', 'LOOK_DOWN',            # Head tilt challenges
-                'RAISE_EYEBROWS',                  # Expression challenges
+                'BLINK', 'CLOSE_EYES', 'CLOSE_LEFT', 'CLOSE_RIGHT',  # Eye challenges
+                'SMILE', 'OPEN_MOUTH',              # Mouth challenges
+                'TURN_LEFT', 'TURN_RIGHT',          # Head turn challenges
+                'LOOK_UP', 'LOOK_DOWN',             # Head tilt challenges
+                'RAISE_EYEBROWS',                   # Expression challenges
             ]
+            # Removed SQUINT as it's confusing - EAR range is too narrow
             self.challenges = random.sample(simple_pool, min(self.num_challenges, len(simple_pool)))
 
         self.current_idx = 0
@@ -677,9 +678,12 @@ class BiometricPuzzle:
             message = f"L:{left_ear:.2f} R:{right_ear:.2f}" + (" ✓" if detected else " - Wink Right!")
 
         elif challenge == 'SMILE':
-            # Smile: corners raised + mouth widened
-            detected = smile_raise > self.SMILE_THRESHOLD or smile_width > 0.55
-            message = f"Smile: {smile_raise:.3f} W:{smile_width:.2f}" + (" ✓" if detected else " - Smile wide!")
+            # Smile: corners must be raised AND mouth widened
+            # Both conditions required to prevent false positives
+            is_corners_raised = smile_raise > self.SMILE_THRESHOLD
+            is_mouth_wide = smile_width > 0.52
+            detected = is_corners_raised and is_mouth_wide
+            message = f"Corners:{smile_raise:.3f} Width:{smile_width:.2f}" + (" ✓" if detected else " - Show teeth!")
 
         elif challenge == 'OPEN_MOUTH':
             detected = mar > self.MOUTH_OPEN_THRESHOLD
@@ -694,12 +698,14 @@ class BiometricPuzzle:
             message = f"Yaw: {yaw:.0f}°" + (" ✓" if detected else f" - Need >{self.YAW_THRESHOLD}°")
 
         elif challenge == 'LOOK_UP':
-            detected = pitch > self.PITCH_THRESHOLD
-            message = f"Pitch: {pitch:.0f}°" + (" ✓" if detected else f" - Tilt back! Need >{self.PITCH_THRESHOLD}°")
+            # Tilt head back (chin up) = negative pitch in MediaPipe
+            detected = pitch < -self.PITCH_THRESHOLD
+            message = f"Pitch: {pitch:.0f}°" + (" ✓" if detected else f" - Chin UP! Need <{-self.PITCH_THRESHOLD}°")
 
         elif challenge == 'LOOK_DOWN':
-            detected = pitch < -self.PITCH_THRESHOLD
-            message = f"Pitch: {pitch:.0f}°" + (" ✓" if detected else f" - Tilt forward! Need <{-self.PITCH_THRESHOLD}°")
+            # Tilt head forward (chin down) = positive pitch in MediaPipe
+            detected = pitch > self.PITCH_THRESHOLD
+            message = f"Pitch: {pitch:.0f}°" + (" ✓" if detected else f" - Chin DOWN! Need >{self.PITCH_THRESHOLD}°")
 
         elif challenge == 'RAISE_EYEBROWS':
             detected = eyebrow_ratio > self.EYEBROW_RAISE_THRESHOLD
@@ -707,12 +713,20 @@ class BiometricPuzzle:
 
         elif challenge == 'CLOSE_EYES':
             detected = avg_ear < self.EAR_BLINK_THRESHOLD
-            message = f"EAR: {avg_ear:.2f}" + (" ✓ CLOSED" if detected else " - Close both eyes!")
+            message = f"EAR: {avg_ear:.2f}" + (" ✓ CLOSED" if detected else " - Keep both eyes closed!")
+
+        elif challenge == 'CLOSE_LEFT':
+            detected = left_ear < self.EAR_BLINK_THRESHOLD and right_ear > self.EAR_THRESHOLD
+            message = f"L:{left_ear:.2f} R:{right_ear:.2f}" + (" ✓" if detected else " - Close LEFT eye only!")
+
+        elif challenge == 'CLOSE_RIGHT':
+            detected = right_ear < self.EAR_BLINK_THRESHOLD and left_ear > self.EAR_THRESHOLD
+            message = f"L:{left_ear:.2f} R:{right_ear:.2f}" + (" ✓" if detected else " - Close RIGHT eye only!")
 
         elif challenge == 'SQUINT':
-            # Squint: eyes partially closed but not fully
+            # Squint: eyes half-closed (like looking at bright light)
             detected = self.EAR_BLINK_THRESHOLD < avg_ear < self.SQUINT_THRESHOLD
-            message = f"EAR: {avg_ear:.2f}" + (" ✓" if detected else " - Squint eyes!")
+            message = f"EAR: {avg_ear:.2f} (need {self.EAR_BLINK_THRESHOLD:.2f}-{self.SQUINT_THRESHOLD:.2f})" + (" ✓" if detected else "")
 
         elif challenge == 'NOD':
             detected = self._check_nod()
@@ -1735,18 +1749,18 @@ class FastBiometricDemo:
                            guide_color, 4, tipLength=0.3)
 
         elif challenge_key == 'LOOK_UP':
-            # Draw head silhouette tilting back
-            cv2.ellipse(frame, (cx, cy), (50, 60), -15, 0, 360, guide_color, 2)
-            cv2.arrowedLine(frame, (cx, cy - 80), (cx, cy - 120), guide_color, 3, tipLength=0.3)
-            cv2.putText(frame, "TILT BACK", (cx - 55, cy + 90), cv2.FONT_HERSHEY_SIMPLEX,
-                       0.5, guide_color, 1)
+            # Chin UP = look at ceiling
+            cv2.ellipse(frame, (cx, cy), (50, 60), -20, 0, 360, guide_color, 2)
+            cv2.arrowedLine(frame, (cx, cy - 70), (cx - 30, cy - 110), guide_color, 3, tipLength=0.3)
+            cv2.putText(frame, "CHIN UP", (cx - 45, cy + 90), cv2.FONT_HERSHEY_SIMPLEX,
+                       0.6, guide_color, 2)
 
         elif challenge_key == 'LOOK_DOWN':
-            # Draw head silhouette tilting forward
-            cv2.ellipse(frame, (cx, cy), (50, 60), 15, 0, 360, guide_color, 2)
-            cv2.arrowedLine(frame, (cx, cy + 80), (cx, cy + 120), guide_color, 3, tipLength=0.3)
-            cv2.putText(frame, "TILT FORWARD", (cx - 65, cy - 80), cv2.FONT_HERSHEY_SIMPLEX,
-                       0.5, guide_color, 1)
+            # Chin DOWN = look at floor
+            cv2.ellipse(frame, (cx, cy), (50, 60), 20, 0, 360, guide_color, 2)
+            cv2.arrowedLine(frame, (cx, cy + 70), (cx + 30, cy + 110), guide_color, 3, tipLength=0.3)
+            cv2.putText(frame, "CHIN DOWN", (cx - 60, cy - 80), cv2.FONT_HERSHEY_SIMPLEX,
+                       0.6, guide_color, 2)
 
         elif challenge_key == 'RAISE_EYEBROWS':
             # Draw raised eyebrows
@@ -1758,8 +1772,22 @@ class FastBiometricDemo:
             # Draw closed eyes (horizontal lines)
             cv2.line(frame, (cx - 80, cy), (cx - 20, cy), guide_color, 3)
             cv2.line(frame, (cx + 20, cy), (cx + 80, cy), guide_color, 3)
-            cv2.putText(frame, "CLOSE", (cx - 35, cy + 50), cv2.FONT_HERSHEY_SIMPLEX,
-                       0.6, guide_color, 2)
+            cv2.putText(frame, "BOTH EYES", (cx - 55, cy + 50), cv2.FONT_HERSHEY_SIMPLEX,
+                       0.5, guide_color, 2)
+
+        elif challenge_key == 'CLOSE_LEFT':
+            # Left eye closed, right open
+            cv2.line(frame, (cx - 80, cy), (cx - 20, cy), guide_color, 3)  # Left closed
+            cv2.ellipse(frame, (cx + 50, cy), (30, 15), 0, 0, 360, (100, 100, 100), 2)  # Right open
+            cv2.putText(frame, "LEFT ONLY", (cx - 55, cy + 50), cv2.FONT_HERSHEY_SIMPLEX,
+                       0.5, guide_color, 2)
+
+        elif challenge_key == 'CLOSE_RIGHT':
+            # Right eye closed, left open
+            cv2.ellipse(frame, (cx - 50, cy), (30, 15), 0, 0, 360, (100, 100, 100), 2)  # Left open
+            cv2.line(frame, (cx + 20, cy), (cx + 80, cy), guide_color, 3)  # Right closed
+            cv2.putText(frame, "RIGHT ONLY", (cx - 60, cy + 50), cv2.FONT_HERSHEY_SIMPLEX,
+                       0.5, guide_color, 2)
 
         elif challenge_key == 'SQUINT':
             # Draw squinting eyes (narrow ellipses)
@@ -1873,10 +1901,9 @@ class FastBiometricDemo:
         Press L anytime to start a new puzzle. If already in puzzle mode,
         this restarts with new random challenges.
         """
-        self.puzzle.start()
+        self.puzzle.start()  # This logs the challenges
         self.mode = "puzzle"
         self.mode_idx = self.MODES.index("puzzle")
-        logger.info(f"Puzzle started: {self.puzzle.challenges}")
 
     def cancel_enrollment(self):
         self._enrolling = False
