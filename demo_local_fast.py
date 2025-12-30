@@ -672,64 +672,132 @@ class BiometricPuzzle:
         detected = False
         message = ""
 
+        # User's eyes in mirror (MediaPipe landmarks are swapped)
+        user_left_ear = right_ear   # User's LEFT eye = MediaPipe RIGHT
+        user_right_ear = left_ear   # User's RIGHT eye = MediaPipe LEFT
+
         if challenge == 'BLINK':
-            # Close both eyes - STRICT threshold
+            # Close both eyes
             detected = avg_ear < self.EAR_CLOSED_THRESHOLD
-            message = f"EAR: {avg_ear:.2f} (need <{self.EAR_CLOSED_THRESHOLD})" + (" ✓" if detected else "")
+            if detected:
+                message = f"✓ Both eyes closed!"
+            elif user_left_ear < self.EAR_CLOSED_THRESHOLD and user_right_ear > self.EAR_THRESHOLD:
+                message = f"Only LEFT closed! Close your RIGHT eye too!"
+            elif user_right_ear < self.EAR_CLOSED_THRESHOLD and user_left_ear > self.EAR_THRESHOLD:
+                message = f"Only RIGHT closed! Close your LEFT eye too!"
+            else:
+                message = f"EAR: {avg_ear:.2f} - Close BOTH eyes!"
 
         elif challenge == 'CLOSE_LEFT':
-            # User's LEFT eye in mirror = MediaPipe RIGHT_EYE (swapped!)
-            # When camera is mirrored, anatomical mapping is reversed
-            detected = right_ear < self.EAR_CLOSED_THRESHOLD and left_ear > self.EAR_THRESHOLD
-            message = f"YourL:{right_ear:.2f} YourR:{left_ear:.2f}" + (" ✓" if detected else " - Close YOUR left!")
+            detected = user_left_ear < self.EAR_CLOSED_THRESHOLD and user_right_ear > self.EAR_THRESHOLD
+            if detected:
+                message = f"✓ Left eye closed!"
+            elif user_right_ear < self.EAR_CLOSED_THRESHOLD and user_left_ear > self.EAR_THRESHOLD:
+                message = f"WRONG! That's your RIGHT eye! Close LEFT!"
+            elif user_left_ear < self.EAR_CLOSED_THRESHOLD and user_right_ear < self.EAR_CLOSED_THRESHOLD:
+                message = f"OPEN your RIGHT eye! Only close LEFT!"
+            else:
+                message = f"L:{user_left_ear:.2f} - Close your LEFT eye!"
 
         elif challenge == 'CLOSE_RIGHT':
-            # User's RIGHT eye in mirror = MediaPipe LEFT_EYE (swapped!)
-            detected = left_ear < self.EAR_CLOSED_THRESHOLD and right_ear > self.EAR_THRESHOLD
-            message = f"YourL:{right_ear:.2f} YourR:{left_ear:.2f}" + (" ✓" if detected else " - Close YOUR right!")
+            detected = user_right_ear < self.EAR_CLOSED_THRESHOLD and user_left_ear > self.EAR_THRESHOLD
+            if detected:
+                message = f"✓ Right eye closed!"
+            elif user_left_ear < self.EAR_CLOSED_THRESHOLD and user_right_ear > self.EAR_THRESHOLD:
+                message = f"WRONG! That's your LEFT eye! Close RIGHT!"
+            elif user_left_ear < self.EAR_CLOSED_THRESHOLD and user_right_ear < self.EAR_CLOSED_THRESHOLD:
+                message = f"OPEN your LEFT eye! Only close RIGHT!"
+            else:
+                message = f"R:{user_right_ear:.2f} - Close your RIGHT eye!"
 
         elif challenge == 'SMILE':
-            # Smile: corners raised AND mouth widened - STRICT
             is_corners_raised = smile_raise > self.SMILE_CORNER_THRESHOLD
             is_mouth_wide = smile_width > self.SMILE_WIDTH_THRESHOLD
             detected = is_corners_raised and is_mouth_wide
-            message = f"Raise:{smile_raise:.3f}>{self.SMILE_CORNER_THRESHOLD} W:{smile_width:.2f}>{self.SMILE_WIDTH_THRESHOLD}" + (" ✓" if detected else "")
+            if detected:
+                message = f"✓ Great smile!"
+            elif is_mouth_wide and not is_corners_raised:
+                message = f"Lift the corners of your mouth! Show teeth!"
+            elif is_corners_raised and not is_mouth_wide:
+                message = f"Smile WIDER! W:{smile_width:.2f} need >{self.SMILE_WIDTH_THRESHOLD}"
+            else:
+                message = f"SMILE! Show your teeth! W:{smile_width:.2f}"
 
         elif challenge == 'OPEN_MOUTH':
             detected = mar > self.MOUTH_OPEN_THRESHOLD
-            message = f"Open: {mar:.2f}" + (" ✓" if detected else f" - Need >{self.MOUTH_OPEN_THRESHOLD}")
+            if detected:
+                message = f"✓ Mouth open!"
+            else:
+                message = f"Open: {mar:.2f} - Open WIDER! Need >{self.MOUTH_OPEN_THRESHOLD}"
 
         elif challenge == 'TURN_LEFT':
             detected = yaw < -self.YAW_THRESHOLD
-            message = f"Yaw: {yaw:.0f}°" + (" ✓" if detected else f" - Need <{-self.YAW_THRESHOLD}°")
+            if detected:
+                message = f"✓ Turned left!"
+            elif yaw > self.YAW_THRESHOLD:
+                message = f"WRONG WAY! Turn LEFT, not right! Yaw: {yaw:.0f}°"
+            else:
+                message = f"Yaw: {yaw:.0f}° - Turn LEFT more!"
 
         elif challenge == 'TURN_RIGHT':
             detected = yaw > self.YAW_THRESHOLD
-            message = f"Yaw: {yaw:.0f}°" + (" ✓" if detected else f" - Need >{self.YAW_THRESHOLD}°")
+            if detected:
+                message = f"✓ Turned right!"
+            elif yaw < -self.YAW_THRESHOLD:
+                message = f"WRONG WAY! Turn RIGHT, not left! Yaw: {yaw:.0f}°"
+            else:
+                message = f"Yaw: {yaw:.0f}° - Turn RIGHT more!"
 
         elif challenge == 'LOOK_UP':
-            # Tilt head back (chin up) = negative pitch in MediaPipe
             detected = pitch < -self.PITCH_THRESHOLD
-            message = f"Pitch: {pitch:.0f}°" + (" ✓" if detected else f" - Chin UP! Need <{-self.PITCH_THRESHOLD}°")
+            if detected:
+                message = f"✓ Looking up!"
+            elif pitch > self.PITCH_THRESHOLD:
+                message = f"WRONG WAY! Chin UP, not down! Pitch: {pitch:.0f}°"
+            else:
+                message = f"Pitch: {pitch:.0f}° - Tilt chin UP more!"
 
         elif challenge == 'LOOK_DOWN':
-            # Tilt head forward (chin down) = positive pitch in MediaPipe
             detected = pitch > self.PITCH_THRESHOLD
-            message = f"Pitch: {pitch:.0f}°" + (" ✓" if detected else f" - Chin DOWN! Need >{self.PITCH_THRESHOLD}°")
+            if detected:
+                message = f"✓ Looking down!"
+            elif pitch < -self.PITCH_THRESHOLD:
+                message = f"WRONG WAY! Chin DOWN, not up! Pitch: {pitch:.0f}°"
+            else:
+                message = f"Pitch: {pitch:.0f}° - Tilt chin DOWN more!"
 
         elif challenge == 'RAISE_BOTH_BROWS':
             detected = brow_both > self.EYEBROW_RAISE_THRESHOLD
-            message = f"Both: {brow_both:.2f}x (need >{self.EYEBROW_RAISE_THRESHOLD})" + (" ✓" if detected else "")
+            if detected:
+                message = f"✓ Both brows raised!"
+            elif brow_left > self.SINGLE_BROW_THRESHOLD and brow_right < self.EYEBROW_RAISE_THRESHOLD:
+                message = f"Only LEFT raised! Raise RIGHT brow too!"
+            elif brow_right > self.SINGLE_BROW_THRESHOLD and brow_left < self.EYEBROW_RAISE_THRESHOLD:
+                message = f"Only RIGHT raised! Raise LEFT brow too!"
+            else:
+                message = f"Both: {brow_both:.2f}x - Raise BOTH eyebrows!"
 
         elif challenge == 'RAISE_LEFT_BROW':
-            # User's LEFT brow = MediaPipe LEFT brow (NOT swapped for eyebrows!)
             detected = brow_left > self.SINGLE_BROW_THRESHOLD and brow_right < self.EYEBROW_RAISE_THRESHOLD
-            message = f"L:{brow_left:.2f} R:{brow_right:.2f} (need L>{self.SINGLE_BROW_THRESHOLD})" + (" ✓" if detected else "")
+            if detected:
+                message = f"✓ Left brow raised!"
+            elif brow_right > self.SINGLE_BROW_THRESHOLD and brow_left < self.EYEBROW_RAISE_THRESHOLD:
+                message = f"WRONG! That's your RIGHT brow! Raise LEFT!"
+            elif brow_left > self.SINGLE_BROW_THRESHOLD and brow_right > self.EYEBROW_RAISE_THRESHOLD:
+                message = f"LOWER your RIGHT brow! Only raise LEFT!"
+            else:
+                message = f"L:{brow_left:.2f} - Raise your LEFT eyebrow!"
 
         elif challenge == 'RAISE_RIGHT_BROW':
-            # User's RIGHT brow = MediaPipe RIGHT brow (NOT swapped for eyebrows!)
             detected = brow_right > self.SINGLE_BROW_THRESHOLD and brow_left < self.EYEBROW_RAISE_THRESHOLD
-            message = f"L:{brow_left:.2f} R:{brow_right:.2f} (need R>{self.SINGLE_BROW_THRESHOLD})" + (" ✓" if detected else "")
+            if detected:
+                message = f"✓ Right brow raised!"
+            elif brow_left > self.SINGLE_BROW_THRESHOLD and brow_right < self.EYEBROW_RAISE_THRESHOLD:
+                message = f"WRONG! That's your LEFT brow! Raise RIGHT!"
+            elif brow_right > self.SINGLE_BROW_THRESHOLD and brow_left > self.EYEBROW_RAISE_THRESHOLD:
+                message = f"LOWER your LEFT brow! Only raise RIGHT!"
+            else:
+                message = f"R:{brow_right:.2f} - Raise your RIGHT eyebrow!"
 
         elif challenge == 'NOD':
             detected = self._check_nod()
