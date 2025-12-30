@@ -712,6 +712,12 @@ class FastBiometricDemo:
         self._cur_yaw = 0
         self._cur_pitch = 0
 
+        # Stability tracking for enrollment
+        self._face_positions = deque(maxlen=10)  # Track last 10 face positions
+        self._stability_threshold = 15  # Max pixels of movement allowed
+        self._is_stable = False
+        self._stability_score = 0.0
+
         # Stats
         self.stats = {'frames': 0, 'faces': 0, 'enrolled': len(self.face_db.faces)}
 
@@ -1153,6 +1159,65 @@ class FastBiometricDemo:
             cv2.putText(frame, line, (60, y), font, 0.4, color, 1)
             y += 20
 
+    def _draw_head_placeholder(self, frame, target_yaw, target_pitch):
+        """Draw a head silhouette placeholder showing expected pose."""
+        h, w = frame.shape[:2]
+
+        # Head placeholder position (center of frame)
+        cx, cy = w // 2, h // 2 + 40
+        head_w, head_h = 180, 220
+
+        # Calculate offset based on target pose
+        offset_x = int(target_yaw * 2)  # Horizontal shift for yaw
+        offset_y = int(target_pitch * 2)  # Vertical shift for pitch (FIXED: removed negation)
+
+        # Draw head oval outline
+        head_color = (100, 100, 100)  # Gray for placeholder
+
+        # Draw the head silhouette (ellipse)
+        cv2.ellipse(frame, (cx + offset_x, cy + offset_y), (head_w // 2, head_h // 2),
+                   0, 0, 360, head_color, 2)
+
+        # Draw face guidelines
+        # Vertical center line (nose)
+        nose_offset = int(target_yaw * 1.5)
+        cv2.line(frame, (cx + nose_offset, cy - 60 + offset_y),
+                (cx + nose_offset, cy + 40 + offset_y), head_color, 1)
+
+        # Eyes line
+        eye_y = cy - 30 + offset_y
+        cv2.line(frame, (cx - 50 + offset_x, eye_y), (cx + 50 + offset_x, eye_y), head_color, 1)
+
+        # Draw direction arrow
+        arrow_len = 50
+        if abs(target_yaw) > 5:  # Horizontal arrow for left/right
+            arrow_x = cx + (arrow_len if target_yaw > 0 else -arrow_len)
+            cv2.arrowedLine(frame, (cx, cy - 100), (arrow_x, cy - 100),
+                           self.C['cyan'], 3, tipLength=0.3)
+
+        if abs(target_pitch) > 5:  # Vertical arrow for up/down (FIXED: reversed direction)
+            # Positive pitch = tilt head UP (look up) = arrow points UP on screen
+            # Negative pitch = tilt head DOWN (look down) = arrow points DOWN on screen
+            arrow_y = cy - 100 + (arrow_len if target_pitch > 0 else -arrow_len)
+            cv2.arrowedLine(frame, (cx, cy - 100), (cx, arrow_y),
+                           self.C['cyan'], 3, tipLength=0.3)
+
+        # Draw position text
+        if target_yaw < -5:
+            cv2.putText(frame, "LEFT", (cx - 100, cy - 120), cv2.FONT_HERSHEY_SIMPLEX,
+                       0.7, self.C['cyan'], 2)
+        elif target_yaw > 5:
+            cv2.putText(frame, "RIGHT", (cx + 40, cy - 120), cv2.FONT_HERSHEY_SIMPLEX,
+                       0.7, self.C['cyan'], 2)
+
+        # FIXED: Reversed UP/DOWN labels to match actual pose direction
+        if target_pitch > 5:
+            cv2.putText(frame, "DOWN", (cx - 35, cy + 130), cv2.FONT_HERSHEY_SIMPLEX,
+                       0.7, self.C['cyan'], 2)
+        elif target_pitch < -5:
+            cv2.putText(frame, "UP", (cx - 20, cy - 140), cv2.FONT_HERSHEY_SIMPLEX,
+                       0.7, self.C['cyan'], 2)
+
     def draw_enrollment(self, frame):
         if not self._enrolling:
             return
@@ -1178,14 +1243,30 @@ class FastBiometricDemo:
             yaw_ok = abs(self._cur_yaw - target_yaw) < tol
             pitch_ok = abs(self._cur_pitch - target_pitch) < tol
 
-            if yaw_ok and pitch_ok:
+            # Draw head placeholder visual
+            self._draw_head_placeholder(frame, target_yaw, target_pitch)
+
+            # Stability indicator
+            stability_color = self.C['green'] if self._is_stable else self.C['red']
+            cv2.putText(frame, f"Stability: {self._stability_score:.0f}%", (220, 95),
+                       font, 0.5, stability_color, 1)
+
+            # Stability bar
+            cv2.rectangle(frame, (220, 100), (350, 115), self.C['white'], 1)
+            bar_width = int(130 * self._stability_score / 100)
+            cv2.rectangle(frame, (221, 101), (221 + bar_width, 114), stability_color, -1)
+
+            if yaw_ok and pitch_ok and self._is_stable:
                 hold = time.time() - self._hold_start
                 pct = min(100, hold / 0.8 * 100)
-                cv2.putText(frame, f"HOLD! {pct:.0f}%", (20, 125), font, 0.6, self.C['green'], 2)
+                cv2.putText(frame, f"HOLD STILL! {pct:.0f}%", (20, 125), font, 0.6, self.C['green'], 2)
                 cv2.rectangle(frame, (20, 140), (200, 160), self.C['white'], 2)
                 cv2.rectangle(frame, (22, 142), (22 + int(176 * pct/100), 158), self.C['green'], -1)
+            elif yaw_ok and pitch_ok and not self._is_stable:
+                # Correct pose but moving
+                cv2.putText(frame, "STOP MOVING!", (20, 125), font, 0.6, self.C['orange'], 2)
+                cv2.putText(frame, "Keep your head still", (20, 150), font, 0.4, self.C['yellow'], 1)
             else:
-                self._hold_start = time.time()
                 hints = []
                 if self._cur_yaw < target_yaw - tol: hints.append("Turn RIGHT")
                 elif self._cur_yaw > target_yaw + tol: hints.append("Turn LEFT")
@@ -1193,12 +1274,12 @@ class FastBiometricDemo:
                 elif self._cur_pitch > target_pitch + tol: hints.append("Tilt UP")
                 cv2.putText(frame, " & ".join(hints) if hints else "Adjust", (20, 125), font, 0.5, self.C['orange'], 1)
 
-            # Pose indicator
+            # Pose indicator (mini radar)
             ix, iy, ir = w-120, 110, 40
             cv2.circle(frame, (ix, iy), ir, self.C['white'], 2)
             dx = int(ix + (self._cur_yaw / 45) * ir)
             dy = int(iy + (self._cur_pitch / 35) * ir)
-            color = self.C['green'] if (yaw_ok and pitch_ok) else self.C['red']
+            color = self.C['green'] if (yaw_ok and pitch_ok and self._is_stable) else self.C['red']
             cv2.circle(frame, (dx, dy), 6, color, -1)
             tx = int(ix + (target_yaw / 45) * ir)
             ty = int(iy + (target_pitch / 35) * ir)
@@ -1231,8 +1312,45 @@ class FastBiometricDemo:
         self._enroll_step = 0
         logger.info("Enrollment cancelled")
 
+    def _check_stability(self, faces) -> bool:
+        """Check if face position is stable (not moving too much)."""
+        if not faces:
+            self._face_positions.clear()
+            self._is_stable = False
+            self._stability_score = 0.0
+            return False
+
+        # Get current face center
+        largest = max(faces, key=lambda f: f.get('facial_area', {}).get('w', 0) * f.get('facial_area', {}).get('h', 0))
+        a = largest.get('facial_area', {})
+        cx = a.get('x', 0) + a.get('w', 0) // 2
+        cy = a.get('y', 0) + a.get('h', 0) // 2
+
+        self._face_positions.append((cx, cy))
+
+        if len(self._face_positions) < 5:
+            self._is_stable = False
+            self._stability_score = 0.0
+            return False
+
+        # Calculate movement variance
+        positions = list(self._face_positions)
+        x_coords = [p[0] for p in positions]
+        y_coords = [p[1] for p in positions]
+
+        x_range = max(x_coords) - min(x_coords)
+        y_range = max(y_coords) - min(y_coords)
+        movement = max(x_range, y_range)
+
+        # Calculate stability score (0-100)
+        self._stability_score = max(0, min(100, 100 - (movement / self._stability_threshold) * 100))
+        self._is_stable = movement < self._stability_threshold
+
+        return self._is_stable
+
     def process_enrollment(self, frame, faces):
         if not self._enrolling or not faces:
+            self._face_positions.clear()
             return
 
         if self._enroll_step >= 5:
@@ -1249,7 +1367,15 @@ class FastBiometricDemo:
         yaw_ok = abs(self._cur_yaw - target_yaw) < tol
         pitch_ok = abs(self._cur_pitch - target_pitch) < tol
 
+        # Check stability
+        is_stable = self._check_stability(faces)
+
         if not (yaw_ok and pitch_ok):
+            self._hold_start = time.time()
+            return
+
+        # Must be stable AND in correct pose
+        if not is_stable:
             self._hold_start = time.time()
             return
 
@@ -1277,6 +1403,7 @@ class FastBiometricDemo:
             self._enroll_embeddings.append(emb)
             self._enroll_step += 1
             self._hold_start = time.time()
+            self._face_positions.clear()  # Reset stability tracking for next pose
             logger.info(f"Captured angle {self._enroll_step}/5: {pose_name}")
 
     def _finalize_enrollment(self, frame, faces):
