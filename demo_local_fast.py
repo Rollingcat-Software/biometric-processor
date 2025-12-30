@@ -19,8 +19,8 @@ Usage:
     python demo_local_fast.py --profile          # Show performance metrics
 
 Controls:
-    q - Quit  |  m - Cycle modes  |  e - Enroll  |  d - Delete all
-    c - Card  |  r - Record       |  p - Profiler |  h - Help
+    q - Quit  |  m - Cycle modes  |  e - Enroll  |  l - Liveness puzzle
+    d - Delete all  |  c - Card  |  r - Record  |  p - Profiler  |  h - Help
 """
 
 import os
@@ -392,6 +392,327 @@ class FastLivenessDetector:
 
 
 # =============================================================================
+# BIOMETRIC PUZZLE - Active Liveness Challenge System
+# =============================================================================
+
+class BiometricPuzzle:
+    """Biometric Puzzle - Challenge-Response Liveness Detection.
+
+    Extended challenge pool with multiple detection methods:
+    - Eye actions: Blink, Blink Left, Blink Right
+    - Mouth actions: Smile, Open Mouth
+    - Head movements: Turn Left/Right, Look Up/Down
+    - Dynamic actions: Nod, Shake Head, Raise Eyebrows
+    """
+
+    # MediaPipe Face Mesh landmark indices
+    LEFT_EYE = [362, 385, 387, 263, 373, 380]
+    RIGHT_EYE = [33, 160, 158, 133, 153, 144]
+    UPPER_LIP = 13
+    LOWER_LIP = 14
+    MOUTH_LEFT = 61
+    MOUTH_RIGHT = 291
+    LEFT_EYEBROW = [70, 63, 105, 66, 107]
+    RIGHT_EYEBROW = [300, 293, 334, 296, 336]
+    LEFT_EYE_CENTER = 468  # iris
+    RIGHT_EYE_CENTER = 473  # iris
+
+    # Challenge definitions: (name, display_text, detection_func, icon)
+    CHALLENGES = {
+        'BLINK': ('Blink Both Eyes', 'blink', '👁️'),
+        'BLINK_LEFT': ('Blink Left Eye', 'blink_left', '←👁️'),
+        'BLINK_RIGHT': ('Blink Right Eye', 'blink_right', '👁️→'),
+        'SMILE': ('Smile', 'smile', '😊'),
+        'OPEN_MOUTH': ('Open Your Mouth', 'open_mouth', '😮'),
+        'TURN_LEFT': ('Turn Head Left', 'turn_left', '←'),
+        'TURN_RIGHT': ('Turn Head Right', 'turn_right', '→'),
+        'LOOK_UP': ('Look Up', 'look_up', '↑'),
+        'LOOK_DOWN': ('Look Down', 'look_down', '↓'),
+        'RAISE_EYEBROWS': ('Raise Eyebrows', 'raise_eyebrows', '🤨'),
+        'NOD': ('Nod Your Head', 'nod', '↕️'),
+        'SHAKE_HEAD': ('Shake Your Head', 'shake_head', '↔️'),
+    }
+
+    # Thresholds
+    EAR_THRESHOLD = 0.22  # Below this = eye closed
+    MAR_THRESHOLD = 0.5   # Above this = smiling
+    MOUTH_OPEN_THRESHOLD = 0.35  # Above this = mouth open
+    YAW_THRESHOLD = 20    # Degrees for turn left/right
+    PITCH_THRESHOLD = 15  # Degrees for look up/down
+    EYEBROW_RAISE_THRESHOLD = 1.15  # Ratio increase
+
+    def __init__(self, num_challenges: int = 3):
+        self.num_challenges = num_challenges
+        self.challenges = []
+        self.current_idx = 0
+        self.is_active = False
+        self.is_complete = False
+        self.passed = False
+
+        # Detection state
+        self._hold_start = 0
+        self._hold_duration = 0.6  # Seconds to hold action
+        self._action_detected = False
+
+        # For dynamic challenges (nod, shake)
+        self._motion_history = deque(maxlen=30)
+        self._baseline_eyebrow_dist = None
+
+        # Results
+        self.results = []
+
+    def start(self, challenge_types: List[str] = None):
+        """Start a new puzzle with random or specified challenges."""
+        import random
+
+        if challenge_types:
+            self.challenges = challenge_types[:self.num_challenges]
+        else:
+            # Random selection from pool (exclude complex ones for now)
+            simple_pool = ['BLINK', 'SMILE', 'TURN_LEFT', 'TURN_RIGHT',
+                          'LOOK_UP', 'LOOK_DOWN', 'OPEN_MOUTH', 'RAISE_EYEBROWS']
+            self.challenges = random.sample(simple_pool, min(self.num_challenges, len(simple_pool)))
+
+        self.current_idx = 0
+        self.is_active = True
+        self.is_complete = False
+        self.passed = False
+        self._hold_start = 0
+        self._action_detected = False
+        self._baseline_eyebrow_dist = None
+        self.results = []
+
+        logger.info(f"Biometric Puzzle started: {self.challenges}")
+
+    def stop(self):
+        """Stop the puzzle."""
+        self.is_active = False
+        self.is_complete = True
+        logger.info(f"Biometric Puzzle stopped. Results: {self.results}")
+
+    def get_current_challenge(self) -> Optional[Dict]:
+        """Get current challenge info."""
+        if not self.is_active or self.current_idx >= len(self.challenges):
+            return None
+
+        challenge_key = self.challenges[self.current_idx]
+        name, func, icon = self.CHALLENGES.get(challenge_key, ('Unknown', 'unknown', '?'))
+
+        return {
+            'key': challenge_key,
+            'name': name,
+            'icon': icon,
+            'index': self.current_idx,
+            'total': len(self.challenges),
+        }
+
+    def calculate_ear(self, landmarks: List[Tuple[int, int]], eye_indices: List[int]) -> float:
+        """Calculate Eye Aspect Ratio (EAR).
+
+        EAR = (|p2-p6| + |p3-p5|) / (2 * |p1-p4|)
+        Low EAR = eye closed, High EAR = eye open
+        """
+        try:
+            p1 = np.array(landmarks[eye_indices[0]])
+            p2 = np.array(landmarks[eye_indices[1]])
+            p3 = np.array(landmarks[eye_indices[2]])
+            p4 = np.array(landmarks[eye_indices[3]])
+            p5 = np.array(landmarks[eye_indices[4]])
+            p6 = np.array(landmarks[eye_indices[5]])
+
+            vertical_1 = np.linalg.norm(p2 - p6)
+            vertical_2 = np.linalg.norm(p3 - p5)
+            horizontal = np.linalg.norm(p1 - p4)
+
+            if horizontal == 0:
+                return 0.3  # Default open
+
+            return (vertical_1 + vertical_2) / (2.0 * horizontal)
+        except (IndexError, ValueError):
+            return 0.3
+
+    def calculate_mar(self, landmarks: List[Tuple[int, int]]) -> float:
+        """Calculate Mouth Aspect Ratio (MAR).
+
+        MAR = vertical / horizontal
+        High MAR = smiling/open mouth
+        """
+        try:
+            left = np.array(landmarks[self.MOUTH_LEFT])
+            right = np.array(landmarks[self.MOUTH_RIGHT])
+            upper = np.array(landmarks[self.UPPER_LIP])
+            lower = np.array(landmarks[self.LOWER_LIP])
+
+            horizontal = np.linalg.norm(right - left)
+            vertical = np.linalg.norm(lower - upper)
+
+            if horizontal == 0:
+                return 0.3
+
+            return vertical / horizontal
+        except (IndexError, ValueError):
+            return 0.3
+
+    def calculate_eyebrow_raise(self, landmarks: List[Tuple[int, int]]) -> float:
+        """Calculate eyebrow raise ratio compared to baseline."""
+        try:
+            # Average eyebrow Y position
+            left_brow_y = np.mean([landmarks[i][1] for i in self.LEFT_EYEBROW])
+            right_brow_y = np.mean([landmarks[i][1] for i in self.RIGHT_EYEBROW])
+
+            # Average eye Y position
+            left_eye_y = np.mean([landmarks[i][1] for i in self.LEFT_EYE])
+            right_eye_y = np.mean([landmarks[i][1] for i in self.RIGHT_EYE])
+
+            # Distance from eyebrow to eye (lower = raised)
+            left_dist = left_eye_y - left_brow_y
+            right_dist = right_eye_y - right_brow_y
+            avg_dist = (left_dist + right_dist) / 2
+
+            # Set baseline on first call
+            if self._baseline_eyebrow_dist is None:
+                self._baseline_eyebrow_dist = avg_dist
+                return 1.0
+
+            # Ratio (higher = more raised)
+            return avg_dist / self._baseline_eyebrow_dist if self._baseline_eyebrow_dist > 0 else 1.0
+        except (IndexError, ValueError):
+            return 1.0
+
+    def check_challenge(self, landmarks: List[Tuple[int, int]], yaw: float, pitch: float) -> Dict:
+        """Check if current challenge is being performed.
+
+        Returns dict with: detected (bool), progress (0-100), message (str)
+        """
+        if not self.is_active or self.current_idx >= len(self.challenges):
+            return {'detected': False, 'progress': 0, 'message': 'No active challenge'}
+
+        challenge = self.challenges[self.current_idx]
+
+        # Calculate metrics
+        left_ear = self.calculate_ear(landmarks, self.LEFT_EYE)
+        right_ear = self.calculate_ear(landmarks, self.RIGHT_EYE)
+        avg_ear = (left_ear + right_ear) / 2
+        mar = self.calculate_mar(landmarks)
+        eyebrow_ratio = self.calculate_eyebrow_raise(landmarks)
+
+        # Track motion for dynamic challenges
+        self._motion_history.append((yaw, pitch, time.time()))
+
+        # Check based on challenge type
+        detected = False
+        message = ""
+
+        if challenge == 'BLINK':
+            detected = avg_ear < self.EAR_THRESHOLD
+            message = f"EAR: {avg_ear:.2f}" + (" ✓" if detected else " - Blink!")
+
+        elif challenge == 'BLINK_LEFT':
+            detected = left_ear < self.EAR_THRESHOLD and right_ear > self.EAR_THRESHOLD + 0.05
+            message = f"L:{left_ear:.2f} R:{right_ear:.2f}" + (" ✓" if detected else " - Wink Left!")
+
+        elif challenge == 'BLINK_RIGHT':
+            detected = right_ear < self.EAR_THRESHOLD and left_ear > self.EAR_THRESHOLD + 0.05
+            message = f"L:{left_ear:.2f} R:{right_ear:.2f}" + (" ✓" if detected else " - Wink Right!")
+
+        elif challenge == 'SMILE':
+            detected = mar > self.MAR_THRESHOLD
+            message = f"MAR: {mar:.2f}" + (" ✓" if detected else " - Smile!")
+
+        elif challenge == 'OPEN_MOUTH':
+            detected = mar > self.MOUTH_OPEN_THRESHOLD
+            message = f"MAR: {mar:.2f}" + (" ✓" if detected else " - Open wide!")
+
+        elif challenge == 'TURN_LEFT':
+            detected = yaw < -self.YAW_THRESHOLD
+            message = f"Yaw: {yaw:.0f}°" + (" ✓" if detected else " - Turn left!")
+
+        elif challenge == 'TURN_RIGHT':
+            detected = yaw > self.YAW_THRESHOLD
+            message = f"Yaw: {yaw:.0f}°" + (" ✓" if detected else " - Turn right!")
+
+        elif challenge == 'LOOK_UP':
+            detected = pitch > self.PITCH_THRESHOLD
+            message = f"Pitch: {pitch:.0f}°" + (" ✓" if detected else " - Look up!")
+
+        elif challenge == 'LOOK_DOWN':
+            detected = pitch < -self.PITCH_THRESHOLD
+            message = f"Pitch: {pitch:.0f}°" + (" ✓" if detected else " - Look down!")
+
+        elif challenge == 'RAISE_EYEBROWS':
+            detected = eyebrow_ratio > self.EYEBROW_RAISE_THRESHOLD
+            message = f"Brow: {eyebrow_ratio:.2f}x" + (" ✓" if detected else " - Raise brows!")
+
+        elif challenge == 'NOD':
+            detected = self._check_nod()
+            message = "Nod your head up and down" + (" ✓" if detected else "")
+
+        elif challenge == 'SHAKE_HEAD':
+            detected = self._check_shake()
+            message = "Shake your head left and right" + (" ✓" if detected else "")
+
+        # Handle hold timer
+        if detected:
+            if not self._action_detected:
+                self._hold_start = time.time()
+                self._action_detected = True
+
+            hold_time = time.time() - self._hold_start
+            progress = min(100, (hold_time / self._hold_duration) * 100)
+
+            if hold_time >= self._hold_duration:
+                # Challenge completed!
+                self._advance_challenge()
+                return {'detected': True, 'progress': 100, 'message': 'Completed!', 'completed': True}
+
+            return {'detected': True, 'progress': progress, 'message': message}
+        else:
+            self._action_detected = False
+            self._hold_start = time.time()
+            return {'detected': False, 'progress': 0, 'message': message}
+
+    def _check_nod(self) -> bool:
+        """Check for nodding motion (pitch oscillation)."""
+        if len(self._motion_history) < 20:
+            return False
+
+        pitches = [p for _, p, _ in self._motion_history]
+        pitch_range = max(pitches) - min(pitches)
+        return pitch_range > 25  # Need 25 degrees of pitch movement
+
+    def _check_shake(self) -> bool:
+        """Check for head shake motion (yaw oscillation)."""
+        if len(self._motion_history) < 20:
+            return False
+
+        yaws = [y for y, _, _ in self._motion_history]
+        yaw_range = max(yaws) - min(yaws)
+        return yaw_range > 35  # Need 35 degrees of yaw movement
+
+    def _advance_challenge(self):
+        """Move to next challenge or complete puzzle."""
+        self.results.append({
+            'challenge': self.challenges[self.current_idx],
+            'passed': True,
+            'time': time.time()
+        })
+
+        self.current_idx += 1
+        self._action_detected = False
+        self._hold_start = 0
+        self._baseline_eyebrow_dist = None
+        self._motion_history.clear()
+
+        if self.current_idx >= len(self.challenges):
+            self.is_complete = True
+            self.is_active = False
+            self.passed = True
+            logger.info("Biometric Puzzle PASSED - All challenges completed!")
+        else:
+            logger.info(f"Challenge {self.current_idx}/{len(self.challenges)}: {self.challenges[self.current_idx]}")
+
+
+# =============================================================================
 # FACE DATABASE
 # =============================================================================
 
@@ -645,7 +966,7 @@ class EmbeddingExtractor:
 class FastBiometricDemo:
     """Ultra-fast biometric demo targeting 20-30+ FPS."""
 
-    MODES = ["all", "face", "quality", "demographics", "landmarks", "liveness", "enroll", "verify", "card"]
+    MODES = ["all", "face", "quality", "demographics", "landmarks", "liveness", "puzzle", "enroll", "verify", "card"]
 
     def __init__(self, camera: int = 0, mode: str = "all", profile: bool = False):
         self.camera = camera
@@ -717,6 +1038,10 @@ class FastBiometricDemo:
         self._stability_threshold = 15  # Max pixels of movement allowed
         self._is_stable = False
         self._stability_score = 0.0
+
+        # Biometric Puzzle - liveness challenge system
+        self.puzzle = BiometricPuzzle(num_challenges=3)
+        self._enroll_phase = 0  # 0=not enrolling, 1=puzzle phase, 2=capture phase
 
         # Stats
         self.stats = {'frames': 0, 'faces': 0, 'enrolled': len(self.face_db.faces)}
@@ -922,7 +1247,7 @@ class FastBiometricDemo:
     def detect_card(self, frame: np.ndarray) -> Dict:
         """Detect card with caching."""
         now = time.time()
-        if now - self._card_cache['time'] < 0.5:  # Cache for 500ms (card doesn't need 30fps)
+        if now - self._card_cache['time'] < 0.15:  # Cache for 150ms (~7 FPS for card detection)
             return self._card_cache['result'] or {'detected': False}
 
         result = self.card_detector.detect(frame)
@@ -1143,8 +1468,8 @@ class FastBiometricDemo:
 
         lines = [
             "", "CONTROLS:", "  q - Quit", "  m - Cycle modes", "  e - Enroll face",
-            "  d - Delete all enrolled", "  c - Card detection", "  r - Toggle recording",
-            "  p - Toggle profiler", "  h - This help", "  Space - Pause",
+            "  l - Liveness puzzle", "  d - Delete all enrolled", "  c - Card detection",
+            "  r - Toggle recording", "  p - Toggle profiler", "  h - This help", "  Space - Pause",
             "", "OPTIMIZATIONS:",
             "  - Direct OpenCV Haar (~20ms vs 400ms)",
             "  - MediaPipe reuse for landmarks",
@@ -1218,8 +1543,121 @@ class FastBiometricDemo:
             cv2.putText(frame, "UP", (cx - 20, cy - 140), cv2.FONT_HERSHEY_SIMPLEX,
                        0.7, self.C['cyan'], 2)
 
+    def draw_puzzle(self, frame, challenge_result: Dict = None):
+        """Draw biometric puzzle UI."""
+        if not self.puzzle.is_active:
+            return
+
+        h, w = frame.shape[:2]
+        challenge = self.puzzle.get_current_challenge()
+
+        if not challenge:
+            return
+
+        # Draw overlay panel at top
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (w, 200), self.C['black'], -1)
+        cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+
+        # Title
+        title = "BIOMETRIC PUZZLE" if self.mode == "puzzle" else "LIVENESS CHECK"
+        cv2.putText(frame, title, (20, 35), font, 0.8, self.C['cyan'], 2)
+
+        # Challenge counter
+        cv2.putText(frame, f"Challenge {challenge['index']+1}/{challenge['total']}",
+                   (w - 180, 35), font, 0.6, self.C['white'], 1)
+
+        # Progress bar (overall)
+        overall_progress = challenge['index'] / challenge['total']
+        cv2.rectangle(frame, (20, 50), (w-20, 70), self.C['white'], 2)
+        cv2.rectangle(frame, (22, 52), (22 + int((w-44) * overall_progress), 68),
+                     self.C['green'], -1)
+
+        # Current challenge display
+        cv2.putText(frame, challenge['name'], (20, 110), font, 1.0, self.C['yellow'], 2)
+
+        # Challenge result/feedback
+        if challenge_result:
+            progress = challenge_result.get('progress', 0)
+            detected = challenge_result.get('detected', False)
+            message = challenge_result.get('message', '')
+
+            # Detection status
+            status_color = self.C['green'] if detected else self.C['orange']
+            cv2.putText(frame, message, (20, 145), font, 0.5, status_color, 1)
+
+            # Hold progress bar
+            if detected and progress > 0:
+                cv2.putText(frame, f"HOLD! {progress:.0f}%", (20, 175), font, 0.6, self.C['green'], 2)
+                cv2.rectangle(frame, (150, 160), (350, 180), self.C['white'], 2)
+                cv2.rectangle(frame, (152, 162), (152 + int(196 * progress/100), 178),
+                             self.C['green'], -1)
+
+        # Visual guide for current challenge
+        self._draw_puzzle_guide(frame, challenge['key'])
+
+        # ESC to cancel
+        cv2.putText(frame, "ESC to cancel", (20, 195), font, 0.4, self.C['red'], 1)
+
+    def _draw_puzzle_guide(self, frame, challenge_key: str):
+        """Draw visual guide for the current challenge."""
+        h, w = frame.shape[:2]
+        cx, cy = w // 2, h // 2 + 50
+
+        # Draw guide based on challenge type
+        guide_color = self.C['cyan']
+
+        if challenge_key == 'BLINK':
+            # Draw eye icons
+            cv2.ellipse(frame, (cx - 50, cy), (30, 15), 0, 0, 360, guide_color, 2)
+            cv2.ellipse(frame, (cx + 50, cy), (30, 15), 0, 0, 360, guide_color, 2)
+            cv2.putText(frame, "CLOSE", (cx - 35, cy + 50), cv2.FONT_HERSHEY_SIMPLEX,
+                       0.6, guide_color, 2)
+
+        elif challenge_key == 'BLINK_LEFT':
+            cv2.ellipse(frame, (cx - 50, cy), (30, 15), 0, 0, 360, guide_color, 2)
+            cv2.line(frame, (cx - 80, cy), (cx - 20, cy), guide_color, 2)  # Closed left
+            cv2.ellipse(frame, (cx + 50, cy), (30, 15), 0, 0, 360, (100, 100, 100), 2)
+
+        elif challenge_key == 'BLINK_RIGHT':
+            cv2.ellipse(frame, (cx - 50, cy), (30, 15), 0, 0, 360, (100, 100, 100), 2)
+            cv2.ellipse(frame, (cx + 50, cy), (30, 15), 0, 0, 360, guide_color, 2)
+            cv2.line(frame, (cx + 20, cy), (cx + 80, cy), guide_color, 2)  # Closed right
+
+        elif challenge_key == 'SMILE':
+            # Draw smile arc
+            cv2.ellipse(frame, (cx, cy + 20), (60, 30), 0, 0, 180, guide_color, 3)
+
+        elif challenge_key == 'OPEN_MOUTH':
+            # Draw open mouth
+            cv2.ellipse(frame, (cx, cy + 20), (40, 50), 0, 0, 360, guide_color, 3)
+
+        elif challenge_key in ['TURN_LEFT', 'TURN_RIGHT']:
+            # Draw arrow
+            direction = -1 if challenge_key == 'TURN_LEFT' else 1
+            cv2.arrowedLine(frame, (cx, cy), (cx + direction * 80, cy),
+                           guide_color, 4, tipLength=0.3)
+
+        elif challenge_key in ['LOOK_UP', 'LOOK_DOWN']:
+            # Draw vertical arrow
+            direction = -1 if challenge_key == 'LOOK_UP' else 1
+            cv2.arrowedLine(frame, (cx, cy), (cx, cy + direction * 80),
+                           guide_color, 4, tipLength=0.3)
+
+        elif challenge_key == 'RAISE_EYEBROWS':
+            # Draw raised eyebrows
+            cv2.ellipse(frame, (cx - 40, cy - 30), (30, 10), -10, 0, 180, guide_color, 3)
+            cv2.ellipse(frame, (cx + 40, cy - 30), (30, 10), 10, 0, 180, guide_color, 3)
+            cv2.arrowedLine(frame, (cx, cy - 20), (cx, cy - 60), guide_color, 2, tipLength=0.3)
+
     def draw_enrollment(self, frame):
         if not self._enrolling:
+            return
+
+        # Phase 1 (puzzle) is handled by draw_puzzle
+        if self._enroll_phase == 1:
             return
 
         h, w = frame.shape[:2]
@@ -1228,7 +1666,10 @@ class FastBiometricDemo:
         cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
 
         font = cv2.FONT_HERSHEY_SIMPLEX
+
+        # Show phase 2 indicator
         cv2.putText(frame, f"ENROLLING: {self._enroll_name}", (20, 30), font, 0.7, self.C['green'], 2)
+        cv2.putText(frame, "Phase 2: Face Capture", (w - 200, 30), font, 0.4, self.C['cyan'], 1)
 
         # Progress bar
         progress = self._enroll_step / 5
@@ -1300,16 +1741,29 @@ class FastBiometricDemo:
         self._hold_start = time.time()
         self._enrolling = True
 
+        # Phase 1: Start with biometric puzzle (liveness check)
+        self._enroll_phase = 1  # 1 = puzzle phase
+        self.puzzle.start()  # Start random puzzle challenges
+
         # IMPORTANT: Switch to enroll mode so face detection runs
         self.mode = "enroll"
         self.mode_idx = self.MODES.index("enroll")
 
-        logger.info(f"Enrollment started: {self._enroll_name}")
+        logger.info(f"Enrollment started: {self._enroll_name} (Phase 1: Liveness Puzzle)")
+
+    def start_puzzle_mode(self):
+        """Start standalone puzzle mode for liveness testing."""
+        self.puzzle.start()
+        self.mode = "puzzle"
+        self.mode_idx = self.MODES.index("puzzle")
+        logger.info("Puzzle mode started")
 
     def cancel_enrollment(self):
         self._enrolling = False
         self._enroll_embeddings = []
         self._enroll_step = 0
+        self._enroll_phase = 0
+        self.puzzle.stop()
         logger.info("Enrollment cancelled")
 
     def _check_stability(self, faces) -> bool:
@@ -1460,7 +1914,35 @@ class FastBiometricDemo:
         tracked = self.tracker.update(detections)
         self.stats['faces'] += len(tracked)
 
-        if self._enrolling:
+        # Process puzzle challenges (standalone mode or enrollment phase 1)
+        puzzle_result = None
+        if self.puzzle.is_active:
+            landmarks = self.detect_landmarks(frame)
+            if landmarks and len(landmarks) > 0:
+                yaw, pitch = self.estimate_pose(landmarks[0], frame.shape[:2])
+                puzzle_result = self.puzzle.check_challenge(landmarks[0], yaw, pitch)
+
+                # Check if puzzle completed
+                if self.puzzle.is_complete:
+                    if self._enrolling and self._enroll_phase == 1:
+                        # Transition to phase 2 (face capture)
+                        if self.puzzle.passed:
+                            self._enroll_phase = 2
+                            self._hold_start = time.time()
+                            logger.info(f"Liveness verified! Moving to Phase 2: Face Capture")
+                        else:
+                            # Puzzle failed - cancel enrollment
+                            self.cancel_enrollment()
+                            logger.warning("Liveness check failed - enrollment cancelled")
+                    elif self.mode == "puzzle":
+                        # Standalone puzzle complete
+                        if self.puzzle.passed:
+                            logger.info("Standalone puzzle PASSED!")
+                        else:
+                            logger.info("Standalone puzzle ended")
+
+        # Process enrollment (only phase 2)
+        if self._enrolling and self._enroll_phase == 2:
             self.process_enrollment(frame, list(tracked.values()))
 
         # Process each face
@@ -1538,6 +2020,7 @@ class FastBiometricDemo:
         self.draw_enrolled_faces(frame)
         self.draw_help(frame)
         self.draw_enrollment(frame)
+        self.draw_puzzle(frame, puzzle_result)
         self.profiler.draw(frame)
 
         # Recording
@@ -1647,6 +2130,10 @@ class FastBiometricDemo:
                     fname = f"snap_{datetime.now().strftime('%H%M%S')}.jpg"
                     cv2.imwrite(fname, frame)
                     logger.info(f"Screenshot: {fname}")
+                elif key == ord('l'):
+                    if not self._enrolling:
+                        self.start_puzzle_mode()
+                        logger.info("Puzzle mode started (liveness test)")
 
         except KeyboardInterrupt:
             pass
