@@ -218,6 +218,7 @@ demo-ui/node_modules/
 # Demo local data
 face_db.pkl
 face_landmarker.task
+*.tflite
 analysis_*.json
 recording_*.mp4
 screenshot_*.jpg
