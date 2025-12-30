@@ -435,8 +435,8 @@ class BiometricPuzzle:
 
     # Thresholds
     EAR_THRESHOLD = 0.22  # Below this = eye closed
-    MAR_THRESHOLD = 0.5   # Above this = smiling
-    MOUTH_OPEN_THRESHOLD = 0.35  # Above this = mouth open
+    MAR_THRESHOLD = 0.35  # Above this = smiling (lowered for natural smiles)
+    MOUTH_OPEN_THRESHOLD = 0.45  # Above this = mouth open (higher than smile)
     YAW_THRESHOLD = 20    # Degrees for turn left/right
     PITCH_THRESHOLD = 15  # Degrees for look up/down
     EYEBROW_RAISE_THRESHOLD = 1.15  # Ratio increase
@@ -1594,6 +1594,10 @@ class FastBiometricDemo:
                 cv2.rectangle(frame, (150, 160), (350, 180), self.C['white'], 2)
                 cv2.rectangle(frame, (152, 162), (152 + int(196 * progress/100), 178),
                              self.C['green'], -1)
+        else:
+            # No face detected - show waiting message
+            cv2.putText(frame, "Looking for face... Position yourself in frame",
+                       (20, 145), font, 0.5, self.C['red'], 1)
 
         # Visual guide for current challenge
         self._draw_puzzle_guide(frame, challenge['key'])
@@ -2088,6 +2092,12 @@ class FastBiometricDemo:
                 elif key == 27:  # ESC
                     if self._enrolling:
                         self.cancel_enrollment()
+                    elif self.puzzle.is_active and self.mode == "puzzle":
+                        # Cancel standalone puzzle mode
+                        self.puzzle.stop()
+                        self.mode = "all"
+                        self.mode_idx = 0
+                        logger.info("Puzzle mode cancelled")
                 elif key == ord('m'):
                     if not self._enrolling:
                         self.mode_idx = (self.mode_idx + 1) % len(self.MODES)
