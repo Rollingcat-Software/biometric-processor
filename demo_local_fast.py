@@ -438,16 +438,16 @@ class BiometricPuzzle:
         'SHAKE_HEAD': ('Shake Your Head', 'shake_head', '↔️'),
     }
 
-    # Thresholds
-    EAR_THRESHOLD = 0.21  # Below this = eye closed
-    EAR_BLINK_THRESHOLD = 0.19  # Must go below this for blink
-    SMILE_CORNER_THRESHOLD = 0.03  # Lip corner raise (must be positive)
-    SMILE_WIDTH_THRESHOLD = 0.55  # Mouth must widen significantly
-    MOUTH_OPEN_THRESHOLD = 0.10  # Mouth open ratio
+    # Thresholds - STRICT values to prevent false positives
+    EAR_THRESHOLD = 0.22  # Above this = eye open
+    EAR_CLOSED_THRESHOLD = 0.15  # Must go BELOW this for closed eye (strict!)
+    SMILE_CORNER_THRESHOLD = 0.04  # Lip corner raise
+    SMILE_WIDTH_THRESHOLD = 0.58  # Mouth must widen significantly
+    MOUTH_OPEN_THRESHOLD = 0.12  # Mouth open ratio
     YAW_THRESHOLD = 20    # Degrees for turn left/right
     PITCH_THRESHOLD = 12  # Degrees for look up/down
-    EYEBROW_RAISE_THRESHOLD = 1.08  # Both eyebrows ratio
-    SINGLE_BROW_THRESHOLD = 1.10  # Single eyebrow raise
+    EYEBROW_RAISE_THRESHOLD = 1.15  # Both eyebrows ratio (stricter!)
+    SINGLE_BROW_THRESHOLD = 1.18  # Single eyebrow raise (stricter!)
 
     def __init__(self, num_challenges: int = 3):
         self.num_challenges = num_challenges
@@ -673,20 +673,20 @@ class BiometricPuzzle:
         message = ""
 
         if challenge == 'BLINK':
-            # Close both eyes
-            detected = avg_ear < self.EAR_BLINK_THRESHOLD
-            message = f"EAR: {avg_ear:.2f}" + (" ✓ CLOSED" if detected else " - Close both eyes!")
+            # Close both eyes - STRICT threshold
+            detected = avg_ear < self.EAR_CLOSED_THRESHOLD
+            message = f"EAR: {avg_ear:.2f} (need <{self.EAR_CLOSED_THRESHOLD})" + (" ✓" if detected else "")
 
         elif challenge == 'CLOSE_LEFT':
-            # User's left eye (appears on LEFT of mirrored screen)
-            # MediaPipe LEFT_EYE = anatomical left = screen left when mirrored
-            detected = left_ear < self.EAR_BLINK_THRESHOLD and right_ear > self.EAR_THRESHOLD
-            message = f"YourL:{left_ear:.2f} YourR:{right_ear:.2f}" + (" ✓" if detected else " - Close YOUR left!")
+            # User's LEFT eye in mirror = MediaPipe RIGHT_EYE (swapped!)
+            # When camera is mirrored, anatomical mapping is reversed
+            detected = right_ear < self.EAR_CLOSED_THRESHOLD and left_ear > self.EAR_THRESHOLD
+            message = f"YourL:{right_ear:.2f} YourR:{left_ear:.2f}" + (" ✓" if detected else " - Close YOUR left!")
 
         elif challenge == 'CLOSE_RIGHT':
-            # User's right eye (appears on RIGHT of mirrored screen)
-            detected = right_ear < self.EAR_BLINK_THRESHOLD and left_ear > self.EAR_THRESHOLD
-            message = f"YourL:{left_ear:.2f} YourR:{right_ear:.2f}" + (" ✓" if detected else " - Close YOUR right!")
+            # User's RIGHT eye in mirror = MediaPipe LEFT_EYE (swapped!)
+            detected = left_ear < self.EAR_CLOSED_THRESHOLD and right_ear > self.EAR_THRESHOLD
+            message = f"YourL:{right_ear:.2f} YourR:{left_ear:.2f}" + (" ✓" if detected else " - Close YOUR right!")
 
         elif challenge == 'SMILE':
             # Smile: corners raised AND mouth widened - STRICT
@@ -719,17 +719,17 @@ class BiometricPuzzle:
 
         elif challenge == 'RAISE_BOTH_BROWS':
             detected = brow_both > self.EYEBROW_RAISE_THRESHOLD
-            message = f"Both: {brow_both:.2f}x" + (" ✓" if detected else f" - Raise both brows!")
+            message = f"Both: {brow_both:.2f}x (need >{self.EYEBROW_RAISE_THRESHOLD})" + (" ✓" if detected else "")
 
         elif challenge == 'RAISE_LEFT_BROW':
-            # User's left eyebrow
-            detected = brow_left > self.SINGLE_BROW_THRESHOLD and brow_right < self.EYEBROW_RAISE_THRESHOLD
-            message = f"L:{brow_left:.2f} R:{brow_right:.2f}" + (" ✓" if detected else " - Raise YOUR left brow only!")
+            # User's LEFT brow in mirror = MediaPipe RIGHT brow (swapped!)
+            detected = brow_right > self.SINGLE_BROW_THRESHOLD and brow_left < self.EYEBROW_RAISE_THRESHOLD
+            message = f"YourL:{brow_right:.2f} YourR:{brow_left:.2f} (need >{self.SINGLE_BROW_THRESHOLD})" + (" ✓" if detected else "")
 
         elif challenge == 'RAISE_RIGHT_BROW':
-            # User's right eyebrow
-            detected = brow_right > self.SINGLE_BROW_THRESHOLD and brow_left < self.EYEBROW_RAISE_THRESHOLD
-            message = f"L:{brow_left:.2f} R:{brow_right:.2f}" + (" ✓" if detected else " - Raise YOUR right brow only!")
+            # User's RIGHT brow in mirror = MediaPipe LEFT brow (swapped!)
+            detected = brow_left > self.SINGLE_BROW_THRESHOLD and brow_right < self.EYEBROW_RAISE_THRESHOLD
+            message = f"YourL:{brow_right:.2f} YourR:{brow_left:.2f} (need >{self.SINGLE_BROW_THRESHOLD})" + (" ✓" if detected else "")
 
         elif challenge == 'NOD':
             detected = self._check_nod()
