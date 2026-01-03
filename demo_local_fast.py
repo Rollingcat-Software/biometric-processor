@@ -108,6 +108,36 @@ class ProfilerContext:
 
 
 # =============================================================================
+# HELPER: Get base path for bundled files (works in frozen exe)
+# =============================================================================
+
+def get_base_path():
+    """Get base path for data files - works both in dev and frozen exe."""
+    if getattr(sys, 'frozen', False):
+        # Running as compiled exe
+        return sys._MEIPASS
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def get_resource_path(filename):
+    """Get full path to a resource file."""
+    # First check in base path (for frozen exe)
+    base = get_base_path()
+    path = os.path.join(base, filename)
+    if os.path.exists(path):
+        return path
+    # Then check current directory
+    if os.path.exists(filename):
+        return os.path.abspath(filename)
+    # Then check relative to script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(script_dir, filename)
+    if os.path.exists(path):
+        return path
+    return filename  # Return as-is, let caller handle missing file
+
+
+# =============================================================================
 # FAST FACE DETECTOR (MediaPipe Tasks API - handles rotated faces!)
 # =============================================================================
 
@@ -147,8 +177,11 @@ class FastFaceDetector:
                     from mediapipe.tasks.python import vision
                     import urllib.request
 
-                    model_path = "blaze_face_short_range.tflite"
+                    # Use get_resource_path for frozen exe support
+                    model_path = get_resource_path("blaze_face_short_range.tflite")
                     if not os.path.exists(model_path):
+                        # Try downloading to current directory
+                        model_path = "blaze_face_short_range.tflite"
                         logger.info("Downloading BlazeFace model for face detection...")
                         url = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite"
                         urllib.request.urlretrieve(url, model_path)
@@ -159,7 +192,7 @@ class FastFaceDetector:
                     )
                     cls._detector = vision.FaceDetector.create_from_options(opts)
                     cls._use_tasks = True
-                    logger.info("Loaded MediaPipe Tasks Face Detector (handles rotated faces)")
+                    logger.info(f"Loaded MediaPipe Tasks Face Detector from {model_path}")
                     return
 
                 # Fallback to Solutions API if Tasks not available
@@ -175,13 +208,33 @@ class FastFaceDetector:
 
             except Exception as e:
                 logger.warning(f"MediaPipe Face Detection failed, falling back to Haar: {e}")
-                # Fallback to Haar
-                opencv_data = os.path.join(cv2.__path__[0], "data")
-                cascade_path = os.path.join(opencv_data, "haarcascade_frontalface_alt2.xml")
-                cls._detector = cv2.CascadeClassifier(cascade_path)
-                cls._mp = None
-                cls._use_tasks = False
-                logger.info(f"Loaded Haar Cascade fallback: {cascade_path}")
+                # Fallback to Haar - try multiple locations
+                cascade_path = None
+                cascade_name = "haarcascade_frontalface_alt2.xml"
+
+                # Try bundled location first
+                bundled_path = get_resource_path(cascade_name)
+                if os.path.exists(bundled_path):
+                    cascade_path = bundled_path
+                else:
+                    # Try OpenCV's data directory
+                    try:
+                        opencv_data = os.path.join(cv2.__path__[0], "data")
+                        opencv_path = os.path.join(opencv_data, cascade_name)
+                        if os.path.exists(opencv_path):
+                            cascade_path = opencv_path
+                    except:
+                        pass
+
+                if cascade_path and os.path.exists(cascade_path):
+                    cls._detector = cv2.CascadeClassifier(cascade_path)
+                    if cls._detector.empty():
+                        raise RuntimeError(f"Failed to load cascade from {cascade_path}")
+                    cls._mp = None
+                    cls._use_tasks = False
+                    logger.info(f"Loaded Haar Cascade fallback: {cascade_path}")
+                else:
+                    raise RuntimeError(f"Could not find {cascade_name} in any location")
 
     def detect(self, frame: np.ndarray, scale_factor: float = 1.1, min_neighbors: int = 4,
                min_size: Tuple[int, int] = (30, 30)) -> List[Dict]:
@@ -1161,6 +1214,7 @@ class FastBiometricDemo:
         self._demo_cache = {}
         self._demo_interval = 2.0  # Demographics still slow, cache longer
         self._last_demo_time = 0
+        self._last_demo_result = {}  # Persistent last-known demographics (prevents flickering)
 
         self._verify_cache = {}
         self._verify_interval = 2.0
@@ -1224,9 +1278,10 @@ class FastBiometricDemo:
                     from mediapipe.tasks import python as tasks
                     from mediapipe.tasks.python import vision
 
-                    model_path = "face_landmarker.task"
+                    model_path = get_resource_path("face_landmarker.task")
                     if not os.path.exists(model_path):
                         import urllib.request
+                        model_path = "face_landmarker.task"
                         logger.info("Downloading face landmarker model...")
                         url = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
                         urllib.request.urlretrieve(url, model_path)
@@ -1330,44 +1385,90 @@ class FastBiometricDemo:
             return 0, 0
 
     def analyze_demographics(self, frame: np.ndarray, region: Dict) -> Dict:
-        """Analyze demographics with caching."""
-        now = time.time()
-        key = f"{region['x']//50}_{region['y']//50}"
+        """Analyze demographics with caching and improved gender detection.
 
+        Uses persistent last-known result to prevent UI flickering.
+        """
+        now = time.time()
+        # Use larger buckets (100px) and center-based key for stability
+        cx, cy = region['x'] + region['w'] // 2, region['y'] + region['h'] // 2
+        key = f"{cx//100}_{cy//100}"
+
+        # Return cached result if still valid
         if key in self._demo_cache and now - self._demo_cache[key]['t'] < self._demo_interval:
+            self._last_demo_result = self._demo_cache[key]['d']
             return self._demo_cache[key]['d']
 
-        if now - self._last_demo_time < 1.5:  # Throttle
-            return self._demo_cache.get(key, {}).get('d', {})
+        # Throttle: return last known result instead of empty dict (prevents flickering)
+        if now - self._last_demo_time < 1.5:
+            return self._last_demo_result
 
         self._last_demo_time = now
 
         try:
             x, y, w, h = region['x'], region['y'], region['w'], region['h']
-            pad = 15
-            x, y = max(0, x - pad), max(0, y - pad)
-            face = frame[y:y+h+2*pad, x:x+w+2*pad]
+            frame_h, frame_w = frame.shape[:2]
 
-            if face.size == 0 or face.shape[0] < 48:
-                return {}
+            # Increased padding for better context (especially chin/forehead)
+            pad_x = int(w * 0.4)  # 40% horizontal padding
+            pad_y = int(h * 0.5)  # 50% vertical padding (more for forehead/chin)
+
+            x1 = max(0, x - pad_x)
+            y1 = max(0, y - pad_y)
+            x2 = min(frame_w, x + w + pad_x)
+            y2 = min(frame_h, y + h + pad_y)
+
+            face = frame[y1:y2, x1:x2]
+
+            if face.size == 0 or face.shape[0] < 48 or face.shape[1] < 48:
+                return self._last_demo_result  # Return last known instead of empty
+
+            # Resize to standard size for consistent model input
+            face_resized = cv2.resize(face, (224, 224), interpolation=cv2.INTER_LANCZOS4)
+
+            # Apply CLAHE for lighting normalization (improves gender detection)
+            lab = cv2.cvtColor(face_resized, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            l = clahe.apply(l)
+            lab = cv2.merge([l, a, b])
+            face_enhanced = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
             df = self._load_deepface()
-            results = df.analyze(face, actions=['age', 'gender', 'emotion'],
+            results = df.analyze(face_enhanced, actions=['age', 'gender', 'emotion'],
                                 enforce_detection=False, detector_backend='skip', silent=True)
 
             if results:
                 r = results[0] if isinstance(results, list) else results
+
+                # Use confidence-based gender with threshold
+                gender_info = r.get('gender', {})
+                if isinstance(gender_info, dict):
+                    man_conf = gender_info.get('Man', 0)
+                    woman_conf = gender_info.get('Woman', 0)
+                    # Only assign gender if confidence > 60%
+                    if man_conf > 60:
+                        gender = 'M'
+                    elif woman_conf > 60:
+                        gender = 'F'
+                    else:
+                        gender = '?'  # Uncertain
+                else:
+                    # Fallback for older DeepFace versions
+                    gender = 'M' if r.get('dominant_gender') == 'Man' else 'F'
+
                 data = {
                     'age': int(r.get('age', 0)),
-                    'gender': 'M' if r.get('dominant_gender') == 'Man' else 'F',
+                    'gender': gender,
                     'emotion': r.get('dominant_emotion', '?')[:6]
                 }
                 self._demo_cache[key] = {'d': data, 't': now}
+                self._last_demo_result = data  # Update persistent result
                 return data
         except Exception:
             pass
 
-        return self._demo_cache.get(key, {}).get('d', {})
+        return self._last_demo_result  # Always return last known (never empty)
 
     def verify_face(self, frame: np.ndarray, region: Dict, face_id: int) -> Optional[Tuple[str, float]]:
         """Verify face against database."""
@@ -2193,10 +2294,10 @@ class FastBiometricDemo:
             if self.mode in ["all", "demographics"]:
                 with self.profiler.time("demo"):
                     demo = self.analyze_demographics(frame, region)
-                if demo:
-                    info['Age'] = demo.get('age', '?')
-                    info['Gender'] = demo.get('gender', '?')
-                    info['Mood'] = demo.get('emotion', '?')
+                # Always show demographics (use placeholders until first analysis completes)
+                info['Age'] = demo.get('age', '...')
+                info['Gender'] = demo.get('gender', '...')
+                info['Mood'] = demo.get('emotion', '...')
 
             # Liveness (moderate - cached)
             if self.mode in ["all", "liveness"]:

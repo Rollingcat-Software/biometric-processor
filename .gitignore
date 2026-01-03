@@ -216,7 +216,6 @@ demo-ui/node_modules/
 .claude/settings.local.json
 
 # Demo local data
-face_db.pkl
 face_landmarker.task
 *.tflite
 analysis_*.json
