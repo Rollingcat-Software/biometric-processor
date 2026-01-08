@@ -135,9 +135,10 @@ class Settings(BaseSettings):
 
     # Database (PostgreSQL with pgvector)
     # CRITICAL: In-memory repositories removed - only real database allowed
+    # SECURITY: No default credentials - must be provided via environment variable
     DATABASE_URL: Optional[str] = Field(
-        default="postgresql://postgres:postgres_dev_password@postgres:5432/identity_core_db",
-        description="PostgreSQL database URL with pgvector extension (REQUIRED - no mock/in-memory allowed)"
+        default=None,
+        description="PostgreSQL database URL with pgvector extension (REQUIRED - set via DATABASE_URL env var)"
     )
     DATABASE_POOL_MIN_SIZE: int = Field(default=0, ge=0, le=100)  # 0 = auto-detect
     DATABASE_POOL_MAX_SIZE: int = Field(default=0, ge=0, le=100)  # 0 = auto-detect
