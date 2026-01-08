@@ -315,9 +315,34 @@ class Settings(BaseSettings):
     EMBEDDING_CACHE_MAX_SIZE: int = Field(default=1000, ge=100, le=10000, description="Maximum cached embeddings (100 to 10000)")
 
     # API Key Authentication
+    # SECURITY: In production, API key auth is mandatory
     API_KEY_ENABLED: bool = Field(default=False)
     API_KEY_REQUIRE_AUTH: bool = Field(default=False)
     API_KEY_HEADER: str = Field(default="X-API-Key")
+
+    def get_api_key_config(self) -> dict:
+        """Get API key configuration with production enforcement.
+
+        SECURITY FIX: In production, API key authentication is mandatory.
+        This prevents accidental deployment without authentication.
+        """
+        require_auth = self.API_KEY_REQUIRE_AUTH
+        enabled = self.API_KEY_ENABLED
+
+        # CRITICAL: Enforce authentication in production
+        if self.is_production():
+            if not enabled:
+                raise ValueError(
+                    "SECURITY ERROR: API_KEY_ENABLED must be True in production. "
+                    "Set API_KEY_ENABLED=true environment variable."
+                )
+            require_auth = True  # Always require in production
+
+        return {
+            "enabled": enabled,
+            "require_auth": require_auth,
+            "header": self.API_KEY_HEADER,
+        }
 
     # Metrics (disabled for PaaS deployment)
     METRICS_ENABLED: bool = Field(default=False)
