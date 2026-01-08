@@ -1048,28 +1048,35 @@ class FaceTracker:
 
 
 # =============================================================================
-# CARD DETECTOR (Lazy Load)
+# CARD DETECTOR (Lazy Load) - Optimized for accuracy
 # =============================================================================
 
 class CardDetector:
-    """YOLO card detector with lazy loading."""
+    """YOLO card detector with lazy loading and temporal smoothing."""
 
     CARD_LABELS = {
         'tc_kimlik': 'Turkish ID',
         'ehliyet': 'License',
         'pasaport': 'Passport',
         'ogrenci_karti': 'Student',
+        'akademisyen_karti': 'Academic',  # Added missing class
     }
 
     def __init__(self):
         self._model = None
         self._available = None
+        # Temporal smoothing: keep history of recent detections
+        self._detection_history = deque(maxlen=5)
+        self._last_stable_result = {'detected': False}
 
     def _load(self):
         if self._model is not None:
             return self._model
 
-        model_path = "app/core/card_type_model/best.pt"
+        model_path = get_resource_path("app/core/card_type_model/best.pt")
+        if not os.path.exists(model_path):
+            # Try alternative path
+            model_path = "app/core/card_type_model/best.pt"
         if not os.path.exists(model_path):
             self._available = False
             return None
@@ -1078,14 +1085,57 @@ class CardDetector:
             from ultralytics import YOLO
             self._model = YOLO(model_path)
             self._available = True
-            logger.info("YOLO card model loaded")
+            logger.info(f"YOLO card model loaded from {model_path}")
             return self._model
         except Exception as e:
             logger.warning(f"Card detection unavailable: {e}")
             self._available = False
             return None
 
-    def detect(self, frame: np.ndarray) -> Dict:
+    def _preprocess(self, frame: np.ndarray) -> np.ndarray:
+        """Apply preprocessing to improve detection in varying lighting."""
+        # Convert to LAB and apply CLAHE to L channel for contrast normalization
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l = clahe.apply(l)
+        lab = cv2.merge([l, a, b])
+        return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+    def _get_stable_result(self, current_result: Dict) -> Dict:
+        """Apply temporal smoothing to reduce flickering."""
+        self._detection_history.append(current_result)
+
+        if len(self._detection_history) < 3:
+            return current_result
+
+        # Count recent detections
+        recent_detections = [r for r in self._detection_history if r.get('detected')]
+
+        if len(recent_detections) >= 2:
+            # Majority detected - use the most common class with highest avg confidence
+            class_counts = {}
+            for r in recent_detections:
+                cls = r.get('class', '')
+                if cls not in class_counts:
+                    class_counts[cls] = {'count': 0, 'total_conf': 0, 'last_result': r}
+                class_counts[cls]['count'] += 1
+                class_counts[cls]['total_conf'] += r.get('confidence', 0)
+                class_counts[cls]['last_result'] = r
+
+            # Get most frequent class
+            best_class = max(class_counts.items(), key=lambda x: (x[1]['count'], x[1]['total_conf']))
+            self._last_stable_result = best_class[1]['last_result']
+            return self._last_stable_result
+        elif len(recent_detections) == 0:
+            # No recent detections
+            self._last_stable_result = {'detected': False}
+            return self._last_stable_result
+        else:
+            # Mixed results - return last stable
+            return self._last_stable_result
+
+    def detect(self, frame: np.ndarray, use_smoothing: bool = True) -> Dict:
         model = self._load()
         if model is None:
             return {'detected': False}
@@ -1093,38 +1143,40 @@ class CardDetector:
         try:
             h, w = frame.shape[:2]
 
-            # OPTIMIZATION: Resize to 480px width AND use smaller inference size
-            # This reduces YOLO inference time significantly on CPU
-            max_width = 480
-            if w > max_width:
-                scale = max_width / w
-                small = cv2.resize(frame, (max_width, int(h * scale)), interpolation=cv2.INTER_AREA)
-            else:
-                scale = 1.0
-                small = frame
+            # Preprocess for better detection in varying lighting
+            processed = self._preprocess(frame)
 
-            # Use imgsz=320 for faster CPU inference (default is 640)
-            results = model(small, conf=0.45, verbose=False, imgsz=320)
+            # Model was trained at 768px - use 640px for good balance of accuracy/speed
+            # Don't pre-resize, let YOLO handle it internally (better interpolation)
+            results = model(processed, conf=0.35, verbose=False, imgsz=640)
+
             if len(results[0].boxes) == 0:
-                return {'detected': False}
+                current = {'detected': False}
+            else:
+                best = max(results[0].boxes, key=lambda b: float(b.conf[0]))
+                cls_id = int(best.cls[0])
+                conf = float(best.conf[0])
+                name = model.names[cls_id]
 
-            best = max(results[0].boxes, key=lambda b: float(b.conf[0]))
-            cls_id = int(best.cls[0])
-            conf = float(best.conf[0])
-            name = model.names[cls_id]
+                # Get box coordinates (YOLO returns in original frame coordinates)
+                box = best.xyxy[0].cpu().numpy()
+                x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
 
-            # Scale box back to original size
-            box = best.xyxy[0].cpu().numpy()
-            x1, y1, x2, y2 = int(box[0]/scale), int(box[1]/scale), int(box[2]/scale), int(box[3]/scale)
+                current = {
+                    'detected': True,
+                    'class': name,
+                    'label': self.CARD_LABELS.get(name, name),
+                    'confidence': conf,
+                    'box': (x1, y1, x2, y2),
+                }
 
-            return {
-                'detected': True,
-                'class': name,
-                'label': self.CARD_LABELS.get(name, name),
-                'confidence': conf,
-                'box': (x1, y1, x2, y2),
-            }
-        except Exception:
+            # Apply temporal smoothing if enabled
+            if use_smoothing:
+                return self._get_stable_result(current)
+            return current
+
+        except Exception as e:
+            logger.debug(f"Card detection error: {e}")
             return {'detected': False}
 
     def is_available(self) -> bool:
