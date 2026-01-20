@@ -57,8 +57,8 @@ RUN python -c "import cv2; print('OpenCV version:', cv2.__version__)" && \
 # Copy application code
 COPY . .
 
-# Expose port
-EXPOSE 8080
+# Expose port (default 8080 for GCP, overridden by env in docker-compose)
+EXPOSE ${PORT:-8080}
 
-# Start the application
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Start the application (uses PORT from environment, defaults to 8080)
+CMD ["sh", "-c", "python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
