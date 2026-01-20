@@ -1,6 +1,14 @@
-"""SQLAlchemy async session management.
+"""SQLAlchemy async session management with optimized connection pooling.
 
 Provides async database session factory and dependency injection.
+Includes performance optimizations from Phase 7 of the implementation plan.
+
+Connection Pool Settings:
+- pool_size: Number of persistent connections (default: 20)
+- max_overflow: Additional connections under load (default: 10)
+- pool_timeout: Wait time for connection (default: 30s)
+- pool_recycle: Connection lifetime (default: 1800s/30min)
+- pool_pre_ping: Connection health check (enabled)
 """
 
 import logging
@@ -16,16 +24,18 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool, AsyncAdaptedQueuePool
 
+from app.core.config import settings
+
 logger = logging.getLogger(__name__)
 
-# Database URL from environment
-DATABASE_URL = os.getenv(
+# Database URL from settings (with fallback to environment)
+DATABASE_URL = settings.DATABASE_URL or os.getenv(
     "DATABASE_URL",
     "postgresql+asyncpg://biometric:biometric@localhost:5432/biometric"
 )
 
 # Convert standard postgres URL to asyncpg format if needed
-if DATABASE_URL.startswith("postgresql://"):
+if DATABASE_URL and DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 
@@ -38,44 +48,59 @@ class AsyncSessionFactory:
     def __init__(
         self,
         database_url: str = DATABASE_URL,
-        echo: bool = False,
-        pool_size: int = 5,
-        max_overflow: int = 10,
-        pool_timeout: int = 30,
-        pool_recycle: int = 1800,
+        echo: Optional[bool] = None,
+        pool_size: Optional[int] = None,
+        max_overflow: Optional[int] = None,
+        pool_timeout: Optional[int] = None,
+        pool_recycle: Optional[int] = None,
         pool_pre_ping: bool = True,
     ):
-        """Initialize session factory.
+        """Initialize session factory with optimized pooling.
+
+        Uses configuration from settings by default, with optional overrides.
 
         Args:
             database_url: Database connection URL.
-            echo: Enable SQL logging.
-            pool_size: Connection pool size.
-            max_overflow: Max connections above pool_size.
-            pool_timeout: Timeout for getting connection.
-            pool_recycle: Recycle connections after seconds.
-            pool_pre_ping: Enable connection health checks.
+            echo: Enable SQL logging (default: settings.DB_ECHO).
+            pool_size: Connection pool size (default: settings.DB_POOL_SIZE).
+            max_overflow: Max connections above pool_size (default: settings.DB_MAX_OVERFLOW).
+            pool_timeout: Timeout for getting connection (default: settings.DB_POOL_TIMEOUT).
+            pool_recycle: Recycle connections after seconds (default: settings.DB_POOL_RECYCLE).
+            pool_pre_ping: Enable connection health checks (default: True).
         """
         self._database_url = database_url
         self._engine: Optional[AsyncEngine] = None
         self._session_factory: Optional[async_sessionmaker] = None
 
+        # Use settings defaults if not provided
+        effective_echo = echo if echo is not None else settings.DB_ECHO
+        effective_pool_size = pool_size if pool_size is not None else settings.DB_POOL_SIZE
+        effective_max_overflow = max_overflow if max_overflow is not None else settings.DB_MAX_OVERFLOW
+        effective_pool_timeout = pool_timeout if pool_timeout is not None else settings.DB_POOL_TIMEOUT
+        effective_pool_recycle = pool_recycle if pool_recycle is not None else settings.DB_POOL_RECYCLE
+
         # Engine configuration
         self._engine_kwargs = {
-            "echo": echo,
+            "echo": effective_echo,
             "pool_pre_ping": pool_pre_ping,
-            "pool_recycle": pool_recycle,
+            "pool_recycle": effective_pool_recycle,
         }
 
         # Use queue pool for production, null pool for testing
-        if os.getenv("TESTING", "").lower() == "true":
+        if settings.TESTING or os.getenv("TESTING", "").lower() == "true":
             self._engine_kwargs["poolclass"] = NullPool
+            logger.info("Using NullPool for testing mode")
         else:
             self._engine_kwargs.update({
-                "pool_size": pool_size,
-                "max_overflow": max_overflow,
-                "pool_timeout": pool_timeout,
+                "pool_size": effective_pool_size,
+                "max_overflow": effective_max_overflow,
+                "pool_timeout": effective_pool_timeout,
             })
+            logger.info(
+                f"Connection pool configured: size={effective_pool_size}, "
+                f"overflow={effective_max_overflow}, timeout={effective_pool_timeout}s, "
+                f"recycle={effective_pool_recycle}s"
+            )
 
     async def initialize(self) -> None:
         """Initialize database engine and session factory."""

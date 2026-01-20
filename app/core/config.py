@@ -320,6 +320,24 @@ class Settings(BaseSettings):
     API_KEY_REQUIRE_AUTH: bool = Field(default=False)
     API_KEY_HEADER: str = Field(default="X-API-Key")
 
+    # JWT Configuration (must match Identity Core API)
+    JWT_SECRET: str = Field(
+        default="",
+        description="JWT secret key for token verification (REQUIRED in production)"
+    )
+    JWT_ALGORITHM: str = Field(default="HS256", description="JWT signing algorithm")
+    JWT_ENABLED: bool = Field(default=True, description="Enable JWT authentication")
+    JWT_ISSUER: Optional[str] = Field(default=None, description="Expected JWT issuer")
+    JWT_AUDIENCE: Optional[str] = Field(default=None, description="Expected JWT audience")
+
+    # Database Connection Pool (Phase 7 optimization)
+    DB_POOL_SIZE: int = Field(default=20, ge=5, le=100, description="Database connection pool size")
+    DB_MAX_OVERFLOW: int = Field(default=10, ge=0, le=50, description="Maximum pool overflow connections")
+    DB_POOL_TIMEOUT: int = Field(default=30, ge=5, le=120, description="Pool connection timeout in seconds")
+    DB_POOL_RECYCLE: int = Field(default=1800, ge=300, le=7200, description="Connection recycle time in seconds")
+    DB_ECHO: bool = Field(default=False, description="Echo SQL statements for debugging")
+    TESTING: bool = Field(default=False, description="Enable testing mode (disables connection pooling)")
+
     def get_api_key_config(self) -> dict:
         """Get API key configuration with production enforcement.
 
