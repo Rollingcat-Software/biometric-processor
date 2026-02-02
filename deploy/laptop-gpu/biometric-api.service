@@ -1,0 +1,47 @@
+# Systemd service for Biometric Processor API (GPU)
+# Install: sudo cp biometric-api.service /etc/systemd/system/
+# Enable:  sudo systemctl daemon-reload && sudo systemctl enable biometric-api
+# Start:   sudo systemctl start biometric-api
+# Logs:    journalctl -u biometric-api -f
+
+[Unit]
+Description=Biometric Processor API (GPU)
+After=network-online.target postgresql.service redis.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=biometric
+Group=biometric
+WorkingDirectory=/opt/biometric-processor
+
+# GPU access
+Environment=NVIDIA_VISIBLE_DEVICES=all
+Environment=TF_FORCE_GPU_ALLOW_GROWTH=true
+Environment=TF_CPP_MIN_LOG_LEVEL=2
+
+# Python virtualenv
+Environment=PATH=/opt/biometric-processor/venv/bin:/usr/local/bin:/usr/bin
+EnvironmentFile=/opt/biometric-processor/.env
+
+# Cap GPU power before starting (prevent overheating on laptops)
+ExecStartPre=/usr/bin/nvidia-smi -pl 80
+
+# Start the API
+ExecStart=/opt/biometric-processor/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8001
+
+# Auto-restart on failure
+Restart=always
+RestartSec=5
+
+# Resource limits
+LimitNOFILE=65535
+LimitNPROC=4096
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/biometric-processor /tmp/.deepface
+
+[Install]
+WantedBy=multi-user.target

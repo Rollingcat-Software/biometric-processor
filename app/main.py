@@ -30,8 +30,12 @@ from app.api.routes import admin
 from app.api.routes import live_analysis
 from app.core.config import settings
 from app.core.container import initialize_dependencies, shutdown_dependencies
+from app.core.gpu import configure_gpu
 from app.infrastructure.rate_limit.storage_factory import RateLimitStorageFactory
 from app.infrastructure.web.static_file_service import create_static_file_service
+
+# Configure GPU before any ML model loading
+configure_gpu()
 
 # Configure logging
 if settings.LOG_FORMAT == "json":

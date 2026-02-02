@@ -1,0 +1,75 @@
+# Dockerfile for Laptop GPU deployment with NVIDIA CUDA support
+# Build: docker build -f Dockerfile.laptop-gpu -t biometric-api:gpu .
+# Run:   docker run --gpus all -p 8001:8001 --env-file .env.laptop biometric-api:gpu
+
+FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TF_CPP_MIN_LOG_LEVEL=2 \
+    DEEPFACE_HOME=/tmp/.deepface \
+    PORT=8001 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    TF_FORCE_GPU_ALLOW_GROWTH=true
+
+WORKDIR /app
+
+# Install Python 3.11 and system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    python3.11-dev \
+    python3-pip \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgl1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set python3.11 as default
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+
+# Upgrade pip
+RUN python -m pip install --upgrade pip
+
+# Copy requirements
+COPY requirements-laptop-gpu.txt .
+
+# Create constraint file
+RUN echo "numpy<2.0" > /tmp/constraints.txt && \
+    echo "keras<3.0" >> /tmp/constraints.txt
+
+# Install dependencies in order
+RUN pip install --no-cache-dir -c /tmp/constraints.txt "numpy>=1.26.0,<2.0"
+RUN pip install --no-cache-dir -c /tmp/constraints.txt opencv-python-headless>=4.8.0
+RUN pip install --no-cache-dir -c /tmp/constraints.txt tensorflow==2.15.0
+RUN pip install --no-cache-dir --no-deps deepface>=0.0.79 && \
+    pip install --no-cache-dir -c /tmp/constraints.txt lightphe
+RUN pip install --no-cache-dir -c /tmp/constraints.txt -r requirements-laptop-gpu.txt
+
+# Force headless opencv
+RUN pip uninstall -y opencv-python opencv-contrib-python 2>/dev/null || true && \
+    pip install --no-cache-dir -c /tmp/constraints.txt --force-reinstall opencv-python-headless>=4.8.0
+
+# Verify GPU-enabled TensorFlow
+RUN python -c "import tensorflow as tf; print('TensorFlow:', tf.__version__); print('GPU available:', tf.config.list_physical_devices('GPU'))"
+
+# Copy application code
+COPY . .
+
+EXPOSE 8001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8001/api/v1/health || exit 1
+
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
