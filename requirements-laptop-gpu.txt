@@ -1,0 +1,67 @@
+# Laptop GPU deployment - TensorFlow with CUDA support
+# Requires: NVIDIA driver 545+, CUDA 12.2, cuDNN 8.x
+#
+# Usage:
+#   pip install tensorflow==2.15.0
+#   pip install --no-deps deepface>=0.0.79
+#   pip install -r requirements-laptop-gpu.txt
+
+# ===========================================
+# Core API Framework
+# ===========================================
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+pydantic>=2.5.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+httpx>=0.26.0
+aiofiles>=24.1.0
+structlog>=24.0.0
+
+# ===========================================
+# Image Processing
+# ===========================================
+pillow>=10.3.0
+numpy>=1.26.0,<2.0
+opencv-python-headless>=4.8.0
+scikit-image>=0.21.0
+
+# ===========================================
+# Machine Learning - TensorFlow GPU
+# ===========================================
+# NOTE: tensorflow (not tensorflow-cpu) — auto-detects CUDA
+# tensorflow==2.15.0 is installed separately before this file
+mediapipe==0.10.14
+
+# DeepFace dependencies (deepface itself installed via --no-deps)
+tqdm>=4.0.0
+gdown>=4.0.0
+pandas>=2.0.0
+flask>=1.1.2
+tf-keras>=2.15.0,<2.16.0
+mtcnn>=0.1.0
+retina-face>=0.0.1
+
+# ===========================================
+# Database - PostgreSQL + pgvector
+# ===========================================
+asyncpg>=0.29.0
+pgvector>=0.2.4
+psycopg2-binary>=2.9.0
+
+# ===========================================
+# Caching - Redis
+# ===========================================
+redis>=5.0.0
+
+# ===========================================
+# Monitoring
+# ===========================================
+prometheus_client>=0.17.0
+
+# ===========================================
+# Utilities
+# ===========================================
+psutil>=5.9.0
+gunicorn>=21.0.0
