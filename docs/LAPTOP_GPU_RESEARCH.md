@@ -547,6 +547,100 @@ Cloudflare automatically load-balances and fails over between the two connectors
 
 ---
 
+## Network Type Analysis: Wi-Fi, Mobile Hotspot, Eduroam
+
+### Why Cloudflare Tunnel Works on Restrictive Networks
+
+Cloudflare Tunnel only needs **outbound HTTPS (port 443)** — the same port used by regular web browsing. It does **not** require:
+- Inbound ports to be open
+- Port forwarding on the router
+- A public IP address
+- NAT hole-punching (unlike Tailscale)
+
+This means it works behind **any number of NAT layers**, including Carrier-Grade NAT (CGNAT) used by many ISPs and mobile networks.
+
+### Network Suitability Rating
+
+| Network Type | Works? | Stability | Latency Added | Production Suitable? |
+|-------------|--------|-----------|---------------|---------------------|
+| **Wired Ethernet (home/office)** | Yes | Excellent | +15-30ms | Yes |
+| **Home Wi-Fi (5GHz)** | Yes | Very Good | +20-40ms | Yes |
+| **Home Wi-Fi (2.4GHz)** | Yes | Good | +25-50ms | Acceptable |
+| **Eduroam / University Wi-Fi** | Yes | Good* | +20-45ms | Acceptable* |
+| **Mobile Hotspot (4G/LTE)** | Yes | Unstable | +40-80ms | Not recommended |
+| **Mobile Hotspot (5G)** | Yes | Moderate | +30-60ms | Emergency only |
+| **Coffee shop / Public Wi-Fi** | Yes | Poor | +30-60ms | No |
+
+### Detailed Breakdown
+
+#### Home Wi-Fi — Recommended
+
+Works well for production. The biometric API's typical request/response is small (an image upload + JSON response), so Wi-Fi bandwidth is not a bottleneck. A 5GHz connection on a decent router is nearly as stable as wired for this use case.
+
+**Tip:** Connect via 5GHz band and position the laptop near the router, or better yet, use a USB Ethernet adapter (~$15) for maximum reliability.
+
+#### Eduroam / University Networks — Works, With Caveats
+
+Eduroam allows outbound HTTPS traffic (port 443), which is all Cloudflare Tunnel needs. It works because:
+- The tunnel is outbound-only — no firewall rules to open
+- It uses standard HTTPS, indistinguishable from normal web traffic
+- It works behind the university's NAT without port forwarding
+
+**Potential issues on eduroam:**
+- Some universities apply **captive portals** that require re-authentication every few hours — this will temporarily break the tunnel until you re-authenticate
+- Some networks block port **7844** (used by cloudflared for QUIC protocol) — fix by forcing HTTP/2: `cloudflared tunnel --protocol http2 run biometric-api`
+- Network congestion during peak hours (classes, exams) can increase latency
+- The university may throttle long-lived connections
+
+**Mitigation for eduroam:**
+```bash
+# Force HTTP/2 instead of QUIC (more reliable on restrictive networks)
+cloudflared tunnel --protocol http2 run biometric-api
+
+# Or set it in config.yml:
+# protocol: http2
+```
+
+#### Mobile Hotspot (4G/5G) — Not Recommended for Production
+
+Community reports show Cloudflare Tunnel can be **unstable on mobile networks**, with frequent disconnections:
+- `"lost connection with the edge"` errors
+- `"timeout: no recent network activity"` causing tunnel drops
+- QUIC protocol is especially unreliable on mobile; switching to HTTP/2 helps but doesn't fully solve it
+- Reconnection cycles cause 1-5 second outages
+
+**If mobile is your only option:**
+```bash
+# Always use HTTP/2 on mobile networks
+cloudflared tunnel --protocol http2 run biometric-api
+```
+
+This is acceptable as a **backup/emergency** connection, not as a primary.
+
+#### Public Wi-Fi (cafes, airports) — Avoid
+
+Captive portals, connection limits, bandwidth throttling, and shared congestion make these networks unreliable for hosting any service.
+
+### Recommended Network Setup (Priority Order)
+
+1. **Best:** Wired Ethernet via USB adapter → Home/office router → ISP
+2. **Good:** 5GHz Wi-Fi → Home/office router → ISP
+3. **Acceptable:** Eduroam (with HTTP/2 protocol forced)
+4. **Backup only:** Mobile hotspot (4G/5G with HTTP/2 forced)
+
+### Handling Network Interruptions
+
+Cloudflare Tunnel **automatically reconnects** when the network drops and comes back. The systemd service also auto-restarts both `cloudflared` and the biometric API if they crash. During a network interruption:
+
+- **Tunnel reconnects** in 1-5 seconds after network is restored
+- **In-flight requests** during the outage will timeout on the client side
+- **No data loss** — the API is stateless per-request, database is local
+- **Cloudflare returns 502** to clients while the tunnel is down (clients know to retry)
+
+For maximum uptime, the **two-laptop setup** is the best solution — if one laptop's network drops, Cloudflare automatically routes to the other.
+
+---
+
 ## Sources
 
 - [Best GPUs for AI Inference 2025 - GPU Mart](https://www.gpu-mart.com/blog/best-gpus-for-ai-inference-2025)
@@ -563,3 +657,9 @@ Cloudflare automatically load-balances and fails over between the two connectors
 - [Cloudflare Tunnel vs ngrok vs Tailscale – DEV Community](https://dev.to/mechcloud_academy/cloudflare-tunnel-vs-ngrok-vs-tailscale-choosing-the-right-secure-tunneling-solution-4inm)
 - [ngrok Alternatives – Tailscale](https://tailscale.com/learn/ngrok-alternatives)
 - [Ngrok vs Cloudflare Tunnel vs Tailscale: Complete 2025-26 – InstaTunnel](https://instatunnel.my/blog/comparing-the-big-three-a-comprehensive-analysis-of-ngrok-cloudflare-tunnel-and-tailscale-for-modern-development-teams)
+- [Tunnel with Firewall – Cloudflare Docs](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/tunnel-with-firewall/)
+- [Cloudflare Tunnels FAQ – Cloudflare Docs](https://developers.cloudflare.com/cloudflare-one/faq/cloudflare-tunnels-faq/)
+- [Setting Up Tunnel Behind CGNAT – Cloudflare Community](https://community.cloudflare.com/t/setting-up-new-tunnel-behind-cgnat/872933)
+- [Cloudflare Tunnel Unstable: Frequent Disconnects – Cloudflare Community](https://community.cloudflare.com/t/cloudflare-tunnel-unstable-with-frequent-disconnects/386397)
+- [Problems with Connectivity of Cloudflare Tunnel – Cloudflare Community](https://community.cloudflare.com/t/problems-with-connectivity-of-cloudflare-tunnel/761936)
+- [Tailscale Funnel vs Cloudflare Tunnel vs Nginx – Onidel](https://onidel.com/blog/tailscale-cloudflare-nginx-vps-2025)
