@@ -97,7 +97,7 @@ VENV="$APP_DIR/venv/bin"
 "$VENV/pip" install "numpy>=1.26.0,<2.0"
 "$VENV/pip" install opencv-python-headless>=4.8.0
 "$VENV/pip" install tensorflow==2.15.0
-"$VENV/pip" install --no-deps "deepface>=0.0.79"
+"$VENV/pip" install --no-deps "deepface>=0.0.98"
 "$VENV/pip" install lightphe
 
 # Install remaining GPU requirements if file exists
@@ -187,6 +187,11 @@ echo "      - service: http_status:404"
 echo ""
 echo "  Run tunnel:"
 echo "    cloudflared tunnel run biometric-api"
+echo ""
+echo "  Quick tunnel (no DNS, instant test via trycloudflare.com):"
+echo "    cloudflared tunnel --url http://localhost:8001"
+echo "    # Copy the random URL and test:"
+echo "    # curl https://random-words.trycloudflare.com/api/v1/health"
 echo ""
 echo "  Test:"
 echo "    curl http://localhost:8001/api/v1/health"
