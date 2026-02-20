@@ -86,10 +86,15 @@ def get_face_detector() -> IFaceDetector:
     Returns:
         Face detector implementation with async execution if enabled
     """
-    logger.info(f"Creating face detector: {settings.FACE_DETECTION_BACKEND}")
+    logger.info(
+        f"Creating face detector: {settings.FACE_DETECTION_BACKEND} "
+        f"(anti_spoofing={settings.ANTI_SPOOFING_ENABLED})"
+    )
     return FaceDetectorFactory.create(
         detector_type=settings.FACE_DETECTION_BACKEND,
         align=True,
+        anti_spoofing=settings.ANTI_SPOOFING_ENABLED,
+        anti_spoofing_threshold=settings.ANTI_SPOOFING_THRESHOLD,
         async_enabled=settings.ASYNC_ML_ENABLED,
         thread_pool=get_thread_pool() if settings.ASYNC_ML_ENABLED else None,
     )

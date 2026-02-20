@@ -45,6 +45,28 @@ class MultipleFacesError(BiometricProcessorError):
         return result
 
 
+class SpoofDetectedError(BiometricProcessorError):
+    """Raised when anti-spoofing detects a non-real face.
+
+    This indicates the submitted image is likely:
+    - A photo of a photo (print attack)
+    - A phone/screen replay attack
+    - A deepfake or digitally generated face
+    """
+
+    def __init__(self, antispoof_score: float = 0.0) -> None:
+        super().__init__(
+            message="Spoof detected: the submitted face does not appear to be a live person.",
+            error_code="SPOOF_DETECTED",
+        )
+        self.antispoof_score = antispoof_score
+
+    def to_dict(self) -> dict:
+        result = super().to_dict()
+        result["antispoof_score"] = self.antispoof_score
+        return result
+
+
 class PoorImageQualityError(BiometricProcessorError):
     """Raised when image quality is below acceptable threshold.
 

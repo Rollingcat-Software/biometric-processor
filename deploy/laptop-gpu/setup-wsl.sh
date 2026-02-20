@@ -100,8 +100,11 @@ VENV="$APP_DIR/venv/bin"
 "$VENV/pip" install --no-deps "deepface>=0.0.79"
 "$VENV/pip" install lightphe
 
-# Install remaining requirements if file exists
-if [ -f requirements.txt ]; then
+# Install remaining GPU requirements if file exists
+if [ -f requirements-laptop-gpu.txt ]; then
+    "$VENV/pip" install -r requirements-laptop-gpu.txt
+elif [ -f requirements.txt ]; then
+    warn "requirements-laptop-gpu.txt not found, falling back to requirements.txt"
     "$VENV/pip" install -r requirements.txt
 fi
 

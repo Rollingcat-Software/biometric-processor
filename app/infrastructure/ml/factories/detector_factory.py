@@ -97,6 +97,10 @@ class FaceDetectorFactory:
             "retinaface",
             "mediapipe",
             "yolov8",
+            "yolov11n",
+            "yolov11s",
+            "yolov12n",
+            "centerface",
         ]
 
         if detector_type not in supported_types:
@@ -128,7 +132,10 @@ class FaceDetectorFactory:
         Returns:
             List of supported detector type names
         """
-        return ["opencv", "ssd", "mtcnn", "retinaface", "mediapipe", "yolov8"]
+        return [
+            "opencv", "ssd", "mtcnn", "retinaface", "mediapipe",
+            "yolov8", "yolov11n", "yolov11s", "yolov12n", "centerface",
+        ]
 
     @staticmethod
     def get_recommended_detector() -> str:
@@ -137,4 +144,4 @@ class FaceDetectorFactory:
         Returns:
             Recommended detector type name
         """
-        return "mtcnn"  # Good balance of speed and accuracy
+        return "retinaface"  # Best accuracy, good for production

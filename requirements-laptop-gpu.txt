@@ -3,7 +3,7 @@
 #
 # Usage:
 #   pip install tensorflow==2.15.0
-#   pip install --no-deps deepface>=0.0.79
+#   pip install --no-deps deepface>=0.0.98
 #   pip install -r requirements-laptop-gpu.txt
 
 # ===========================================
@@ -35,6 +35,7 @@ scikit-image>=0.21.0
 mediapipe==0.10.14
 
 # DeepFace dependencies (deepface itself installed via --no-deps)
+# DeepFace 0.0.98+: built-in anti-spoofing, YOLOv11/v12, GhostFaceNet, CenterFace
 tqdm>=4.0.0
 gdown>=4.0.0
 pandas>=2.0.0
@@ -47,7 +48,7 @@ retina-face>=0.0.1
 # Database - PostgreSQL + pgvector
 # ===========================================
 asyncpg>=0.29.0
-pgvector>=0.2.4
+pgvector>=0.3.0
 psycopg2-binary>=2.9.0
 
 # ===========================================

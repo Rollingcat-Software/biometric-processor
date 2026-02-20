@@ -1,4 +1,4 @@
-# GCP Cloud Run - CPU-only ML dependencies
+# Base requirements - CPU-only ML dependencies
 # Note: opencv-python-headless and deepface are installed
 # separately in Dockerfile to avoid dependency conflicts
 
@@ -29,6 +29,7 @@ tensorflow-cpu==2.15.0
 mediapipe==0.10.14
 
 # DeepFace dependencies (deepface itself installed via --no-deps)
+# DeepFace 0.0.98+: built-in anti-spoofing, YOLOv11/v12, GhostFaceNet, CenterFace
 tqdm>=4.0.0
 gdown>=4.0.0
 pandas>=2.0.0
@@ -41,7 +42,7 @@ retina-face>=0.0.1
 # Database - PostgreSQL + pgvector
 # ===========================================
 asyncpg>=0.29.0
-pgvector>=0.2.4
+pgvector>=0.3.0
 psycopg2-binary>=2.9.0
 cloud-sql-python-connector[asyncpg]>=1.0.0
 

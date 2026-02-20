@@ -52,7 +52,8 @@ class Settings(BaseSettings):
 
     # ML Model Settings
     FACE_DETECTION_BACKEND: Literal[
-        "opencv", "ssd", "mtcnn", "retinaface", "mediapipe", "yolov8"
+        "opencv", "ssd", "mtcnn", "retinaface", "mediapipe", "yolov8",
+        "yolov11n", "yolov11s", "yolov12n", "centerface",
     ] = Field(default="opencv")
 
     FACE_RECOGNITION_MODEL: Literal[
@@ -65,9 +66,22 @@ class Settings(BaseSettings):
         "ArcFace",
         "Dlib",
         "SFace",
+        "GhostFaceNet",
     ] = Field(default="Facenet")
 
     MODEL_DEVICE: Literal["cpu", "cuda"] = Field(default="cpu")
+
+    # Anti-Spoofing (DeepFace 0.0.98+ built-in)
+    ANTI_SPOOFING_ENABLED: bool = Field(
+        default=False,
+        description="Enable DeepFace built-in anti-spoofing on face detection"
+    )
+    ANTI_SPOOFING_THRESHOLD: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Minimum antispoof score to accept a face as real"
+    )
 
     # Thresholds
     VERIFICATION_THRESHOLD: float = Field(default=0.6, ge=0.0, le=1.0)
@@ -408,15 +422,8 @@ class Settings(BaseSettings):
     # ============================================================================
     # Performance Optimization Settings
     # ============================================================================
-
-    # Async Execution (Thread Pool for CPU-bound ML operations)
-    ASYNC_ML_ENABLED: bool = Field(default=True)
-    ML_THREAD_POOL_SIZE: int = Field(default=4, ge=1, le=32)
-
-    # Embedding Cache Settings
-    EMBEDDING_CACHE_ENABLED: bool = Field(default=True)
-    EMBEDDING_CACHE_SIZE: int = Field(default=10000, ge=100, le=1000000)
-    EMBEDDING_CACHE_TTL: Optional[int] = Field(default=3600, ge=60)  # 1 hour default
+    # Note: ASYNC_ML_ENABLED and ML_THREAD_POOL_SIZE are defined above (line ~95)
+    # Note: EMBEDDING_CACHE_ENABLED/TTL/MAX_SIZE are defined above (line ~327)
 
     # Repository Settings
     REPOSITORY_MAX_CAPACITY: int = Field(default=100000, ge=1000, le=10000000)
