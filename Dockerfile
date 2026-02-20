@@ -39,7 +39,7 @@ RUN pip install --no-cache-dir -c /tmp/constraints.txt tensorflow-cpu==2.15.0
 
 # 4. Install deepface WITHOUT dependencies to avoid opencv-python
 #    Then install missing deepface dependencies manually
-RUN pip install --no-cache-dir --no-deps deepface>=0.0.79 && \
+RUN pip install --no-cache-dir --no-deps deepface>=0.0.98 && \
     pip install --no-cache-dir -c /tmp/constraints.txt lightphe
 
 # 5. Install remaining requirements with constraints

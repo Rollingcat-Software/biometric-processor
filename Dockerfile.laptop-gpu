@@ -52,7 +52,7 @@ RUN echo "numpy<2.0" > /tmp/constraints.txt && \
 RUN pip install --no-cache-dir -c /tmp/constraints.txt "numpy>=1.26.0,<2.0"
 RUN pip install --no-cache-dir -c /tmp/constraints.txt opencv-python-headless>=4.8.0
 RUN pip install --no-cache-dir -c /tmp/constraints.txt tensorflow==2.15.0
-RUN pip install --no-cache-dir --no-deps deepface>=0.0.79 && \
+RUN pip install --no-cache-dir --no-deps deepface>=0.0.98 && \
     pip install --no-cache-dir -c /tmp/constraints.txt lightphe
 RUN pip install --no-cache-dir -c /tmp/constraints.txt -r requirements-laptop-gpu.txt
 

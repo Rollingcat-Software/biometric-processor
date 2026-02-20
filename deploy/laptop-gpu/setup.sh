@@ -132,7 +132,7 @@ sudo -u biometric "$VENV/pip" install --upgrade pip
 sudo -u biometric "$VENV/pip" install "numpy>=1.26.0,<2.0"
 sudo -u biometric "$VENV/pip" install opencv-python-headless>=4.8.0
 sudo -u biometric "$VENV/pip" install tensorflow==2.15.0
-sudo -u biometric "$VENV/pip" install --no-deps "deepface>=0.0.79"
+sudo -u biometric "$VENV/pip" install --no-deps "deepface>=0.0.98"
 sudo -u biometric "$VENV/pip" install lightphe
 sudo -u biometric "$VENV/pip" install -r requirements-laptop-gpu.txt
 
