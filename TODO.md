@@ -114,6 +114,34 @@ It is consumed by:
 **Week 3**: BM1-BM5 (API consistency), BH4-BH5 (webhooks, proctoring integration)
 **Week 4**: BL1-BL5 (documentation, cleanup)
 
+## AUTH METHOD INTEGRATION GAPS (March 2026)
+
+### Biometric Modality Status
+
+| Modality | Enroll Endpoint | Verify Endpoint | Implementation | Runtime Status |
+|---|---|---|---|---|
+| FACE | POST /api/v1/enroll | POST /api/v1/verify | Full (DeepFace) | Working |
+| FINGERPRINT | POST /api/v1/fingerprint/enroll | POST /api/v1/fingerprint/verify | **Stub only** | **Always fails** |
+| VOICE | POST /api/v1/voice/enroll | POST /api/v1/voice/verify | **Stub only** | **Always fails** |
+| IRIS | None | None | **Not implemented** | N/A |
+
+### Biometric Integration TODOs
+
+- [ ] **BIO-1** Fingerprint enroll/verify stubs always return `success: false` - identity-core-api FingerprintAuthHandler calls these and always fails
+- [ ] **BIO-2** Voice enroll/verify stubs always return `success: false` - identity-core-api VoiceAuthHandler calls these and always fails
+- [ ] **BIO-3** No iris biometric support at all (no endpoints, no handler)
+- [ ] **BIO-4** Fingerprint stub uses simple JSON body but identity-core-api may send different format via BiometricServiceAdapter
+- [ ] **BIO-5** Voice stub uses simple JSON body but identity-core-api may send different format via BiometricServiceAdapter
+- [ ] **BIO-6** Decision needed: implement real fingerprint/voice processing OR delegate to platform authenticators (WebAuthn) instead
+
+### Implementation Notes
+
+For fingerprint: Consider using WebAuthn/FIDO2 platform authenticators instead of server-side fingerprint processing. Modern browsers support `navigator.credentials` with Touch ID / Windows Hello. This would bypass the biometric-processor entirely.
+
+For voice: Requires ML model for speaker verification (e.g., Resemblyzer, SpeechBrain). Significant effort. Currently lowest priority.
+
+---
+
 ### Strategic Decision Needed
 
 The biometric-processor has many advanced features (proctoring, demographics, landmarks, batch processing) that are not used by either consumer. Decision needed:
