@@ -28,6 +28,7 @@ from app.api.routes import proctor
 from app.api.routes import proctor_ws
 from app.api.routes import admin
 from app.api.routes import live_analysis
+from app.api.routes import fingerprint, voice
 from app.core.config import settings
 from app.core.container import initialize_dependencies, shutdown_dependencies
 from app.core.gpu import configure_gpu
@@ -181,6 +182,10 @@ app.include_router(live_analysis.router, prefix=API_PREFIX)
 
 # Admin routes
 app.include_router(admin.router, prefix=API_PREFIX)
+
+# Biometric stub routes (fingerprint, voice)
+app.include_router(fingerprint.router, prefix=API_PREFIX)
+app.include_router(voice.router, prefix=API_PREFIX)
 
 # ============================================================================
 # Frontend Static File Service

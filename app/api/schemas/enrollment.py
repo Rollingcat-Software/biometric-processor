@@ -11,6 +11,7 @@ class EnrollmentResponse(BaseModel):
     quality_score: float = Field(..., ge=0, le=100, description="Image quality score (0-100)")
     message: str = Field(..., description="Human-readable message")
     embedding_dimension: int = Field(..., description="Dimension of face embedding")
+    liveness_score: float = Field(default=1.0, ge=0, le=1, description="Liveness score (0-1). Placeholder until anti-spoofing model is integrated.")
 
     model_config = {
         "json_schema_extra": {
@@ -20,6 +21,7 @@ class EnrollmentResponse(BaseModel):
                 "quality_score": 85.5,
                 "message": "Face enrolled successfully",
                 "embedding_dimension": 128,
+                "liveness_score": 1.0,
             }
         }
     }

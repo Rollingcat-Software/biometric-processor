@@ -121,6 +121,7 @@ async def enroll_face(
             quality_score=result.quality_score,
             message="Face enrolled successfully",
             embedding_dimension=result.get_embedding_dimension(),
+            liveness_score=1.0,  # Placeholder - actual liveness check would need anti-spoofing model
         )
 
         # Store response for idempotency if key provided
