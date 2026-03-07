@@ -38,7 +38,7 @@ It is consumed by:
 
 ### CRITICAL - Breaking consumer integration
 
-- [ ] **BC1** **Fingerprint/Voice endpoints don't exist** - identity-core-api's `BiometricServiceAdapter` calls `enrollFingerprint()`, `verifyFingerprint()`, `enrollVoice()`, `verifyVoice()` but biometric-processor only handles FACE biometrics. These calls will fail with 404. **Fix**: Either add fingerprint/voice processing to biometric-processor, OR document that identity-core-api should handle these through different services, OR add stub endpoints that return appropriate responses.
+- [x] **BC1** Fingerprint and voice stub endpoints added at `/api/v1/fingerprint/enroll`, `/api/v1/fingerprint/verify`, `/api/v1/voice/enroll`, `/api/v1/voice/verify`. Return structured error responses with `implemented: false` instead of 404s. **RESOLVED**.
 - [ ] **BC2** **Web-app `BiometricService.ts` URL mismatch** - Frontend calls `/enroll`, `/verify`, `/search`, `/liveness` directly but doesn't use the correct field names. Frontend sends `user_id` in form data but needs to verify backend expects this field name (check enrollment route schema).
 - [ ] **BC3** **API Key authentication** - Web-app sends `X-API-Key` header. Biometric-processor has `api_key_auth.py` middleware. Ensure the API key validation is consistent and documented.
 
@@ -46,7 +46,7 @@ It is consumed by:
 
 - [ ] **BH1** **No enrollment status tracking** - identity-core-api's `EnrollmentController` expects enrollment status tracking but biometric-processor's enrollment endpoint is synchronous (enroll face immediately, return result). There's no async job tracking. If identity-core-api's frontend expects `PENDING -> PROCESSING -> SUCCESS/FAILED` lifecycle, biometric-processor needs to support this.
 - [ ] **BH2** **No tenant isolation in face DB** - Frontend and identity-core-api send `tenant_id` in enrollment/verification calls. Verify that biometric-processor properly isolates face embeddings by tenant (not mixing faces across tenants).
-- [ ] **BH3** **No quality/liveness scores in enrollment response** - Web-app frontend expects `qualityScore` and `livenessScore` in enrollment data. Verify that biometric-processor's enrollment response includes these or that they need to be computed separately via `/quality` and `/liveness` endpoints.
+- [x] **BH3** **Quality/liveness scores in enrollment response** - Enrollment response schema (EnrollmentResponse) includes `quality_score` and `liveness_score` fields. Quality is computed during enrollment; liveness is placeholder (1.0) until anti-spoofing model is integrated. **RESOLVED**.
 - [ ] **BH4** **Webhook integration with identity-core-api** - biometric-processor has webhook routes but identity-core-api doesn't register any webhooks. For async enrollment processing, webhooks could notify identity-core-api of completion.
 - [ ] **BH5** **Proctoring integration** - biometric-processor has exam proctoring endpoints (`/proctor`, WebSocket) but neither identity-core-api nor web-app use them. These are backend capabilities not exposed to end users.
 
