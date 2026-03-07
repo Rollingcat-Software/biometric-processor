@@ -1018,14 +1018,28 @@ pre-commit install
 - **No Redis**: Caching/queue integration planned for Sprint 5
 - **No Docker**: Containerization planned for Sprint 5
 
+## Biometric Modality Support Status
+
+| Modality | Enroll | Verify | Delete | Status | Notes |
+|---|---|---|---|---|---|
+| Face | POST /enroll | POST /verify | N/A | Working | Full DeepFace implementation |
+| Fingerprint | POST /fingerprint/enroll | POST /fingerprint/verify | DELETE /fingerprint/{id} | **Stub** | Always returns failure |
+| Voice | POST /voice/enroll | POST /voice/verify | DELETE /voice/{id} | **Stub** | Always returns failure |
+| Iris | N/A | N/A | N/A | **Not implemented** | No endpoints |
+
+The fingerprint and voice stubs cause identity-core-api's corresponding auth handlers to always fail at runtime.
+See [TODO.md](./TODO.md) for integration audit and [ROADMAP.md](./ROADMAP.md) for expansion plan.
+
 ## Roadmap
 
 | Sprint | Feature | Status |
 |--------|---------|--------|
 | Sprint 1-2 | Core API & Face Operations | ✅ Complete |
 | Sprint 3 | Liveness & Batch Processing | ✅ Complete |
-| Sprint 4 | PostgreSQL + pgvector | 🔜 Planned |
-| Sprint 5 | Docker, Redis, CI/CD | 🔜 Planned |
+| Sprint 4 | PostgreSQL + pgvector | ✅ Complete |
+| Sprint 5 | Docker, Redis, CI/CD | ✅ Complete |
+| Sprint 6 | Fix fingerprint/voice stubs | 🔜 Planned |
+| Sprint 7 | Voice biometric processing | 🔜 Planned |
 
 ## License
 

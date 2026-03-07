@@ -215,6 +215,9 @@ demo-ui/node_modules/
 # Claude Code local settings
 .claude/settings.local.json
 
+# Biometric database
+face_db.pkl
+
 # Demo local data
 face_landmarker.task
 *.tflite
