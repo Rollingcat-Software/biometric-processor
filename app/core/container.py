@@ -15,6 +15,8 @@ from functools import lru_cache
 from app.application.services.event_publisher import EventPublisher
 from app.application.use_cases.batch_process import BatchEnrollmentUseCase, BatchVerificationUseCase
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
+from app.application.use_cases.generate_puzzle import GeneratePuzzleUseCase
+from app.application.use_cases.verify_puzzle import VerifyPuzzleUseCase
 
 # Application use cases
 from app.application.use_cases.detect_card_type import DetectCardTypeUseCase
@@ -41,6 +43,8 @@ from app.infrastructure.ml.factories.detector_factory import FaceDetectorFactory
 from app.infrastructure.ml.factories.extractor_factory import EmbeddingExtractorFactory
 from app.infrastructure.ml.factories.similarity_factory import SimilarityCalculatorFactory
 from app.infrastructure.ml.liveness.enhanced_liveness_detector import EnhancedLivenessDetector
+from app.infrastructure.ml.liveness.texture_liveness_detector import TextureLivenessDetector
+from app.infrastructure.ml.liveness.uniface_liveness_detector import UniFaceLivenessDetector
 from app.infrastructure.ml.quality.quality_assessor import QualityAssessor
 from app.infrastructure.idempotency import IdempotencyStore
 from app.infrastructure.messaging.event_handlers import BiometricEventHandler, EventRouter
@@ -214,23 +218,41 @@ def get_liveness_detector() -> ILivenessDetector:
     """Get liveness detector instance (singleton).
 
     Returns:
-        Liveness detector implementation
+        Liveness detector implementation based on LIVENESS_BACKEND config.
 
-    Note:
-        Uses EnhancedLivenessDetector which combines multiple techniques:
-        - Texture analysis (LBP) to detect print attacks
-        - Blink detection using eye aspect ratio
-        - Smile detection using mouth aspect ratio
-        - Color/frequency analysis for screen detection
+    Supported backends:
+        - 'enhanced' (default): Multi-modal detector combining LBP texture analysis,
+          blink detection, smile detection, and color/frequency analysis.
+        - 'texture': Texture-only passive liveness detection using Laplacian variance,
+          color distribution, frequency domain, and moire pattern analysis.
+        - 'uniface': UniFace MiniFASNet ONNX model for deep learning based
+          anti-spoofing (print, replay, mask attack detection).
+
+    Configuration:
+        Set LIVENESS_BACKEND environment variable to switch backends.
     """
-    logger.info("Creating liveness detector (enhanced multi-modal)")
-    return EnhancedLivenessDetector(
-        texture_threshold=100.0,
-        liveness_threshold=70.0,
-        enable_blink_detection=True,
-        enable_smile_detection=True,
-        blink_frames_required=2,
-    )
+    backend = settings.LIVENESS_BACKEND
+
+    if backend == "uniface":
+        logger.info("Creating liveness detector (UniFace MiniFASNet)")
+        return UniFaceLivenessDetector(
+            liveness_threshold=settings.LIVENESS_THRESHOLD,
+        )
+    elif backend == "texture":
+        logger.info("Creating liveness detector (texture analysis)")
+        return TextureLivenessDetector(
+            texture_threshold=100.0,
+            liveness_threshold=settings.LIVENESS_THRESHOLD,
+        )
+    else:
+        logger.info("Creating liveness detector (enhanced multi-modal)")
+        return EnhancedLivenessDetector(
+            texture_threshold=100.0,
+            liveness_threshold=settings.LIVENESS_THRESHOLD,
+            enable_blink_detection=True,
+            enable_smile_detection=True,
+            blink_frames_required=2,
+        )
 
 
 @lru_cache()
@@ -749,6 +771,33 @@ def shutdown_thread_pool(wait: bool = True) -> None:
         logger.error(f"Error during thread pool shutdown: {e}", exc_info=True)
 
 
+@lru_cache()
+def get_puzzle_repository():
+    """Get puzzle repository instance (singleton)."""
+    from app.infrastructure.persistence.repositories.redis_puzzle_repository import (
+        RedisPuzzleRepository,
+    )
+    from app.infrastructure.persistence.repositories.memory_proctor_repository import (
+        InMemoryProctorRepository,
+    )
+    if settings.REDIS_HOST:
+        logger.info("Creating puzzle repository (Redis)")
+        return RedisPuzzleRepository(redis_url=settings.redis_url)
+    else:
+        logger.warning("Creating puzzle repository (in-memory) - NOT for production!")
+        return InMemoryProctorRepository()
+
+
+def get_generate_puzzle_use_case() -> GeneratePuzzleUseCase:
+    """Get generate puzzle use case instance."""
+    return GeneratePuzzleUseCase(puzzle_repository=get_puzzle_repository())
+
+
+def get_verify_puzzle_use_case() -> VerifyPuzzleUseCase:
+    """Get verify puzzle use case instance."""
+    return VerifyPuzzleUseCase(puzzle_repository=get_puzzle_repository())
+
+
 def clear_cache() -> None:
     """Clear dependency cache (for testing).
 
@@ -770,3 +819,4 @@ def clear_cache() -> None:
     get_event_handler.cache_clear()
     get_event_router.cache_clear()
     get_event_publisher.cache_clear()
+    get_puzzle_repository.cache_clear()

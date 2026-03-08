@@ -29,6 +29,7 @@ from app.api.routes import proctor_ws
 from app.api.routes import admin
 from app.api.routes import live_analysis
 from app.api.routes import fingerprint, voice
+from app.api.routes import puzzle
 from app.core.config import settings
 from app.core.container import initialize_dependencies, shutdown_dependencies
 from app.core.gpu import configure_gpu
@@ -157,6 +158,7 @@ app.include_router(health.router, prefix=API_PREFIX)
 app.include_router(enrollment.router, prefix=API_PREFIX)
 app.include_router(verification.router, prefix=API_PREFIX)
 app.include_router(liveness.router, prefix=API_PREFIX)
+app.include_router(puzzle.router, prefix=API_PREFIX)
 app.include_router(search.router, prefix=API_PREFIX)
 app.include_router(batch.router, prefix=API_PREFIX)
 app.include_router(card_type_router.router, prefix=API_PREFIX)
