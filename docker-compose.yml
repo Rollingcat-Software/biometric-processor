@@ -1,0 +1,356 @@
+# Docker Compose for Biometric Processor
+# Implements hexagonal architecture with proper service separation
+# Production-ready with health checks, resource limits, and security
+
+version: '3.9'
+
+services:
+  # ============================================================================
+  # PostgreSQL Database with pgvector Extension
+  # ============================================================================
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: biometric-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-biometric_db}
+      POSTGRES_USER: ${POSTGRES_USER:-biometric_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-biometric_pass}
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+      # Performance tuning for development
+      POSTGRES_MAX_CONNECTIONS: 200
+      POSTGRES_SHARED_BUFFERS: 256MB
+      POSTGRES_WORK_MEM: 4MB
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-biometric_user} -d ${POSTGRES_DB:-biometric_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - biometric-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # ============================================================================
+  # Redis for Caching, Rate Limiting, and Event Bus
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: biometric-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+      --save 60 1000
+      --tcp-backlog 511
+      --timeout 300
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - biometric-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # ============================================================================
+  # Biometric Processor API (Main Application)
+  # ============================================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - PYTHON_VERSION=3.11
+    container_name: biometric-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Application
+      APP_NAME: ${APP_NAME:-Biometric Processor API}
+      VERSION: ${VERSION:-1.0.0}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+
+      # API Configuration
+      API_HOST: 0.0.0.0
+      API_PORT: ${API_PORT:-8080}
+      PORT: ${PORT:-8080}
+
+      # Database
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-biometric_user}:${POSTGRES_PASSWORD:-biometric_pass}@postgres:5432/${POSTGRES_DB:-biometric_db}
+      DATABASE_POOL_MIN_SIZE: ${DATABASE_POOL_MIN_SIZE:-5}
+      DATABASE_POOL_MAX_SIZE: ${DATABASE_POOL_MAX_SIZE:-20}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-512}
+
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: ${REDIS_DB:-0}
+      REDIS_MAX_CONNECTIONS: ${REDIS_MAX_CONNECTIONS:-50}
+
+      # ML Configuration
+      FACE_DETECTION_BACKEND: ${FACE_DETECTION_BACKEND:-retinaface}
+      FACE_RECOGNITION_MODEL: ${FACE_RECOGNITION_MODEL:-Facenet512}
+      ASYNC_ML_ENABLED: ${ASYNC_ML_ENABLED:-true}
+      ML_THREAD_POOL_SIZE: ${ML_THREAD_POOL_SIZE:-0}  # 0 = auto-detect
+      EMBEDDING_CACHE_ENABLED: ${EMBEDDING_CACHE_ENABLED:-true}
+      EMBEDDING_CACHE_TTL: ${EMBEDDING_CACHE_TTL:-300}
+      EMBEDDING_CACHE_MAX_SIZE: ${EMBEDDING_CACHE_MAX_SIZE:-1000}
+
+      # Security
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8080}
+      API_KEY_ENABLED: ${API_KEY_ENABLED:-false}  # Disabled for development
+      REQUIRE_HTTPS: ${REQUIRE_HTTPS:-false}
+
+      # Rate Limiting
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_STORAGE: ${RATE_LIMIT_STORAGE:-redis}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-60}
+
+      # Event Bus
+      EVENT_BUS_ENABLED: ${EVENT_BUS_ENABLED:-true}
+      EVENT_BUS_RETRY_ATTEMPTS: ${EVENT_BUS_RETRY_ATTEMPTS:-3}
+      EVENT_BUS_RETRY_DELAY: ${EVENT_BUS_RETRY_DELAY:-1}
+
+      # File Storage
+      UPLOAD_FOLDER: ${UPLOAD_FOLDER:-/app/uploads}
+      MAX_UPLOAD_SIZE: ${MAX_UPLOAD_SIZE:-10485760}  # 10MB
+
+      # Quality Thresholds
+      VERIFICATION_THRESHOLD: ${VERIFICATION_THRESHOLD:-0.4}
+      QUALITY_THRESHOLD: ${QUALITY_THRESHOLD:-70.0}
+      BLUR_THRESHOLD: ${BLUR_THRESHOLD:-100.0}
+      MIN_FACE_SIZE: ${MIN_FACE_SIZE:-80}
+
+      # Multi-image Enrollment
+      MULTI_IMAGE_ENROLLMENT_ENABLED: ${MULTI_IMAGE_ENROLLMENT_ENABLED:-true}
+      MULTI_IMAGE_MIN_IMAGES: ${MULTI_IMAGE_MIN_IMAGES:-2}
+      MULTI_IMAGE_MAX_IMAGES: ${MULTI_IMAGE_MAX_IMAGES:-5}
+
+      # Proctoring
+      PROCTORING_ENABLED: ${PROCTORING_ENABLED:-true}
+      PROCTORING_MAX_SESSION_DURATION: ${PROCTORING_MAX_SESSION_DURATION:-7200}
+      PROCTORING_FRAME_RATE_LIMIT: ${PROCTORING_FRAME_RATE_LIMIT:-5}
+
+      # TensorFlow Configuration
+      TF_CPP_MIN_LOG_LEVEL: 2
+      DEEPFACE_HOME: /tmp/.deepface
+    ports:
+      - "${API_PORT:-8080}:8080"
+    volumes:
+      - ./uploads:/app/uploads
+      - deepface_models:/tmp/.deepface
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/api/v1/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - biometric-network
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '2.0'
+          memory: 4G
+
+  # ============================================================================
+  # Development API (Hot Reload)
+  # ============================================================================
+  api-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      args:
+        - PYTHON_VERSION=3.11
+    container_name: biometric-api-dev
+    restart: unless-stopped
+    profiles:
+      - development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Same as api service but with development settings
+      APP_NAME: ${APP_NAME:-Biometric Processor API (Dev)}
+      ENVIRONMENT: development
+      LOG_LEVEL: DEBUG
+      API_HOST: 0.0.0.0
+      API_PORT: 8080
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-biometric_user}:${POSTGRES_PASSWORD:-biometric_pass}@postgres:5432/${POSTGRES_DB:-biometric_db}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CORS_ALLOWED_ORIGINS: "*"
+      API_KEY_ENABLED: "false"
+      RATE_LIMIT_ENABLED: "true"
+      ASYNC_ML_ENABLED: "true"
+      EVENT_BUS_ENABLED: "true"
+    ports:
+      - "${DEV_API_PORT:-8081}:8080"
+    volumes:
+      - .:/app:ro
+      - ./uploads:/app/uploads
+      - deepface_models:/tmp/.deepface
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8080
+      --reload
+      --reload-dir /app
+      --log-level debug
+    networks:
+      - biometric-network
+
+  # ============================================================================
+  # pgAdmin for Database Management (Optional)
+  # ============================================================================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: biometric-pgadmin
+    restart: unless-stopped
+    profiles:
+      - tools
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@biometric.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - biometric-network
+    depends_on:
+      - postgres
+
+  # ============================================================================
+  # Redis Commander for Redis Management (Optional)
+  # ============================================================================
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: biometric-redis-commander
+    restart: unless-stopped
+    profiles:
+      - tools
+    environment:
+      - REDIS_HOSTS=local:redis:6379:0
+    ports:
+      - "${REDIS_COMMANDER_PORT:-8082}:8081"
+    networks:
+      - biometric-network
+    depends_on:
+      - redis
+
+  # ============================================================================
+  # Prometheus for Metrics Collection (Optional)
+  # ============================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: biometric-prometheus
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - biometric-network
+    depends_on:
+      - api
+
+  # ============================================================================
+  # Grafana for Metrics Visualization (Optional)
+  # ============================================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: biometric-grafana
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./config/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    networks:
+      - biometric-network
+    depends_on:
+      - prometheus
+
+# ============================================================================
+# Networks
+# ============================================================================
+networks:
+  biometric-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
+
+# ============================================================================
+# Volumes
+# ============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  deepface_models:
+    driver: local

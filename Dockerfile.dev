@@ -1,0 +1,73 @@
+# Development Dockerfile with Hot Reload
+# Optimized for fast iteration and debugging
+
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONFAULTHANDLER=1 \
+    TF_CPP_MIN_LOG_LEVEL=2 \
+    DEEPFACE_HOME=/tmp/.deepface \
+    PORT=8080
+
+WORKDIR /app
+
+# Install system dependencies and dev tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgl1 \
+    curl \
+    vim \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Create constraint file
+RUN echo "numpy>=1.26.0,<2.0" > /tmp/constraints.txt && \
+    echo "keras<3.0" >> /tmp/constraints.txt
+
+# Install dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -c /tmp/constraints.txt "numpy>=1.26.0,<2.0" && \
+    pip install --no-cache-dir -c /tmp/constraints.txt opencv-python-headless>=4.8.0 && \
+    pip install --no-cache-dir -c /tmp/constraints.txt tensorflow-cpu==2.15.0 && \
+    pip install --no-cache-dir --no-deps deepface>=0.0.79 && \
+    pip install --no-cache-dir -c /tmp/constraints.txt lightphe && \
+    pip install --no-cache-dir -c /tmp/constraints.txt -r requirements.txt && \
+    pip uninstall -y opencv-python opencv-contrib-python 2>/dev/null || true && \
+    pip install --no-cache-dir -c /tmp/constraints.txt --force-reinstall opencv-python-headless>=4.8.0
+
+# Install development tools
+RUN pip install --no-cache-dir \
+    pytest==8.0.0 \
+    pytest-asyncio==0.23.5 \
+    pytest-cov==4.1.0 \
+    black==24.2.0 \
+    ruff==0.2.2 \
+    mypy==1.8.0 \
+    ipython==8.21.0 \
+    debugpy==1.8.1 \
+    watchfiles==0.21.0
+
+# Copy application code
+COPY . .
+
+# Create upload directory
+RUN mkdir -p /app/uploads /tmp/.deepface
+
+# Expose port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl --fail http://localhost:8080/api/v1/health || exit 1
+
+# Start with hot reload
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload", "--reload-dir", "/app"]
