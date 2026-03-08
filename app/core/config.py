@@ -141,6 +141,17 @@ class Settings(BaseSettings):
     # Liveness Detection Mode
     LIVENESS_MODE: Literal["passive", "active", "combined"] = Field(default="combined")
 
+    # Liveness Detection Backend
+    LIVENESS_BACKEND: Literal["enhanced", "texture", "uniface"] = Field(
+        default="enhanced",
+        description=(
+            "Liveness detection backend: "
+            "'enhanced' = multi-modal (LBP + blink + smile, default), "
+            "'texture' = texture analysis only, "
+            "'uniface' = UniFace MiniFASNet ONNX model"
+        ),
+    )
+
     # Quality Assessment
     MIN_IMAGE_SIZE: int = Field(default=100, ge=50, le=1000)
     MAX_IMAGE_SIZE: int = Field(default=4000, ge=1000, le=10000)
