@@ -339,5 +339,5 @@ async def live_analysis_websocket(
                 "type": "error",
                 "data": {"message": str(e)}
             })
-        except:
+        except Exception:
             pass
