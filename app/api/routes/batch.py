@@ -213,6 +213,27 @@ async def batch_verify(
     """
     logger.info(f"Batch verification request: {len(files)} files")
 
+    # Validate batch size to prevent DoS attacks
+    if len(files) > settings.BATCH_MAX_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Batch size ({len(files)}) exceeds maximum allowed ({settings.BATCH_MAX_SIZE})"
+        )
+
+    # Validate total batch size to prevent memory exhaustion
+    total_size_bytes = 0
+    for file in files:
+        if hasattr(file, 'size') and file.size:
+            total_size_bytes += file.size
+        else:
+            total_size_bytes += 2 * 1024 * 1024
+    max_total_bytes = settings.BATCH_MAX_TOTAL_SIZE_MB * 1024 * 1024
+    if total_size_bytes > max_total_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Total batch size exceeds maximum ({settings.BATCH_MAX_TOTAL_SIZE_MB}MB)"
+        )
+
     # Parse items JSON
     try:
         items_data = json.loads(items)

@@ -51,8 +51,12 @@ router = APIRouter(prefix="/proctoring", tags=["proctoring"])
 
 
 def get_tenant_id(x_tenant_id: str = Header(..., alias="X-Tenant-ID")) -> str:
-    """Extract tenant ID from header."""
-    return x_tenant_id
+    """Extract and validate tenant ID from header."""
+    from app.core.validation import ValidationError, validate_tenant_id
+    try:
+        return validate_tenant_id(x_tenant_id)
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid tenant ID: {str(e)}")
 
 
 def get_reviewer_id(x_reviewer_id: str = Header(None, alias="X-Reviewer-ID")) -> Optional[str]:

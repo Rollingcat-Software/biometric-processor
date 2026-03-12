@@ -15,7 +15,10 @@ router = APIRouter(
     tags=["Admin"],
 )
 
+import threading
+
 # Track metrics in memory (would use Redis in production)
+_metrics_lock = threading.Lock()
 _metrics = {
     "total_verifications": 0,
     "successful_verifications": 0,
@@ -60,7 +63,7 @@ class RecentActivity(BaseModel):
 
 
 def record_activity(activity_type: str, user_id: Optional[str] = None, details: Optional[dict] = None):
-    """Record an activity for the activity log."""
+    """Record an activity for the activity log (thread-safe)."""
     activity = {
         "id": f"act-{int(time.time() * 1000)}",
         "type": activity_type,
@@ -68,37 +71,42 @@ def record_activity(activity_type: str, user_id: Optional[str] = None, details: 
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "details": details,
     }
-    _metrics["activities"].insert(0, activity)
-    # Keep only last 100 activities
-    _metrics["activities"] = _metrics["activities"][:100]
+    with _metrics_lock:
+        _metrics["activities"].insert(0, activity)
+        # Keep only last 100 activities
+        _metrics["activities"] = _metrics["activities"][:100]
 
 
 def record_api_call(response_time_ms: float):
-    """Record an API call for metrics."""
-    _metrics["api_calls_today"] += 1
-    _metrics["api_calls_this_week"] += 1
-    _metrics["response_times"].append(response_time_ms)
-    # Keep only last 1000 response times
-    _metrics["response_times"] = _metrics["response_times"][-1000:]
+    """Record an API call for metrics (thread-safe)."""
+    with _metrics_lock:
+        _metrics["api_calls_today"] += 1
+        _metrics["api_calls_this_week"] += 1
+        _metrics["response_times"].append(response_time_ms)
+        # Keep only last 1000 response times
+        _metrics["response_times"] = _metrics["response_times"][-1000:]
 
 
 def record_verification(success: bool):
-    """Record a verification attempt."""
-    _metrics["total_verifications"] += 1
-    if success:
-        _metrics["successful_verifications"] += 1
+    """Record a verification attempt (thread-safe)."""
+    with _metrics_lock:
+        _metrics["total_verifications"] += 1
+        if success:
+            _metrics["successful_verifications"] += 1
 
 
 def record_search():
-    """Record a search operation."""
-    _metrics["total_searches"] += 1
+    """Record a search operation (thread-safe)."""
+    with _metrics_lock:
+        _metrics["total_searches"] += 1
 
 
 def record_liveness_check(is_spoof: bool):
-    """Record a liveness check."""
-    _metrics["total_liveness_checks"] += 1
-    if is_spoof:
-        _metrics["spoofs_detected"] += 1
+    """Record a liveness check (thread-safe)."""
+    with _metrics_lock:
+        _metrics["total_liveness_checks"] += 1
+        if is_spoof:
+            _metrics["spoofs_detected"] += 1
 
 
 @router.get("/stats", response_model=SystemStats)
