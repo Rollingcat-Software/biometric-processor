@@ -173,7 +173,13 @@ class LiveCameraAnalysisUseCase:
                 if not user_id:
                     response.error = "User ID required for verification mode"
                 elif not self._extractor or not self._repository or not self._similarity:
-                    response.error = "Verification dependencies not available"
+                    logger.error(
+                        "Verification dependencies not available: extractor=%s, repository=%s, similarity=%s",
+                        self._extractor is not None,
+                        self._repository is not None,
+                        self._similarity is not None,
+                    )
+                    response.error = "Verification service not configured"
                 else:
                     verification = await self._verify_face(face_region, user_id, tenant_id)
                     response.verification = verification
@@ -181,7 +187,13 @@ class LiveCameraAnalysisUseCase:
             # Step 7: Search (1:N identification)
             if mode == AnalysisMode.SEARCH:
                 if not self._extractor or not self._repository or not self._similarity:
-                    response.error = "Search dependencies not available"
+                    logger.error(
+                        "Search dependencies not available: extractor=%s, repository=%s, similarity=%s",
+                        self._extractor is not None,
+                        self._repository is not None,
+                        self._similarity is not None,
+                    )
+                    response.error = "Search service not configured"
                 else:
                     search = await self._search_face(face_region, tenant_id)
                     response.search = search

@@ -182,13 +182,23 @@ async def websocket_stream(
                         error_code="INVALID_FRAME",
                         error_message=str(e),
                     )
-                except Exception as e:
-                    logger.error(f"Frame processing error: {e}")
+                except (RuntimeError, TypeError, IOError) as e:
+                    logger.error(f"Frame processing error: {e}", exc_info=True)
                     await manager.send_error(
                         websocket=websocket,
                         error_code="PROCESSING_ERROR",
                         error_message="Failed to process frame",
                     )
+                except Exception as e:
+                    logger.error(f"Unexpected frame processing error: {e}", exc_info=True)
+                    await manager.send_error(
+                        websocket=websocket,
+                        error_code="INTERNAL_ERROR",
+                        error_message="An unexpected error occurred",
+                    )
+                    # Re-raise fatal exceptions
+                    if isinstance(e, (SystemExit, KeyboardInterrupt)):
+                        raise
 
             elif "text" in message:
                 # JSON message
