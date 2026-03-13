@@ -46,7 +46,13 @@
     "embeddings": "Embeddings",
     "config": "Configuration",
     "apiExplorer": "API Explorer",
-    "settings": "Settings"
+    "settings": "Settings",
+    "guidedDemo": "Guided Demo",
+    "groups": {
+      "coreFeatures": "Core Features",
+      "analysis": "Analysis",
+      "advanced": "Advanced"
+    }
   },
   "dashboard": {
     "title": "Biometric Processor Demo",
@@ -67,7 +73,10 @@
     "sections": {
       "features": "Available Features",
       "admin": "Administration"
-    }
+    },
+    "startInteractiveDemo": "Start Interactive Demo",
+    "coreCapabilities": "Core Capabilities",
+    "heroTagline": "Enterprise-grade facial biometrics platform with enrollment, verification, liveness detection, and intelligent face search."
   },
   "enrollment": {
     "title": "Face Enrollment",

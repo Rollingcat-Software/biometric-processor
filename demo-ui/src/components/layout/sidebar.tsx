@@ -22,6 +22,7 @@ import {
   Code,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   X,
   GitCompare,
   Users2,
@@ -38,6 +39,7 @@ import { useAppStore } from '@/lib/store/app-store';
 import { useTranslation } from 'react-i18next';
 
 const navigationItems = [
+  // Main
   {
     title: 'nav.dashboard',
     href: '/',
@@ -45,119 +47,130 @@ const navigationItems = [
     group: 'main',
   },
   {
-    title: 'nav.demo',
-    href: '/unified-demo',
+    title: 'nav.guidedDemo',
+    href: '/demo',
     icon: Sparkles,
     group: 'main',
+    highlighted: true,
   },
+  // Core Features
   {
     title: 'nav.enrollment',
     href: '/enrollment',
     icon: UserPlus,
-    group: 'features',
+    group: 'core',
   },
   {
     title: 'nav.verification',
     href: '/verification',
     icon: ShieldCheck,
-    group: 'features',
-  },
-  {
-    title: 'nav.search',
-    href: '/search',
-    icon: Search,
-    group: 'features',
+    group: 'core',
   },
   {
     title: 'nav.liveness',
     href: '/liveness',
     icon: ScanFace,
-    group: 'features',
+    group: 'core',
   },
+  {
+    title: 'nav.search',
+    href: '/search',
+    icon: Search,
+    group: 'core',
+  },
+  // Analysis
   {
     title: 'nav.quality',
     href: '/quality',
     icon: Activity,
-    group: 'features',
+    group: 'analysis',
   },
   {
     title: 'nav.demographics',
     href: '/demographics',
     icon: Users,
-    group: 'features',
-  },
-  {
-    title: 'nav.landmarks',
-    href: '/landmarks',
-    icon: Eye,
-    group: 'features',
+    group: 'analysis',
   },
   {
     title: 'nav.comparison',
     href: '/comparison',
     icon: GitCompare,
-    group: 'features',
+    group: 'analysis',
+  },
+  // Advanced
+  {
+    title: 'nav.landmarks',
+    href: '/landmarks',
+    icon: Eye,
+    group: 'advanced',
   },
   {
     title: 'nav.multiFace',
     href: '/multi-face',
     icon: Users2,
-    group: 'features',
+    group: 'advanced',
   },
   {
     title: 'nav.similarity',
     href: '/similarity',
     icon: Grid2X2,
-    group: 'features',
-  },
-  {
-    title: 'nav.cardDetection',
-    href: '/card-detection',
-    icon: CreditCard,
-    group: 'features',
+    group: 'advanced',
   },
   {
     title: 'nav.batch',
     href: '/batch',
     icon: Grid3X3,
-    group: 'features',
+    group: 'advanced',
+  },
+  {
+    title: 'nav.cardDetection',
+    href: '/card-detection',
+    icon: CreditCard,
+    group: 'advanced',
+  },
+  {
+    title: 'nav.demo',
+    href: '/unified-demo',
+    icon: Play,
+    group: 'advanced',
   },
   {
     title: 'nav.session',
     href: '/session',
     icon: Video,
-    group: 'proctoring',
+    group: 'advanced',
   },
   {
     title: 'nav.realtime',
     href: '/realtime',
     icon: MonitorPlay,
-    group: 'proctoring',
+    group: 'advanced',
   },
   {
     title: 'nav.admin',
     href: '/dashboard',
     icon: LayoutDashboard,
-    group: 'admin',
+    group: 'advanced',
   },
   {
     title: 'nav.webhooks',
     href: '/webhooks',
     icon: Webhook,
-    group: 'admin',
+    group: 'advanced',
   },
   {
     title: 'nav.embeddings',
     href: '/embeddings',
     icon: Database,
-    group: 'admin',
+    group: 'advanced',
   },
   {
     title: 'nav.apiExplorer',
     href: '/api-explorer',
     icon: Code,
-    group: 'admin',
+    group: 'advanced',
   },
+  // Settings
   {
     title: 'nav.settings',
     href: '/settings',
@@ -166,18 +179,31 @@ const navigationItems = [
   },
 ];
 
-const groups = [
+interface NavGroup {
+  id: string;
+  label: string | null;
+  collapsible?: boolean;
+}
+
+const groups: NavGroup[] = [
   { id: 'main', label: null },
-  { id: 'features', label: 'Features' },
-  { id: 'proctoring', label: 'Proctoring' },
-  { id: 'admin', label: 'Admin' },
+  { id: 'core', label: 'nav.groups.coreFeatures' },
+  { id: 'analysis', label: 'nav.groups.analysis' },
+  { id: 'advanced', label: 'nav.groups.advanced', collapsible: true },
   { id: 'settings', label: null },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
   const { t } = useTranslation();
-  const { sidebarOpen, sidebarCollapsed, toggleSidebar, toggleSidebarCollapsed } = useAppStore();
+  const {
+    sidebarOpen,
+    sidebarCollapsed,
+    advancedSidebarExpanded,
+    toggleSidebar,
+    toggleSidebarCollapsed,
+    setAdvancedSidebarExpanded,
+  } = useAppStore();
 
   // Track mounted state to prevent hydration mismatches
   const [mounted, setMounted] = useState(false);
@@ -275,35 +301,71 @@ export function Sidebar() {
               if (groupItems.length === 0) return null;
 
               const isCollapsed = mounted && sidebarCollapsed;
+              const isAdvancedGroup = group.collapsible;
+              const isGroupExpanded = !isAdvancedGroup || advancedSidebarExpanded;
+
               return (
                 <div key={group.id} className="space-y-1">
                   {group.label && !isCollapsed && (
-                    <p className="px-3 py-2 text-xs font-medium uppercase text-muted-foreground">
-                      {group.label}
-                    </p>
-                  )}
-                  {groupItems.map((item) => {
-                    const isActive = pathname === item.href;
-                    return (
-                      <Link
-                        key={item.href}
-                        href={item.href}
-                        className={cn(
-                          'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
-                          isActive
-                            ? 'bg-primary text-primary-foreground'
-                            : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                          isCollapsed && 'justify-center px-2'
-                        )}
-                        title={isCollapsed ? t(item.title) : undefined}
+                    isAdvancedGroup ? (
+                      <button
+                        onClick={() => setAdvancedSidebarExpanded(!advancedSidebarExpanded)}
+                        className="flex w-full items-center justify-between px-3 py-2 text-xs font-medium uppercase text-muted-foreground hover:text-foreground transition-colors"
                       >
-                        <item.icon className="h-4 w-4 shrink-0" />
-                        {!isCollapsed && (
-                          <span className="truncate">{t(item.title)}</span>
-                        )}
-                      </Link>
-                    );
-                  })}
+                        <span>{t(group.label)}</span>
+                        <ChevronDown
+                          className={cn(
+                            'h-3 w-3 transition-transform duration-200',
+                            advancedSidebarExpanded ? 'rotate-0' : '-rotate-90'
+                          )}
+                        />
+                      </button>
+                    ) : (
+                      <p className="px-3 py-2 text-xs font-medium uppercase text-muted-foreground">
+                        {t(group.label)}
+                      </p>
+                    )
+                  )}
+                  <AnimatePresence initial={false}>
+                    {isGroupExpanded && (
+                      <motion.div
+                        initial={isAdvancedGroup ? { height: 0, opacity: 0 } : false}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={isAdvancedGroup ? { height: 0, opacity: 0 } : undefined}
+                        transition={{ duration: 0.2 }}
+                        className={isAdvancedGroup ? 'overflow-hidden' : undefined}
+                      >
+                        {groupItems.map((item) => {
+                          const isActive = pathname === item.href;
+                          const isHighlighted = 'highlighted' in item && item.highlighted;
+                          return (
+                            <Link
+                              key={item.href}
+                              href={item.href}
+                              className={cn(
+                                'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors mb-0.5',
+                                isActive
+                                  ? 'bg-primary text-primary-foreground'
+                                  : isHighlighted
+                                    ? 'bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400 hover:from-blue-500/20 hover:to-purple-500/20'
+                                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                                isCollapsed && 'justify-center px-2'
+                              )}
+                              title={isCollapsed ? t(item.title) : undefined}
+                            >
+                              <item.icon className={cn(
+                                'h-4 w-4 shrink-0',
+                                isHighlighted && !isActive && 'text-blue-500'
+                              )} />
+                              {!isCollapsed && (
+                                <span className="truncate">{t(item.title)}</span>
+                              )}
+                            </Link>
+                          );
+                        })}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
               );
             })}

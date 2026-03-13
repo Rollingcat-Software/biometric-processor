@@ -5,9 +5,11 @@ interface AppState {
   // Sidebar state
   sidebarOpen: boolean;
   sidebarCollapsed: boolean;
+  advancedSidebarExpanded: boolean;
   toggleSidebar: () => void;
   toggleSidebarCollapsed: () => void;
   setSidebarOpen: (open: boolean) => void;
+  setAdvancedSidebarExpanded: (expanded: boolean) => void;
 
   // API configuration
   apiUrl: string;
@@ -34,10 +36,12 @@ export const useAppStore = create<AppState>()(
       // Sidebar
       sidebarOpen: false,
       sidebarCollapsed: false,
+      advancedSidebarExpanded: false,
       toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
       toggleSidebarCollapsed: () =>
         set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setSidebarOpen: (open) => set({ sidebarOpen: open }),
+      setAdvancedSidebarExpanded: (expanded) => set({ advancedSidebarExpanded: expanded }),
 
       // API
       apiUrl: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001',
@@ -65,6 +69,7 @@ export const useAppStore = create<AppState>()(
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         sidebarCollapsed: state.sidebarCollapsed,
+        advancedSidebarExpanded: state.advancedSidebarExpanded,
         apiUrl: state.apiUrl,
         cameraFacingMode: state.cameraFacingMode,
         cameraResolution: state.cameraResolution,

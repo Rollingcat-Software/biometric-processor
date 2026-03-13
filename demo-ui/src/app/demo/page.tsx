@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Play,
@@ -14,7 +14,6 @@ import {
   Shield,
   Sparkles,
   BarChart3,
-  Users,
   RotateCcw,
   Loader2,
   AlertCircle,
@@ -26,6 +25,8 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import { ImageUploader } from '@/components/media/image-uploader';
 import { WebcamCapture } from '@/components/media/webcam-capture';
 import { SimilarityGauge } from '@/components/biometric/similarity-gauge';
@@ -34,7 +35,6 @@ import { useFaceVerification } from '@/hooks/use-face-verification';
 import { useFaceSearch } from '@/hooks/use-face-search';
 import { useQualityAnalysis } from '@/hooks/use-quality-analysis';
 import { useLivenessCheck } from '@/hooks/use-liveness-check';
-import { useDemographicsAnalysis } from '@/hooks/use-demographics-analysis';
 import { useFaceComparison } from '@/hooks/use-face-comparison';
 import { toast } from 'sonner';
 import { toPercent, formatPercent } from '@/lib/utils/format';
@@ -84,13 +84,6 @@ const DEMO_STEPS = [
     color: 'pink',
   },
   {
-    id: 'demographics',
-    title: 'Step 6: Demographics Analysis',
-    description: 'Estimate age, gender, and emotion',
-    icon: Users,
-    color: 'indigo',
-  },
-  {
     id: 'summary',
     title: 'Demo Complete',
     description: 'Review all results',
@@ -115,13 +108,27 @@ export default function DemoPage() {
   const [results, setResults] = useState<Record<string, StepResult>>({});
   const [isAutoMode, setIsAutoMode] = useState(false);
 
+  // Keyboard navigation: ArrowLeft/ArrowRight to navigate between steps
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        setCurrentStep((prev) => Math.min(DEMO_STEPS.length - 1, prev + 1));
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        setCurrentStep((prev) => Math.max(0, prev - 1));
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   // Hooks for API calls
   const enrollMutation = useFaceEnrollment();
   const verifyMutation = useFaceVerification();
   const searchMutation = useFaceSearch();
   const qualityMutation = useQualityAnalysis();
   const livenessMutation = useLivenessCheck();
-  const demographicsMutation = useDemographicsAnalysis();
   const comparisonMutation = useFaceComparison();
 
   // Generate unique user ID for demo
@@ -142,10 +149,9 @@ export default function DemoPage() {
     searchMutation.reset();
     qualityMutation.reset();
     livenessMutation.reset();
-    demographicsMutation.reset();
     comparisonMutation.reset();
     toast.info('Demo reset', { description: 'Ready to start fresh' });
-  }, [enrollMutation, verifyMutation, searchMutation, qualityMutation, livenessMutation, demographicsMutation, comparisonMutation]);
+  }, [enrollMutation, verifyMutation, searchMutation, qualityMutation, livenessMutation, comparisonMutation]);
 
   // Save step result
   const saveResult = useCallback((stepId: string, success: boolean, data?: Record<string, unknown>, error?: string) => {
@@ -295,7 +301,7 @@ export default function DemoPage() {
           } else {
             toast.warning('Possible spoof detected');
           }
-          if (isAutoMode) setTimeout(() => setCurrentStep(7), 1500);
+          if (isAutoMode) setTimeout(() => setCurrentStep(6), 1500);
         },
         onError: (err) => {
           saveResult('liveness', false, undefined, err.message);
@@ -305,32 +311,6 @@ export default function DemoPage() {
     );
   }, [verifyImage, enrollImage, livenessMutation, saveResult, isAutoMode]);
 
-  // Execute demographics
-  const executeDemographics = useCallback(async () => {
-    const image = verifyImage || enrollImage;
-    if (!image) {
-      toast.error('Please provide an image');
-      return;
-    }
-
-    demographicsMutation.mutate(
-      { image },
-      {
-        onSuccess: (data) => {
-          saveResult('demographics', true, data as unknown as Record<string, unknown>);
-          toast.success('Demographics analyzed!', {
-            description: `Age: ${data.age}, Gender: ${data.gender}`,
-          });
-          if (isAutoMode) setTimeout(() => setCurrentStep(8), 1500);
-        },
-        onError: (err) => {
-          saveResult('demographics', false, undefined, err.message);
-          toast.error('Demographics analysis failed', { description: err.message });
-        },
-      }
-    );
-  }, [verifyImage, enrollImage, demographicsMutation, saveResult, isAutoMode]);
-
   // Check if step is loading
   const isStepLoading = (stepId: string): boolean => {
     switch (stepId) {
@@ -339,7 +319,6 @@ export default function DemoPage() {
       case 'search': return searchMutation.isPending;
       case 'quality': return qualityMutation.isPending;
       case 'liveness': return livenessMutation.isPending;
-      case 'demographics': return demographicsMutation.isPending;
       default: return false;
     }
   };
@@ -461,11 +440,22 @@ export default function DemoPage() {
                       <Info className="h-4 w-4" />
                       <AlertTitle>How this demo works</AlertTitle>
                       <AlertDescription>
-                        This guided demo will walk you through all features of our biometric system.
+                        This guided demo will walk you through the core features of our biometric system.
                         Upload or capture a face image, and we&apos;ll demonstrate enrollment, verification,
-                        search, quality analysis, liveness detection, and demographics analysis.
+                        search, quality analysis, and liveness detection.
                       </AlertDescription>
                     </Alert>
+
+                    <div className="flex items-center justify-center gap-3 p-3 rounded-lg border bg-muted/30">
+                      <Switch
+                        id="auto-advance"
+                        checked={isAutoMode}
+                        onCheckedChange={setIsAutoMode}
+                      />
+                      <Label htmlFor="auto-advance" className="text-sm cursor-pointer">
+                        Auto-advance to next step after each action completes
+                      </Label>
+                    </div>
 
                     <div className="grid md:grid-cols-2 gap-6">
                       <Card>
@@ -1004,83 +994,6 @@ export default function DemoPage() {
                   </div>
                 )}
 
-                {/* Demographics Step */}
-                {step.id === 'demographics' && (
-                  <div className="space-y-6">
-                    <div className="grid md:grid-cols-2 gap-6">
-                      <div>
-                        <h3 className="font-semibold mb-4">Demographics Image</h3>
-                        {(verifyImage || enrollImage) && (
-                          <div className="rounded-lg overflow-hidden border">
-                            <img
-                              src={URL.createObjectURL(verifyImage || enrollImage!)}
-                              alt="Demographics"
-                              className="w-full aspect-square object-cover"
-                            />
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="space-y-4">
-                        <h3 className="font-semibold">Demographics Analysis</h3>
-                        {demographicsMutation.isPending && (
-                          <Alert>
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                            <AlertTitle>Analyzing...</AlertTitle>
-                            <AlertDescription>
-                              Estimating age, gender, and emotion... This may take a moment.
-                            </AlertDescription>
-                          </Alert>
-                        )}
-                        {results.demographics && (
-                          <div className="grid grid-cols-2 gap-4">
-                            <div className="p-4 border rounded-lg text-center">
-                              <p className="text-3xl font-bold">{(results.demographics.data as { age?: number })?.age}</p>
-                              <p className="text-muted-foreground">Estimated Age</p>
-                            </div>
-                            <div className="p-4 border rounded-lg text-center">
-                              <p className="text-3xl font-bold capitalize">{(results.demographics.data as { gender?: string })?.gender}</p>
-                              <p className="text-muted-foreground">Gender</p>
-                            </div>
-                            <div className="p-4 border rounded-lg text-center col-span-2">
-                              <p className="text-2xl font-bold capitalize">{(results.demographics.data as { dominant_emotion?: string })?.dominant_emotion}</p>
-                              <p className="text-muted-foreground">Dominant Emotion</p>
-                            </div>
-                          </div>
-                        )}
-                        {!demographicsMutation.isPending && !results.demographics && (
-                          <Alert>
-                            <Users className="h-4 w-4" />
-                            <AlertTitle>Ready to Analyze</AlertTitle>
-                            <AlertDescription>
-                              Estimate age, gender, and emotional expression from the face.
-                            </AlertDescription>
-                          </Alert>
-                        )}
-
-                        <Button
-                          onClick={executeDemographics}
-                          disabled={(!enrollImage && !verifyImage) || demographicsMutation.isPending}
-                          className="w-full gap-2"
-                          size="lg"
-                        >
-                          {demographicsMutation.isPending ? (
-                            <>
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                              Analyzing...
-                            </>
-                          ) : (
-                            <>
-                              <Users className="h-4 w-4" />
-                              Analyze Demographics
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
                 {/* Summary Step */}
                 {step.id === 'summary' && (
                   <div className="space-y-6">
@@ -1132,7 +1045,6 @@ export default function DemoPage() {
                           if (s.id === 'search') resultDetail = `Found: ${(data.matches as unknown[])?.length || 0} matches`;
                           if (s.id === 'quality') resultDetail = `Score: ${formatPercent((data.overall_score as number) || 0, 0)}`;
                           if (s.id === 'liveness') resultDetail = `Confidence: ${formatPercent((data.confidence as number) || 0, 0)}`;
-                          if (s.id === 'demographics') resultDetail = `Age: ${data.age || 'N/A'}, ${data.gender || 'N/A'}`;
                         }
 
                         return (

@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender-dev \
     libgomp1 \
     libgl1 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
@@ -59,6 +60,10 @@ COPY . .
 
 # Expose port (default 8080 for GCP, overridden by env in docker-compose)
 EXPOSE ${PORT:-8080}
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8080}/api/v1/health || exit 1
 
 # Start the application (uses PORT from environment, defaults to 8080)
 CMD ["sh", "-c", "python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]

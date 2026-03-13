@@ -1,8 +1,9 @@
 'use client';
 
 import { useTheme } from 'next-themes';
-import { Sun, Moon, Globe, Menu } from 'lucide-react';
+import { Sun, Moon, Globe, Menu, CheckCircle2, AlertCircle, Server } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,11 +12,13 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useTranslation } from 'react-i18next';
 import { useAppStore } from '@/lib/store/app-store';
+import { useApiHealth } from '@/hooks/use-api-health';
 
 export function Header() {
   const { setTheme } = useTheme();
   const { i18n, t } = useTranslation();
   const toggleSidebar = useAppStore((state) => state.toggleSidebar);
+  const { isHealthy, isLoading } = useApiHealth();
 
   const changeLanguage = (lng: string) => {
     i18n.changeLanguage(lng);
@@ -34,9 +37,37 @@ export function Header() {
           <Menu className="h-5 w-5" />
         </Button>
 
+        {/* Branding */}
+        <span className="text-sm font-semibold tracking-tight text-foreground hidden sm:inline-block">
+          FIVUCSAS
+        </span>
+
         <div className="flex-1" />
 
         <div className="flex items-center gap-2">
+          {/* API Health Badge */}
+          <Badge
+            variant={isHealthy ? 'outline' : 'destructive'}
+            className="flex items-center gap-1 text-xs"
+          >
+            {isLoading ? (
+              <>
+                <Server className="h-3 w-3 animate-pulse" />
+                <span className="hidden sm:inline">API...</span>
+              </>
+            ) : isHealthy ? (
+              <>
+                <CheckCircle2 className="h-3 w-3 text-green-500" />
+                <span className="hidden sm:inline">API</span>
+              </>
+            ) : (
+              <>
+                <AlertCircle className="h-3 w-3" />
+                <span className="hidden sm:inline">Offline</span>
+              </>
+            )}
+          </Badge>
+
           {/* Language Switcher */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

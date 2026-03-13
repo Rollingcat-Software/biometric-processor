@@ -33,11 +33,13 @@ if ! grep -qi microsoft /proc/version; then
     warn "Not running in WSL2. This script is designed for WSL2 Ubuntu."
 fi
 
-# Check GPU
+# Check GPU (WSL2 keeps nvidia-smi in /usr/lib/wsl/lib/ which may not be in sudo PATH)
+export PATH="$PATH:/usr/lib/wsl/lib"
 if nvidia-smi &>/dev/null; then
     log "GPU detected: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
 else
-    error "No GPU detected. Ensure NVIDIA drivers are installed on Windows."
+    warn "nvidia-smi not found in PATH. GPU may still work with TensorFlow."
+    warn "Continuing setup — GPU will be verified after TensorFlow install."
 fi
 
 log "Starting Biometric Processor WSL2 setup..."
@@ -47,6 +49,15 @@ log "Starting Biometric Processor WSL2 setup..."
 # =============================================================================
 log "Installing system packages..."
 apt-get update
+apt-get install -y --no-install-recommends software-properties-common
+
+# Python 3.11 is not in Ubuntu 24.04 default repos — add deadsnakes PPA
+if ! apt-cache show python3.11 &>/dev/null; then
+    log "Adding deadsnakes PPA for Python 3.11..."
+    add-apt-repository -y ppa:deadsnakes/ppa
+    apt-get update
+fi
+
 apt-get install -y --no-install-recommends \
     python3.11 \
     python3.11-venv \
@@ -65,8 +76,17 @@ apt-get install -y --no-install-recommends \
 # 2. Create biometric user (optional in WSL)
 # =============================================================================
 APP_DIR="/opt/biometric-processor"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
+
+# Accept repo path as first argument, or try to detect from /mnt/c paths
+if [ -n "${1:-}" ] && [ -d "$1" ]; then
+    REPO_DIR="$1"
+elif [ -d "/mnt/c/Users/ahabg/OneDrive/Belgeler/GitHub/FIVUCSAS/biometric-processor" ]; then
+    REPO_DIR="/mnt/c/Users/ahabg/OneDrive/Belgeler/GitHub/FIVUCSAS/biometric-processor"
+else
+    error "Could not find biometric-processor repo. Pass the path as argument: sudo bash setup-wsl.sh /path/to/biometric-processor"
+fi
+
+log "Using repo at: $REPO_DIR"
 
 if [ -d "$APP_DIR" ]; then
     log "Updating existing installation..."
@@ -79,9 +99,13 @@ fi
 # 3. Copy application code
 # =============================================================================
 log "Copying application code from repo..."
-cp -r "$REPO_DIR"/* "$APP_DIR/" 2>/dev/null || {
+cp -r "$REPO_DIR"/app "$REPO_DIR"/requirements*.txt "$REPO_DIR"/deploy "$APP_DIR/" 2>/dev/null || {
     warn "Could not copy from repo. Assuming code is already in place."
 }
+# Copy config files if they exist
+for f in pyproject.toml setup.py setup.cfg alembic.ini .env.example; do
+    [ -f "$REPO_DIR/$f" ] && cp "$REPO_DIR/$f" "$APP_DIR/" 2>/dev/null
+done
 
 # =============================================================================
 # 4. Python virtual environment + GPU dependencies

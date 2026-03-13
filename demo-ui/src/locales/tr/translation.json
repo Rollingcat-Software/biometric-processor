@@ -46,7 +46,13 @@
     "embeddings": "Gömmeler",
     "config": "Yapılandırma",
     "apiExplorer": "API Gezgini",
-    "settings": "Ayarlar"
+    "settings": "Ayarlar",
+    "guidedDemo": "Rehberli Demo",
+    "groups": {
+      "coreFeatures": "Temel Ozellikler",
+      "analysis": "Analiz",
+      "advanced": "Gelismis"
+    }
   },
   "dashboard": {
     "title": "Biyometrik İşlemci Demo",
@@ -65,9 +71,12 @@
       "offline": "Çevrimdışı"
     },
     "sections": {
-      "features": "Mevcut Özellikler",
-      "admin": "Yönetim"
-    }
+      "features": "Mevcut Ozellikler",
+      "admin": "Yonetim"
+    },
+    "startInteractiveDemo": "Etkilesimli Demoyu Baslat",
+    "coreCapabilities": "Temel Yetenekler",
+    "heroTagline": "Kayit, dogrulama, canlilik tespiti ve akilli yuz arama ozelliklerine sahip kurumsal duzey yuz biyometrik platformu."
   },
   "enrollment": {
     "title": "Yüz Kaydı",
