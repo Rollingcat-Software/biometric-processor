@@ -1,6 +1,7 @@
 """Factory for creating liveness detectors."""
 
 import logging
+import os
 from typing import Literal
 
 from app.domain.interfaces.liveness_detector import ILivenessDetector
@@ -76,6 +77,17 @@ class LivenessDetectorFactory:
                 liveness_threshold=liveness_threshold,
             )
         elif mode == "stub":
+            env = os.getenv("APP_ENV", "production").lower()
+            if env not in ("development", "test", "testing", "ci"):
+                logger.error(
+                    "StubLivenessDetector requested in non-test environment '%s'. "
+                    "Falling back to CombinedLivenessDetector for security.",
+                    env,
+                )
+                return CombinedLivenessDetector(
+                    liveness_threshold=liveness_threshold,
+                )
+            logger.warning("Using StubLivenessDetector - only for testing environments")
             return StubLivenessDetector()
         else:
             raise ValueError(
@@ -90,7 +102,11 @@ class LivenessDetectorFactory:
         Returns:
             List of supported mode names
         """
-        return ["passive", "active", "combined", "stub"]
+        modes = ["passive", "active", "combined"]
+        env = os.getenv("APP_ENV", "production").lower()
+        if env in ("development", "test", "testing", "ci"):
+            modes.append("stub")
+        return modes
 
     @staticmethod
     def get_recommended_mode() -> str:
