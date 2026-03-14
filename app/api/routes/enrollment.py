@@ -7,10 +7,12 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Uploa
 
 from app.api.schemas.enrollment import EnrollmentResponse
 from app.api.schemas.multi_image_enrollment import MultiImageEnrollmentResponse
+from app.application.use_cases.delete_enrollment import DeleteEnrollmentUseCase
 from app.application.use_cases.enroll_face import EnrollFaceUseCase
 from app.application.use_cases.enroll_multi_image import EnrollMultiImageUseCase
 from app.core.config import settings
 from app.core.container import (
+    get_delete_enrollment_use_case,
     get_enroll_face_use_case,
     get_enroll_multi_image_use_case,
     get_file_storage,
@@ -306,3 +308,55 @@ async def enroll_face_multi_image(
         # Cleanup all temporary files
         for image_path in image_paths:
             await storage.cleanup(image_path)
+
+
+@router.delete("/enroll/{user_id}", status_code=200)
+async def delete_enrollment(
+    user_id: str,
+    use_case: DeleteEnrollmentUseCase = Depends(get_delete_enrollment_use_case),
+) -> dict:
+    """Delete a user's face enrollment.
+
+    Args:
+        user_id: User identifier whose enrollment should be deleted
+        use_case: Injected delete enrollment use case
+
+    Returns:
+        Success response with deletion status
+
+    Raises:
+        HTTPException 404: If no enrollment found for user
+        HTTPException 500: Internal server error
+    """
+    try:
+        # Validate user_id
+        try:
+            user_id = validate_user_id(user_id)
+        except ValidationError as e:
+            logger.warning(f"Input validation failed: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Invalid input: {str(e)}")
+
+        logger.info(f"Delete enrollment request: user_id={user_id}")
+
+        deleted = await use_case.execute(user_id=user_id)
+
+        if not deleted:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No enrollment found for user: {user_id}",
+            )
+
+        return {
+            "success": True,
+            "user_id": user_id,
+            "message": "Face data deleted successfully",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting enrollment: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to delete enrollment. Please try again.",
+        )

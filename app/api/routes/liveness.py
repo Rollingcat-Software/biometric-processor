@@ -7,7 +7,11 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from app.api.schemas.liveness import LivenessResponse
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
 from app.core.container import get_check_liveness_use_case, get_file_storage
+from app.core.config import get_settings
+from app.core.validation import ValidationError, validate_image_file
 from app.domain.interfaces.file_storage import IFileStorage
+
+settings = get_settings()
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +58,15 @@ async def check_liveness(
 
         # Save uploaded file temporarily
         image_path = await storage.save_temp(file)
+
+        # SECURITY: Validate actual file type using magic bytes (not just Content-Type header)
+        try:
+            detected_format = validate_image_file(image_path, allowed_formats=settings.ALLOWED_IMAGE_FORMATS)
+            logger.debug(f"File type validated: {detected_format}")
+        except ValidationError as e:
+            logger.warning(f"File type validation failed: {str(e)}")
+            await storage.cleanup(image_path)
+            raise HTTPException(status_code=400, detail=str(e))
 
         # Execute liveness check use case
         result = await use_case.execute(image_path=image_path)

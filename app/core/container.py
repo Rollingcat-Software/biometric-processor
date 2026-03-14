@@ -19,6 +19,7 @@ from app.application.use_cases.generate_puzzle import GeneratePuzzleUseCase
 from app.application.use_cases.verify_puzzle import VerifyPuzzleUseCase
 
 # Application use cases
+from app.application.use_cases.delete_enrollment import DeleteEnrollmentUseCase
 from app.application.use_cases.detect_card_type import DetectCardTypeUseCase
 from app.application.use_cases.enroll_face import EnrollFaceUseCase
 from app.application.use_cases.enroll_multi_image import EnrollMultiImageUseCase
@@ -420,6 +421,17 @@ def get_enroll_face_use_case() -> EnrollFaceUseCase:
         detector=get_face_detector(),
         extractor=get_embedding_extractor(),
         quality_assessor=get_quality_assessor(),
+        repository=get_embedding_repository(),
+    )
+
+
+def get_delete_enrollment_use_case() -> DeleteEnrollmentUseCase:
+    """Get delete enrollment use case instance.
+
+    Returns:
+        DeleteEnrollmentUseCase with all dependencies injected
+    """
+    return DeleteEnrollmentUseCase(
         repository=get_embedding_repository(),
     )
 
