@@ -584,5 +584,11 @@ class Settings(BaseSettings):
 # Singleton settings instance
 settings = Settings()
 
+
+def get_settings() -> Settings:
+    """Return the singleton settings instance."""
+    return settings
+
+
 # Create upload folder on import
 os.makedirs(settings.UPLOAD_FOLDER, exist_ok=True)

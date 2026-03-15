@@ -1,14 +1,15 @@
 """Stub endpoints for voice biometric processing.
 
-These endpoints exist so that identity-core-api's BiometricServiceAdapter
-gets structured error responses instead of 404s. Voice biometric processing
-is not yet implemented - requires a speaker verification ML model
-(e.g., SpeechBrain, Resemblyzer).
+These endpoints return HTTP 501 Not Implemented so callers can distinguish
+"feature unavailable" (501) from a real biometric failure (200 + success=false).
 
-See TODO.md BIO-2 and ROADMAP.md Phase 2 for implementation plans.
+Voice biometric processing requires a speaker verification ML model
+(e.g., SpeechBrain, Resemblyzer) which is not yet integrated.
+
+See TODO.md BIO-2 and ROADMAP.md Phase 4 for implementation plans.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
@@ -29,52 +30,53 @@ class BiometricResponse(BaseModel):
     implemented: bool = False
 
 
-@router.post("/voice/enroll")
+@router.post("/voice/enroll", status_code=501)
 async def enroll_voice(request: VoiceRequest) -> BiometricResponse:
-    """Stub endpoint for voice enrollment.
+    """Voice enrollment — NOT IMPLEMENTED.
 
-    Returns a structured error response indicating this modality is not yet
-    implemented. The identity-core-api's VoiceAuthHandler calls this endpoint
-    via BiometricServiceAdapter.enrollVoice().
-
-    Implementation requires: SpeechBrain or Resemblyzer for speaker embeddings,
-    voice activity detection, and anti-spoofing measures.
+    Returns HTTP 501 so callers can distinguish this from a real biometric
+    failure. Requires SpeechBrain or Resemblyzer speaker embedding integration.
     """
-    return BiometricResponse(
-        success=False,
-        message=(
-            "Voice biometric processing is not yet implemented. "
-            "Requires speaker verification ML model integration "
-            "(SpeechBrain or Resemblyzer recommended)."
-        ),
-        user_id=request.user_id,
-        confidence=0.0,
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "success": False,
+            "modality": "voice",
+            "implemented": False,
+            "message": (
+                "Voice biometric processing is not implemented. "
+                "Requires speaker verification ML model integration "
+                "(SpeechBrain or Resemblyzer)."
+            ),
+        },
     )
 
 
-@router.post("/voice/verify")
+@router.post("/voice/verify", status_code=501)
 async def verify_voice(request: VoiceRequest) -> BiometricResponse:
-    """Stub endpoint for voice verification.
+    """Voice verification — NOT IMPLEMENTED.
 
-    Returns a structured error response. The identity-core-api's
-    VoiceAuthHandler calls this via BiometricServiceAdapter.verifyVoice().
+    Returns HTTP 501. See enroll_voice for details.
     """
-    return BiometricResponse(
-        success=False,
-        message=(
-            "Voice biometric verification is not yet implemented. "
-            "This modality requires speaker verification ML model integration."
-        ),
-        user_id=request.user_id,
-        confidence=0.0,
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "success": False,
+            "modality": "voice",
+            "implemented": False,
+            "message": (
+                "Voice verification is not implemented. "
+                "Requires speaker verification ML model integration."
+            ),
+        },
     )
 
 
 @router.delete("/voice/{user_id}")
 async def delete_voice(user_id: str) -> BiometricResponse:
-    """Stub endpoint for voice data deletion."""
+    """Voice data deletion — no-op (nothing stored)."""
     return BiometricResponse(
         success=True,
-        message="No voice data to delete. Voice processing is not yet implemented.",
+        message="No voice data stored. Server-side voice processing is not implemented.",
         user_id=user_id,
     )
