@@ -1,5 +1,5 @@
 # Local Docker Build Test Script (PowerShell)
-# Run this before pushing to GCP to catch dependency issues early
+# Run this before deployment to catch dependency issues early
 
 $ErrorActionPreference = "Stop"
 
@@ -75,5 +75,5 @@ docker rm -f $CONTAINER_NAME
 
 Write-Host "==========================================" -ForegroundColor Green
 Write-Host "ALL TESTS PASSED!" -ForegroundColor Green
-Write-Host "Safe to deploy to GCP Cloud Run" -ForegroundColor Green
+Write-Host "Safe to deploy via Cloudflare Tunnel" -ForegroundColor Green
 Write-Host "==========================================" -ForegroundColor Green
