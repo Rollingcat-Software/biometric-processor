@@ -34,7 +34,7 @@ biometric-processor/
 │   │
 │   ├── 3-deployment/
 │   │   ├── DEPLOYMENT_GUIDE.md
-│   │   ├── GCP_DEPLOYMENT.md
+│   │   ├── HETZNER_DEPLOYMENT.md
 │   │   └── DATABASE_SETUP.md
 │   │
 │   ├── 4-testing/

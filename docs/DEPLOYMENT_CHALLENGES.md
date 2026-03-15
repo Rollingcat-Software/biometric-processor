@@ -1,5 +1,7 @@
 # GCP Cloud Run Deployment Challenges & Resolution
 
+> **Historical document:** This records issues from the December 2025 GCP Cloud Run deployment, which is no longer in use. The biometric-processor now targets local/WSL2 deployment via Cloudflare Tunnel. See `deploy/laptop-gpu/` for current deployment scripts.
+
 This document records the issues encountered during deployment to Google Cloud Platform Cloud Run on 2025-12-28, along with the infrastructure improvements implemented to prevent future issues.
 
 ## Executive Summary

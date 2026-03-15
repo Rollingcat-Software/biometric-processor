@@ -13,7 +13,7 @@
 | Metric | Status | Details |
 |--------|--------|---------|
 | **Project Completion** | 100% | All MVP features implemented |
-| **Production Deployment** | ✅ DEPLOYED | GCP Cloud Run (europe-west1) |
+| **Production Deployment** | ⏳ PENDING | Cloudflare Tunnel (bpa-fivucsas.rollingcatsoftware.com) |
 | **Recent Testing** | ⚠️ PARTIAL | Local testing completed, deployment inaccessible from this environment |
 | **Critical Bugs Fixed** | ✅ 6/6 | All December 27 bugs resolved |
 | **Infrastructure** | ✅ COMPLETE | CI/CD, monitoring, database setup |
@@ -32,24 +32,24 @@ The biometric processor API is **fully functional** based on local testing compl
 
 ## Deployment Information
 
-### GCP Cloud Run Deployment
+> **Note:** The GCP Cloud Run deployment (December 2025) is no longer active. See `DEPLOYMENT_CHALLENGES.md` for historical details. Current deployment target is WSL2/local GPU via Cloudflare Tunnel.
+
+### Current Deployment Target
 
 | Resource | Details |
 |----------|---------|
-| **Service URL** | https://biometric-api-902542798396.europe-west1.run.app |
-| **Region** | europe-west1 |
-| **Status** | ✅ Deployed (Dec 28, 2025) |
-| **Resources** | 2 CPU, 2GB RAM |
-| **Database** | PostgreSQL 15 + pgvector (Cloud SQL) |
-| **Cache** | Redis 7.0 (Memorystore) |
-| **Monitoring** | Cloud Monitoring + Uptime Checks (5-min interval) |
+| **Service URL** | https://bpa-fivucsas.rollingcatsoftware.com (Cloudflare Tunnel) |
+| **Local URL** | http://localhost:8001 |
+| **Status** | ⏳ Pending (tunnel setup required) |
+| **Resources** | Local GPU (NVIDIA GTX 1650, 4GB VRAM) |
+| **Database** | PostgreSQL 16 + pgvector (local Docker) |
+| **Cache** | Redis 7 (local Docker) |
 
-### Deployment History
+### Deployment History (Historical)
 
-- **7 revision attempts** before successful deployment
+- **7 GCP Cloud Run revision attempts** before successful deployment (Dec 2025, now decommissioned)
 - **All dependency issues resolved** (NumPy 2.x, Keras 3.x, OpenGL, lightphe, prometheus_client)
 - **Database pgvector extension** successfully enabled via Cloud Run Job
-- **CI/CD pipelines** fully operational
 
 ---
 

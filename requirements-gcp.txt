@@ -1,5 +1,5 @@
-# GCP Cloud Run - CPU-only ML dependencies
-# Optimized for Cloud Run's buildpack system
+# CPU-only ML dependencies (historical: originally for GCP Cloud Run)
+# Now used as reference for CPU-only deployment without GPU
 
 # ===========================================
 # Core API Framework

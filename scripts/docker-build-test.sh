@@ -1,6 +1,6 @@
 #!/bin/bash
 # Local Docker Build Test Script
-# Run this before pushing to GCP to catch dependency issues early
+# Run this before deployment to catch dependency issues early
 
 set -e
 
@@ -73,5 +73,5 @@ docker rm -f $CONTAINER_NAME
 
 echo "=========================================="
 echo "ALL TESTS PASSED!"
-echo "Safe to deploy to GCP Cloud Run"
+echo "Safe to deploy via Cloudflare Tunnel"
 echo "=========================================="
