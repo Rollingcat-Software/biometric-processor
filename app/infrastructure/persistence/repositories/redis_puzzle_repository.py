@@ -4,6 +4,7 @@ This module provides a Redis-based implementation of the puzzle repository
 with automatic TTL handling for puzzle expiration.
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -117,7 +118,7 @@ class RedisPuzzleRepository(IPuzzleRepository):
             ttl = self._calculate_ttl(puzzle)
             data = json.dumps(puzzle.to_dict())
 
-            await client.setex(key, ttl, data)
+            await asyncio.to_thread(client.setex, key, ttl, data)
 
             logger.debug(
                 f"Saved puzzle {puzzle.puzzle_id} with TTL={ttl}s, "
@@ -139,7 +140,7 @@ class RedisPuzzleRepository(IPuzzleRepository):
         try:
             client = await self._get_client()
             key = self._key(puzzle_id)
-            data = await client.get(key)
+            data = await asyncio.to_thread(client.get, key)
 
             if data is None:
                 logger.debug(f"Puzzle {puzzle_id} not found")
@@ -167,7 +168,7 @@ class RedisPuzzleRepository(IPuzzleRepository):
         try:
             client = await self._get_client()
             key = self._key(puzzle_id)
-            result = await client.delete(key)
+            result = await asyncio.to_thread(client.delete, key)
 
             deleted = result > 0
             logger.debug(f"Delete puzzle {puzzle_id}: {'success' if deleted else 'not found'}")
@@ -188,7 +189,7 @@ class RedisPuzzleRepository(IPuzzleRepository):
         try:
             client = await self._get_client()
             key = self._key(puzzle_id)
-            result = await client.exists(key)
+            result = await asyncio.to_thread(client.exists, key)
             return result > 0
         except redis.RedisError as e:
             logger.error(f"Failed to check puzzle existence {puzzle_id}: {e}")

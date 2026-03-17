@@ -829,18 +829,9 @@ def shutdown_thread_pool(wait: bool = True) -> None:
 @lru_cache()
 def get_puzzle_repository():
     """Get puzzle repository instance (singleton)."""
-    from app.infrastructure.persistence.repositories.redis_puzzle_repository import (
-        RedisPuzzleRepository,
-    )
-    from app.infrastructure.persistence.repositories.memory_proctor_repository import (
-        InMemoryProctorRepository,
-    )
-    if settings.REDIS_HOST:
-        logger.info("Creating puzzle repository (Redis)")
-        return RedisPuzzleRepository(redis_url=settings.redis_url)
-    else:
-        logger.warning("Creating puzzle repository (in-memory) - NOT for production!")
-        return InMemoryProctorRepository()
+    from app.infrastructure.persistence.repositories.redis_puzzle_repository import InMemoryPuzzleRepository
+    logger.info("Creating puzzle repository (in-memory)")
+    return InMemoryPuzzleRepository()
 
 
 def get_generate_puzzle_use_case() -> GeneratePuzzleUseCase:
