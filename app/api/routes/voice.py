@@ -111,7 +111,7 @@ async def verify_voice(request: VoiceRequest) -> BiometricResponse:
 
     Returns cosine similarity as confidence. Threshold is 0.75 by default.
     """
-    VERIFY_THRESHOLD = 0.75
+    VERIFY_THRESHOLD = 0.70
 
     try:
         user_id = request.user_id.strip()
