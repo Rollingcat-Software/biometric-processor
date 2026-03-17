@@ -210,33 +210,75 @@ class PgVectorEmbeddingRepository:
             normalized_quality = quality_score / 100.0 if quality_score > 1.0 else quality_score
 
             async with pool.acquire() as conn:
-                # UPSERT: Insert or update if exists
+                # Insert individual enrollment (never overwrite — accumulate)
                 await conn.execute(
                     """
                     INSERT INTO face_embeddings (
-                        user_id,
-                        tenant_id,
-                        embedding,
-                        quality_score
-                    )
-                    VALUES ($1, $2, $3, $4)
-                    ON CONFLICT (user_id, tenant_id)
-                    DO UPDATE SET
-                        embedding = EXCLUDED.embedding,
-                        quality_score = EXCLUDED.quality_score,
-                        updated_at = CURRENT_TIMESTAMP
+                        user_id, tenant_id, embedding, quality_score, enrollment_type
+                    ) VALUES ($1, $2, $3, $4, 'INDIVIDUAL')
                     """,
-                    user_id,
-                    tenant_id,
-                    embedding_list,
-                    normalized_quality,
+                    user_id, tenant_id, embedding_list, normalized_quality,
+                )
+
+                # Recompute centroid as average of all individual embeddings
+                await conn.execute(
+                    """
+                    INSERT INTO face_embeddings (user_id, tenant_id, embedding, quality_score, enrollment_type)
+                    SELECT $1, $2,
+                           AVG(embedding)::vector(512),
+                           AVG(quality_score),
+                           'CENTROID'
+                    FROM face_embeddings
+                    WHERE user_id = $1
+                      AND ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
+                      AND enrollment_type = 'INDIVIDUAL'
+                      AND deleted_at IS NULL
+                    ON CONFLICT DO NOTHING
+                    """,
+                    user_id, tenant_id,
+                )
+
+                # Update existing centroid if it already exists
+                await conn.execute(
+                    """
+                    UPDATE face_embeddings SET
+                        embedding = sub.avg_emb,
+                        quality_score = sub.avg_q,
+                        updated_at = CURRENT_TIMESTAMP
+                    FROM (
+                        SELECT AVG(embedding)::vector(512) as avg_emb,
+                               AVG(quality_score) as avg_q
+                        FROM face_embeddings
+                        WHERE user_id = $1
+                          AND ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
+                          AND enrollment_type = 'INDIVIDUAL'
+                          AND deleted_at IS NULL
+                    ) sub
+                    WHERE face_embeddings.user_id = $1
+                      AND ($2::VARCHAR IS NULL OR face_embeddings.tenant_id = $2::VARCHAR)
+                      AND face_embeddings.enrollment_type = 'CENTROID'
+                    """,
+                    user_id, tenant_id,
+                )
+
+                # Count enrollments for this user
+                count = await conn.fetchval(
+                    """
+                    SELECT count(*) FROM face_embeddings
+                    WHERE user_id = $1
+                      AND ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
+                      AND enrollment_type = 'INDIVIDUAL'
+                      AND deleted_at IS NULL
+                    """,
+                    user_id, tenant_id,
                 )
 
             logger.info(
                 f"Embedding saved: user_id={user_id}, "
                 f"tenant_id={tenant_id}, "
                 f"dimension={len(embedding)}, "
-                f"quality={quality_score:.1f}"
+                f"quality={quality_score:.1f}, "
+                f"total_enrollments={count}"
             )
 
         except ValueError:
@@ -264,18 +306,35 @@ class PgVectorEmbeddingRepository:
             pool = await self._ensure_pool()
 
             async with pool.acquire() as conn:
+                # Return centroid (averaged embedding) for verification
                 row = await conn.fetchrow(
                     """
                     SELECT embedding
                     FROM face_embeddings
                     WHERE user_id = $1
                       AND ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
-                    ORDER BY created_at DESC
+                      AND enrollment_type = 'CENTROID'
+                      AND deleted_at IS NULL
                     LIMIT 1
                     """,
                     user_id,
                     tenant_id,
                 )
+                # Fallback to latest individual if no centroid exists
+                if not row:
+                    row = await conn.fetchrow(
+                        """
+                        SELECT embedding
+                        FROM face_embeddings
+                        WHERE user_id = $1
+                          AND ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
+                          AND deleted_at IS NULL
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """,
+                        user_id,
+                        tenant_id,
+                    )
 
             if row:
                 # Convert PostgreSQL vector to numpy array
@@ -337,6 +396,8 @@ class PgVectorEmbeddingRepository:
                     FROM face_embeddings
                     WHERE ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
                       AND embedding <=> $1::vector < $3
+                      AND deleted_at IS NULL
+                      AND (enrollment_type = 'CENTROID' OR enrollment_type IS NULL)
                     ORDER BY distance ASC
                     LIMIT $4
                     """,
@@ -614,13 +675,8 @@ class PgVectorEmbeddingRepository:
                     # This is much faster than individual inserts
                     await conn.executemany(
                         """
-                        INSERT INTO face_embeddings (user_id, tenant_id, embedding, quality_score)
-                        VALUES ($1, $2, $3, $4)
-                        ON CONFLICT (user_id, tenant_id)
-                        DO UPDATE SET
-                            embedding = EXCLUDED.embedding,
-                            quality_score = EXCLUDED.quality_score,
-                            updated_at = CURRENT_TIMESTAMP
+                        INSERT INTO face_embeddings (user_id, tenant_id, embedding, quality_score, enrollment_type)
+                        VALUES ($1, $2, $3, $4, 'INDIVIDUAL')
                         """,
                         records,
                     )

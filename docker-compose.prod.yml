@@ -18,7 +18,7 @@ services:
       PORT: 8001
 
       # Shared PostgreSQL (pgvector enabled on biometric_db)
-      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@shared-postgres:5432/biometric_db
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@shared-postgres:5432/biometric_db
       DATABASE_POOL_MIN_SIZE: 2
       DATABASE_POOL_MAX_SIZE: 10
       EMBEDDING_DIMENSION: 512
@@ -55,9 +55,9 @@ services:
 
       # Quality Thresholds
       VERIFICATION_THRESHOLD: 0.4
-      QUALITY_THRESHOLD: 70.0
-      BLUR_THRESHOLD: 100.0
-      MIN_FACE_SIZE: 80
+      QUALITY_THRESHOLD: 50.0
+      BLUR_THRESHOLD: 30.0
+      MIN_FACE_SIZE: 60
 
       # TensorFlow
       TF_CPP_MIN_LOG_LEVEL: "2"
