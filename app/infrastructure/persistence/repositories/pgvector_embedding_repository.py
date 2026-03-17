@@ -220,57 +220,56 @@ class PgVectorEmbeddingRepository:
                     user_id, tenant_id, embedding_list, normalized_quality,
                 )
 
-                # Recompute centroid as average of all individual embeddings
-                await conn.execute(
+                # Check if centroid exists
+                has_centroid = await conn.fetchval(
                     """
-                    INSERT INTO face_embeddings (user_id, tenant_id, embedding, quality_score, enrollment_type)
-                    SELECT $1, $2,
-                           AVG(embedding)::vector(512),
-                           AVG(quality_score),
-                           'CENTROID'
-                    FROM face_embeddings
-                    WHERE user_id = $1
-                      AND ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
-                      AND enrollment_type = 'INDIVIDUAL'
-                      AND deleted_at IS NULL
-                    ON CONFLICT DO NOTHING
+                    SELECT count(*) FROM face_embeddings
+                    WHERE user_id = $1 AND enrollment_type = 'CENTROID' AND deleted_at IS NULL
                     """,
-                    user_id, tenant_id,
+                    user_id,
                 )
 
-                # Update existing centroid if it already exists
-                await conn.execute(
-                    """
-                    UPDATE face_embeddings SET
-                        embedding = sub.avg_emb,
-                        quality_score = sub.avg_q,
-                        updated_at = CURRENT_TIMESTAMP
-                    FROM (
-                        SELECT AVG(embedding)::vector(512) as avg_emb,
-                               AVG(quality_score) as avg_q
+                if has_centroid == 0:
+                    # Create centroid from all individual embeddings
+                    await conn.execute(
+                        """
+                        INSERT INTO face_embeddings (user_id, tenant_id, embedding, quality_score, enrollment_type)
+                        SELECT $1, $2,
+                               AVG(embedding)::vector(512),
+                               AVG(quality_score),
+                               'CENTROID'
                         FROM face_embeddings
-                        WHERE user_id = $1
-                          AND ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
-                          AND enrollment_type = 'INDIVIDUAL'
-                          AND deleted_at IS NULL
-                    ) sub
-                    WHERE face_embeddings.user_id = $1
-                      AND ($2::VARCHAR IS NULL OR face_embeddings.tenant_id = $2::VARCHAR)
-                      AND face_embeddings.enrollment_type = 'CENTROID'
-                    """,
-                    user_id, tenant_id,
-                )
+                        WHERE user_id = $1 AND enrollment_type = 'INDIVIDUAL' AND deleted_at IS NULL
+                        """,
+                        user_id, tenant_id,
+                    )
+                else:
+                    # Update existing centroid with new average
+                    await conn.execute(
+                        """
+                        UPDATE face_embeddings SET
+                            embedding = sub.avg_emb,
+                            quality_score = sub.avg_q,
+                            updated_at = CURRENT_TIMESTAMP
+                        FROM (
+                            SELECT AVG(embedding)::vector(512) as avg_emb,
+                                   AVG(quality_score) as avg_q
+                            FROM face_embeddings
+                            WHERE user_id = $1 AND enrollment_type = 'INDIVIDUAL' AND deleted_at IS NULL
+                        ) sub
+                        WHERE face_embeddings.user_id = $1
+                          AND face_embeddings.enrollment_type = 'CENTROID'
+                        """,
+                        user_id,
+                    )
 
-                # Count enrollments for this user
+                # Count enrollments
                 count = await conn.fetchval(
                     """
                     SELECT count(*) FROM face_embeddings
-                    WHERE user_id = $1
-                      AND ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
-                      AND enrollment_type = 'INDIVIDUAL'
-                      AND deleted_at IS NULL
+                    WHERE user_id = $1 AND enrollment_type = 'INDIVIDUAL' AND deleted_at IS NULL
                     """,
-                    user_id, tenant_id,
+                    user_id,
                 )
 
             logger.info(
@@ -312,13 +311,11 @@ class PgVectorEmbeddingRepository:
                     SELECT embedding
                     FROM face_embeddings
                     WHERE user_id = $1
-                      AND ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
                       AND enrollment_type = 'CENTROID'
                       AND deleted_at IS NULL
                     LIMIT 1
                     """,
                     user_id,
-                    tenant_id,
                 )
                 # Fallback to latest individual if no centroid exists
                 if not row:
@@ -327,13 +324,11 @@ class PgVectorEmbeddingRepository:
                         SELECT embedding
                         FROM face_embeddings
                         WHERE user_id = $1
-                          AND ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
                           AND deleted_at IS NULL
                         ORDER BY created_at DESC
                         LIMIT 1
                         """,
                         user_id,
-                        tenant_id,
                     )
 
             if row:
