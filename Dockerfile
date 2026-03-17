@@ -19,6 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     libgl1 \
     curl \
+    ffmpeg \
+    gcc \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements

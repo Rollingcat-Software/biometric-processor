@@ -55,6 +55,8 @@ from app.infrastructure.persistence.repositories.pgvector_embedding_repository i
 )
 from app.infrastructure.storage.local_file_storage import LocalFileStorage
 from app.infrastructure.async_execution.thread_pool_manager import ThreadPoolManager
+from app.infrastructure.ml.voice.speaker_embedder import SpeakerEmbedder
+from app.infrastructure.persistence.repositories.pgvector_voice_repository import PgVectorVoiceRepository
 
 logger = logging.getLogger(__name__)
 
@@ -659,6 +661,43 @@ def get_send_webhook_use_case():
 
 
 # ============================================================================
+# Voice Biometric Dependencies
+# ============================================================================
+
+
+@lru_cache()
+def get_speaker_embedder() -> SpeakerEmbedder:
+    """Get speaker embedder instance (singleton).
+
+    Returns:
+        SpeakerEmbedder using Resemblyzer (256-dim speaker embeddings)
+    """
+    logger.info("Creating speaker embedder (Resemblyzer)")
+    return SpeakerEmbedder()
+
+
+@lru_cache()
+def get_voice_repository() -> PgVectorVoiceRepository:
+    """Get voice embedding repository instance (singleton).
+
+    Returns:
+        PgVectorVoiceRepository for voice enrollment storage
+    """
+    if not settings.DATABASE_URL:
+        raise ValueError(
+            "DATABASE_URL must be set for voice enrollment storage."
+        )
+
+    logger.info("Creating voice embedding repository (pgvector, dim=256)")
+    return PgVectorVoiceRepository(
+        database_url=settings.DATABASE_URL,
+        pool_min_size=2,
+        pool_max_size=5,
+        embedding_dimension=256,
+    )
+
+
+# ============================================================================
 # Utility Functions
 # ============================================================================
 
@@ -832,3 +871,5 @@ def clear_cache() -> None:
     get_event_router.cache_clear()
     get_event_publisher.cache_clear()
     get_puzzle_repository.cache_clear()
+    get_speaker_embedder.cache_clear()
+    get_voice_repository.cache_clear()
