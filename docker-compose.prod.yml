@@ -1,0 +1,96 @@
+version: '3.9'
+
+services:
+  biometric-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: biometric-api
+    restart: unless-stopped
+    environment:
+      APP_NAME: "Biometric Processor API"
+      VERSION: "1.0.0"
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+      API_HOST: 0.0.0.0
+      API_PORT: 8001
+      PORT: 8001
+
+      # Shared PostgreSQL (pgvector enabled on biometric_db)
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@shared-postgres:5432/biometric_db
+      DATABASE_POOL_MIN_SIZE: 2
+      DATABASE_POOL_MAX_SIZE: 10
+      EMBEDDING_DIMENSION: 512
+
+      # Shared Redis (database 4 for biometric)
+      REDIS_HOST: shared-redis
+      REDIS_PORT: 6379
+      REDIS_DB: 4
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_MAX_CONNECTIONS: 20
+
+      # ML Configuration — CPU-optimized, lightweight
+      FACE_DETECTION_BACKEND: opencv
+      FACE_RECOGNITION_MODEL: Facenet512
+      ASYNC_ML_ENABLED: true
+      ML_THREAD_POOL_SIZE: 2
+      EMBEDDING_CACHE_ENABLED: true
+      EMBEDDING_CACHE_TTL: 300
+      EMBEDDING_CACHE_MAX_SIZE: 500
+
+      # Security
+      CORS_ALLOWED_ORIGINS: "https://ica-fivucsas.rollingcatsoftware.com,https://auth.rollingcatsoftware.com"
+      API_KEY_ENABLED: "false"
+      REQUIRE_HTTPS: "false"
+
+      # Rate Limiting
+      RATE_LIMIT_ENABLED: true
+      RATE_LIMIT_STORAGE: redis
+      RATE_LIMIT_PER_MINUTE: 30
+
+      # File Storage
+      UPLOAD_FOLDER: /app/uploads
+      MAX_UPLOAD_SIZE: 10485760
+
+      # Quality Thresholds
+      VERIFICATION_THRESHOLD: 0.4
+      QUALITY_THRESHOLD: 70.0
+      BLUR_THRESHOLD: 100.0
+      MIN_FACE_SIZE: 80
+
+      # TensorFlow
+      TF_CPP_MIN_LOG_LEVEL: "2"
+      DEEPFACE_HOME: /tmp/.deepface
+    volumes:
+      - biometric_uploads:/app/uploads
+      - biometric_models:/tmp/.deepface
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.biometric.rule=Host(`bpa-fivucsas.rollingcatsoftware.com`)"
+      - "traefik.http.routers.biometric.entrypoints=websecure"
+      - "traefik.http.routers.biometric.tls.certresolver=letsencrypt"
+      - "traefik.http.services.biometric.loadbalancer.server.port=8001"
+    networks:
+      - proxy
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 3G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+networks:
+  proxy:
+    external: true
+  backend:
+    external: true
+
+volumes:
+  biometric_uploads:
+    driver: local
+  biometric_models:
+    driver: local
