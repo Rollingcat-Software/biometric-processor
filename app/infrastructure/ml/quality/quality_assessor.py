@@ -89,8 +89,12 @@ class QualityAssessor:
         overall_score = blur_quality * 0.4 + lighting_quality * 0.3 + size_quality * 0.3
 
         # Determine if acceptable
+        # Hard reject: blur < 5 (completely unusable) or face too small
+        # Accept with warning: blur 5-threshold (low quality but usable)
+        # Accept: blur >= threshold
+        hard_reject_blur = 5.0
         is_acceptable = (
-            blur_score >= self._blur_threshold
+            blur_score >= hard_reject_blur
             and face_size >= self._min_face_size
             and overall_score >= self._quality_threshold
         )

@@ -57,48 +57,30 @@ class QualityAssessment:
         else:
             return "good"
 
-    def is_blurry(self, blur_threshold: float = 100.0) -> bool:
-        """Check if image is too blurry.
+    def get_issues(self, blur_threshold: float = 15.0, min_face_size: int = 60) -> Dict[str, Any]:
+        """Get list of quality issues with actual thresholds.
 
         Args:
-            blur_threshold: Minimum acceptable blur score
-
-        Returns:
-            True if image is too blurry
-        """
-        return self.blur_score < blur_threshold
-
-    def is_too_small(self, min_size: int = 80) -> bool:
-        """Check if face is too small.
-
-        Args:
-            min_size: Minimum acceptable face size in pixels
-
-        Returns:
-            True if face is too small
-        """
-        return self.face_size < min_size
-
-    def get_issues(self) -> Dict[str, Any]:
-        """Get list of quality issues.
+            blur_threshold: Actual blur threshold used by the assessor
+            min_face_size: Actual minimum face size used by the assessor
 
         Returns:
             Dictionary of quality issues with details
         """
         issues = {}
 
-        if self.is_blurry():
+        if self.blur_score < blur_threshold:
             issues["blur"] = {
                 "description": "Image is too blurry",
                 "score": self.blur_score,
-                "threshold": 100.0,
+                "threshold": blur_threshold,
             }
 
-        if self.is_too_small():
+        if self.face_size < min_face_size:
             issues["face_size"] = {
                 "description": "Face is too small",
                 "size": self.face_size,
-                "minimum": 80,
+                "minimum": min_face_size,
             }
 
         if self.lighting_score < 50:

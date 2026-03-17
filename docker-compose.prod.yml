@@ -55,8 +55,8 @@ services:
 
       # Quality Thresholds
       VERIFICATION_THRESHOLD: 0.4
-      QUALITY_THRESHOLD: 50.0
-      BLUR_THRESHOLD: 0.0
+      QUALITY_THRESHOLD: 40.0
+      BLUR_THRESHOLD: 15.0
       MIN_FACE_SIZE: 60
 
       # TensorFlow
