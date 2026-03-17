@@ -728,6 +728,10 @@ def initialize_dependencies() -> None:
     get_similarity_calculator()
     get_liveness_detector()
 
+    # Pre-load voice model
+    logger.info("Pre-loading Resemblyzer speaker encoder...")
+    get_speaker_embedder()
+
     # Initialize storage and repositories
     logger.info("Initializing storage and database...")
     get_file_storage()
