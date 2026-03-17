@@ -175,6 +175,49 @@ async def verify_voice(request: VoiceRequest) -> BiometricResponse:
         )
 
 
+# ── POST /voice/search ────────────────────────────────────────────
+
+
+class VoiceSearchRequest(BaseModel):
+    voice_data: str  # base64-encoded audio
+
+
+@router.post("/voice/search")
+async def search_voice(request: VoiceSearchRequest):
+    """Search for a speaker in enrolled database (1:N identification)."""
+    SEARCH_THRESHOLD = 0.6
+
+    try:
+        voice_data = request.voice_data.strip()
+        if not voice_data:
+            raise HTTPException(status_code=400, detail="voice_data is required")
+
+        logger.info("Voice search request")
+
+        embedder = get_speaker_embedder()
+        probe_embedding = embedder.extract_embedding_from_base64(voice_data)
+
+        repo = get_voice_repository()
+        matches = await repo.find_similar(probe_embedding, threshold=SEARCH_THRESHOLD)
+
+        logger.info(f"Voice search complete: {len(matches)} matches")
+
+        return {
+            "matches": [
+                {"user_id": m[0], "similarity": round(1.0 - m[1], 4)}
+                for m in matches
+            ],
+            "total_matches": len(matches),
+        }
+
+    except ValueError as e:
+        logger.warning(f"Voice search validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Voice search failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Voice search failed: {e}")
+
+
 # ── DELETE /voice/{user_id} ────────────────────────────────────────
 
 

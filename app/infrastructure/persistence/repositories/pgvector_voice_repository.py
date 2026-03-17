@@ -250,3 +250,29 @@ class PgVectorVoiceRepository:
         except Exception as e:
             logger.error(f"Failed to delete voice enrollment: {e}", exc_info=True)
             raise RepositoryError(operation="delete", reason=str(e))
+
+    async def find_similar(self, embedding, threshold=0.4, limit=5):
+        """Search for similar voice embeddings (1:N identification)."""
+        try:
+            pool = await self._ensure_pool()
+            embedding_list = embedding.tolist()
+
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT user_id, embedding <=> $1::vector AS distance
+                    FROM voice_enrollments
+                    WHERE deleted_at IS NULL
+                      AND (enrollment_type = 'CENTROID' OR enrollment_type IS NULL)
+                      AND embedding <=> $1::vector < $2
+                    ORDER BY distance ASC
+                    LIMIT $3
+                    """,
+                    embedding_list, threshold, limit,
+                )
+
+            return [(row["user_id"], float(row["distance"])) for row in rows]
+
+        except Exception as e:
+            logger.error(f"Voice search failed: {e}", exc_info=True)
+            raise RepositoryError(operation="search", reason=str(e))

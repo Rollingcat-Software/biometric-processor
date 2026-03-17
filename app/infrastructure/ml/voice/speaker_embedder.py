@@ -197,15 +197,21 @@ class SpeakerEmbedder:
         """Run the Resemblyzer encoder on preprocessed samples."""
         from resemblyzer import preprocess_wav
 
-        # Resemblyzer's preprocess_wav expects float32 mono @ 16kHz
-        # It applies voice activity detection internally
+        # Try with VAD first, fall back to raw audio if VAD strips too much
         processed = preprocess_wav(wav_samples, source_sr=TARGET_SAMPLE_RATE)
 
         if len(processed) < int(TARGET_SAMPLE_RATE * MIN_AUDIO_DURATION_SECS):
-            raise ValueError(
-                "Not enough speech detected in audio after VAD preprocessing. "
-                "Please record a longer sample with clear speech."
-            )
+            logger.warning("VAD stripped too much audio, using raw samples as fallback")
+            # Normalize raw samples to [-1, 1] float32
+            processed = wav_samples.astype(np.float32)
+            if np.abs(processed).max() > 1.0:
+                processed = processed / np.abs(processed).max()
+
+            if len(processed) < int(TARGET_SAMPLE_RATE * MIN_AUDIO_DURATION_SECS):
+                raise ValueError(
+                    "Audio too short even without VAD. "
+                    "Please record at least 1 second of audio."
+                )
 
         embedding = self._encoder.embed_utterance(processed)
 
