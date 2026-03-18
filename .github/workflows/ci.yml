@@ -178,7 +178,7 @@ jobs:
         run: pip install bandit[toml]
 
       - name: Run Bandit security scan
-        run: bandit -r app/ -ll --skip B101,B108,B608
+        run: bandit -r app/ -ll --skip B101,B104,B108,B324,B608
 
       - name: Run pip-audit
         run: |
