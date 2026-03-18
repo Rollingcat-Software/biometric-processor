@@ -82,10 +82,15 @@ class DeepFaceDetector:
                 raise FaceNotDetectedError()
 
             if len(face_objs) > 1:
-                logger.warning(f"Multiple faces detected: {len(face_objs)}")
-                raise MultipleFacesError(count=len(face_objs))
+                # Pick the largest face (most likely the intended subject)
+                # Client-side MediaPipe already confirmed a single face — extra detections are false positives
+                logger.info(f"Multiple faces detected ({len(face_objs)}), selecting largest face")
+                face_objs.sort(
+                    key=lambda f: f.get('facial_area', {}).get('w', 0) * f.get('facial_area', {}).get('h', 0),
+                    reverse=True
+                )
 
-            # Get the detected face
+            # Get the largest/primary detected face
             face_obj = face_objs[0]
 
             # Anti-spoofing check (DeepFace 0.0.98+)
