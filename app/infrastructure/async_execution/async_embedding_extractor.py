@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from app.domain.exceptions.face_errors import MLModelTimeoutError
-from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 from app.infrastructure.resilience.circuit_breaker import EMBEDDING_EXTRACTOR_BREAKER
 
 if TYPE_CHECKING:

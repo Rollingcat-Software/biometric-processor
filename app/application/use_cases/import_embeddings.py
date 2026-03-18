@@ -3,10 +3,9 @@
 import hashlib
 import json
 import logging
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, Literal
 
 from app.domain.exceptions.feature_errors import (
-    EmbeddingImportError,
     ImportValidationError,
 )
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository

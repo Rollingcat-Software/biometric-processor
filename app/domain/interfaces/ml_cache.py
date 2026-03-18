@@ -9,7 +9,7 @@ Following:
 """
 
 from dataclasses import dataclass
-from typing import Generic, Optional, Protocol, TypeVar
+from typing import Optional, Protocol, TypeVar
 
 K = TypeVar("K")
 V = TypeVar("V")

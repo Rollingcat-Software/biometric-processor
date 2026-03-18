@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -143,13 +143,13 @@ async def get_dashboard_metrics(
     # Calculate time range
     now = datetime.utcnow()
     if period == "1h":
-        start = now - timedelta(hours=1)
+        now - timedelta(hours=1)
     elif period == "24h":
-        start = now - timedelta(days=1)
+        now - timedelta(days=1)
     elif period == "7d":
-        start = now - timedelta(days=7)
+        now - timedelta(days=7)
     else:  # 30d
-        start = now - timedelta(days=30)
+        now - timedelta(days=30)
 
     # Simulated metrics (in production, query from database)
     return DashboardMetricsResponse(

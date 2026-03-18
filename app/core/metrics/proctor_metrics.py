@@ -116,18 +116,8 @@ PROCTOR_AUDIO_EVENTS = Counter(
 )
 
 # Rate limiting metrics (re-exported from resilience module)
-from app.infrastructure.resilience.session_rate_limiter import (
-    RATE_LIMIT_CHECKS,
-    RATE_LIMIT_VIOLATIONS,
-    FRAMES_PER_SESSION,
-)
 
 # Circuit breaker metrics (re-exported from resilience module)
-from app.infrastructure.resilience.circuit_breaker import (
-    CIRCUIT_BREAKER_STATE,
-    CIRCUIT_BREAKER_TRIPS,
-    CIRCUIT_BREAKER_FALLBACKS,
-)
 
 
 def record_session_created(tenant_id: str) -> None:

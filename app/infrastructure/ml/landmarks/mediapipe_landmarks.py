@@ -1,7 +1,7 @@
 """MediaPipe-based facial landmark detector implementation."""
 
 import logging
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import numpy as np
 

@@ -10,11 +10,7 @@ from uuid import UUID
 import numpy as np
 
 from app.domain.entities.proctor_analysis import (
-    AudioAnalysisResult,
-    DeepfakeAnalysisResult,
     FrameAnalysisResult,
-    GazeAnalysisResult,
-    ObjectDetectionResult,
 )
 from app.domain.entities.proctor_incident import IncidentType, ProctorIncident
 from app.domain.interfaces.audio_analyzer import IAudioAnalyzer
@@ -34,7 +30,6 @@ from app.infrastructure.resilience.circuit_breaker import (
     AUDIO_ANALYZER_BREAKER,
 )
 from app.infrastructure.resilience.session_rate_limiter import (
-    RateLimitResult,
     SessionRateLimiter,
 )
 

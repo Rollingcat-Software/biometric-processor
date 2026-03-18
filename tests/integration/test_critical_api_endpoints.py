@@ -13,11 +13,8 @@ Tests the most critical API endpoints with real database integration:
 These tests ensure the system works end-to-end and catch issues early.
 """
 
-import asyncio
 import base64
 from io import BytesIO
-from pathlib import Path
-from typing import BinaryIO
 
 import numpy as np
 import pytest

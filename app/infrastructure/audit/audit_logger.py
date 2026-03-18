@@ -14,7 +14,7 @@ Audit logs capture:
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Any
+from typing import Optional
 from dataclasses import dataclass, asdict, field
 from enum import Enum
 from uuid import uuid4

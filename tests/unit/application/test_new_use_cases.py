@@ -1,9 +1,7 @@
 """Unit tests for new feature use cases."""
 
 import pytest
-import numpy as np
 from unittest.mock import AsyncMock, Mock
-from datetime import datetime
 
 from app.application.use_cases.analyze_quality import AnalyzeQualityUseCase
 from app.application.use_cases.detect_multi_face import DetectMultiFaceUseCase
@@ -15,8 +13,8 @@ from app.application.use_cases.export_embeddings import ExportEmbeddingsUseCase
 from app.application.use_cases.import_embeddings import ImportEmbeddingsUseCase
 from app.application.use_cases.send_webhook import SendWebhookUseCase
 
-from app.domain.entities.quality_feedback import QualityFeedback, QualityMetrics
-from app.domain.entities.multi_face_result import MultiFaceResult, DetectedFace, BoundingBox
+from app.domain.entities.quality_feedback import QualityFeedback
+from app.domain.entities.multi_face_result import MultiFaceResult
 from app.domain.entities.demographics import DemographicsResult, AgeEstimate, GenderEstimate
 from app.domain.entities.face_landmarks import LandmarkResult, Landmark
 from app.domain.entities.face_comparison import FaceComparisonResult

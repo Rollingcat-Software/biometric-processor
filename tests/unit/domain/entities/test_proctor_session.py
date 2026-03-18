@@ -1,7 +1,6 @@
 """Unit tests for ProctorSession entity."""
 
 import pytest
-from datetime import datetime
 from uuid import uuid4
 
 import numpy as np

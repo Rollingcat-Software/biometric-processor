@@ -5,7 +5,6 @@ Serves the admin dashboard HTML interface.
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse

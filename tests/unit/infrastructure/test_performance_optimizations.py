@@ -11,13 +11,13 @@ Tests the following components:
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
 from app.infrastructure.async_execution.thread_pool_manager import ThreadPoolManager
-from app.infrastructure.caching.lru_cache import ThreadSafeLRUCache, CacheStats
+from app.infrastructure.caching.lru_cache import ThreadSafeLRUCache
 from app.infrastructure.caching.image_hash import (
     compute_image_hash,
     compute_embedding_cache_key,

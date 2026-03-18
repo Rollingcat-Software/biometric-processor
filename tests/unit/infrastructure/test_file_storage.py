@@ -4,7 +4,6 @@ import pytest
 import tempfile
 import shutil
 from pathlib import Path
-from unittest.mock import Mock, AsyncMock
 from fastapi import UploadFile
 import io
 

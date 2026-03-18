@@ -7,7 +7,6 @@ from fastapi import Request, Response, status
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.core.config import settings
 from app.domain.entities.api_key import APIKey, APIKeyContext
 from app.domain.interfaces.api_key_repository import IAPIKeyRepository
 

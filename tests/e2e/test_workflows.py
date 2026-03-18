@@ -7,7 +7,7 @@ to storage and back, using real components with minimal mocking.
 import io
 import sys
 import tempfile
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import cv2
 import numpy as np
@@ -25,7 +25,6 @@ from app.core.container import (
     get_verify_face_use_case,
 )
 from app.domain.entities.face_detection import FaceDetectionResult
-from app.domain.entities.quality_assessment import QualityAssessment
 from app.infrastructure.persistence.repositories.memory_embedding_repository import (
     InMemoryEmbeddingRepository,
 )

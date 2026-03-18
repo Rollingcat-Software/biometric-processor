@@ -1,6 +1,5 @@
 """Embedding repository interface following Repository Pattern."""
 
-from datetime import datetime
 from typing import List, Optional, Protocol, Tuple
 
 import numpy as np

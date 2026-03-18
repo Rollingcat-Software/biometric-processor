@@ -4,7 +4,6 @@ Manages the sequence of liveness challenges and detects user responses.
 """
 
 import logging
-import os
 import random
 import time
 import uuid

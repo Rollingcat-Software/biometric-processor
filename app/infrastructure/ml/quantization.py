@@ -13,7 +13,7 @@ INT8 quantization benefits:
 import os
 import logging
 from pathlib import Path
-from typing import List, Optional, Callable, Iterator
+from typing import List, Optional, Iterator
 
 import numpy as np
 

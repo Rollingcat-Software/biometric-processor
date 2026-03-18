@@ -4,7 +4,6 @@ import logging
 
 import numpy as np
 
-from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
 
 logger = logging.getLogger(__name__)
 

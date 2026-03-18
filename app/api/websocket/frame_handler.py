@@ -199,7 +199,7 @@ class WebSocketFrameHandler:
                 frame_bytes = base64.b64decode(frame_b64)
             except Exception as e:
                 raise ValueError(f"Invalid base64 frame data: {e}")
-            frame_number = message.get("payload", {}).get("frame_number", 0)
+            message.get("payload", {}).get("frame_number", 0)
 
             result = await self.handle_binary_frame(
                 frame_bytes,

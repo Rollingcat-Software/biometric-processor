@@ -35,7 +35,6 @@ Controls:
 """
 
 import os
-import sys
 import time
 import json
 import argparse
@@ -520,10 +519,10 @@ class BiometricDemo:
             print(f"      MediaPipe unavailable: {e}")
 
         print("[3/3] Loading local components...")
-        print(f"      Quality Assessor: ready")
-        print(f"      Liveness Detector: ready")
+        print("      Quality Assessor: ready")
+        print("      Liveness Detector: ready")
         print(f"      Face Database: {len(self._face_db.faces)} enrolled")
-        print(f"      Face Tracker: ready")
+        print("      Face Tracker: ready")
 
         print("=" * 60)
         print("ALL SYSTEMS READY!")
@@ -1189,8 +1188,8 @@ class BiometricDemo:
         self._enrolling = True
         print(f"\n{'='*50}")
         print(f"ENROLLMENT STARTED: {self._enrollment_name}")
-        print(f"Follow the on-screen pose instructions")
-        print(f"Hold each pose until the progress bar fills")
+        print("Follow the on-screen pose instructions")
+        print("Hold each pose until the progress bar fills")
         print(f"{'='*50}\n")
 
     def cancel_enrollment(self):

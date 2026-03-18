@@ -2,11 +2,9 @@
 
 import pytest
 import time
-from unittest.mock import AsyncMock, Mock, patch
 from datetime import datetime, timedelta
 
-from app.domain.entities.api_key import APIKey, APIKeyContext
-from app.domain.interfaces.rate_limit_storage import RateLimitInfo
+from app.domain.entities.api_key import APIKey
 
 
 # ============================================================================

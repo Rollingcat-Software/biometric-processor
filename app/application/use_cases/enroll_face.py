@@ -4,7 +4,6 @@ import logging
 from typing import Optional
 
 import cv2
-import numpy as np
 
 from app.domain.entities.face_embedding import FaceEmbedding
 from app.domain.exceptions.face_errors import PoorImageQualityError

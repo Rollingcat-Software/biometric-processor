@@ -6,10 +6,8 @@ from typing import Optional, Tuple
 import numpy as np
 from deepface import DeepFace
 
-from app.core.config import settings
 from app.domain.entities.face_detection import FaceDetectionResult
-from app.domain.exceptions.face_errors import FaceNotDetectedError, MultipleFacesError, SpoofDetectedError
-from app.domain.interfaces.face_detector import IFaceDetector
+from app.domain.exceptions.face_errors import FaceNotDetectedError, SpoofDetectedError
 
 logger = logging.getLogger(__name__)
 

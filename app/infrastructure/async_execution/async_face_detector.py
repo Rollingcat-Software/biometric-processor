@@ -17,7 +17,6 @@ import numpy as np
 
 from app.domain.entities.face_detection import FaceDetectionResult
 from app.domain.exceptions.face_errors import MLModelTimeoutError
-from app.domain.interfaces.face_detector import IFaceDetector
 from app.infrastructure.resilience.circuit_breaker import FACE_DETECTOR_BREAKER
 
 if TYPE_CHECKING:

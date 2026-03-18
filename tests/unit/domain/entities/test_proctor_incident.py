@@ -11,7 +11,6 @@ from app.domain.entities.proctor_incident import (
     ProctorIncident,
     ReviewAction,
     get_default_severity,
-    INCIDENT_SEVERITY_MAP,
 )
 
 

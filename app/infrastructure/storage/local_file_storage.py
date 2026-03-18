@@ -16,7 +16,6 @@ from fastapi import UploadFile
 
 from app.core.config import settings
 from app.domain.exceptions.storage_errors import FileStorageError
-from app.domain.interfaces.file_storage import IFileStorage
 
 logger = logging.getLogger(__name__)
 

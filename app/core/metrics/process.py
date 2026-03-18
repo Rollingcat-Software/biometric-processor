@@ -7,12 +7,11 @@ import gc
 import logging
 import os
 import platform
-import sys
 import threading
 import time
 from typing import Optional
 
-from prometheus_client import Gauge, Counter, REGISTRY
+from prometheus_client import Gauge, Counter
 
 logger = logging.getLogger(__name__)
 

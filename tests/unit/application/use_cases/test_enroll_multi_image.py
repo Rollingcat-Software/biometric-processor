@@ -3,16 +3,13 @@
 import pytest
 import numpy as np
 from unittest.mock import Mock, AsyncMock, patch
-from pathlib import Path
 
 from app.application.use_cases.enroll_multi_image import EnrollMultiImageUseCase
 from app.domain.entities.face_detection import FaceDetectionResult
 from app.domain.entities.quality_assessment import QualityAssessment
-from app.domain.entities.face_embedding import FaceEmbedding
 from app.domain.services.embedding_fusion_service import EmbeddingFusionService
 from app.domain.exceptions.enrollment_errors import (
     InvalidImageCountError,
-    InsufficientImagesError,
     FusionError,
 )
 from app.domain.exceptions.face_errors import (

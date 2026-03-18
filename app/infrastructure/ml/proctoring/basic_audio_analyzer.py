@@ -10,7 +10,7 @@ Uses numpy-based analysis with optional webrtcvad/librosa enhancements.
 
 import logging
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import numpy as np
 

@@ -23,7 +23,6 @@ import asyncpg
 import numpy as np
 
 from app.domain.exceptions.repository_errors import RepositoryError
-from app.domain.interfaces.embedding_repository import IEmbeddingRepository
 
 logger = logging.getLogger(__name__)
 

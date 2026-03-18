@@ -12,7 +12,7 @@ Tests all scenarios:
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 import numpy as np
 
 from app.application.use_cases.enroll_face import EnrollFaceUseCase

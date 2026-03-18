@@ -11,9 +11,7 @@ Usage:
 
 import io
 import logging
-import tempfile
 import wave
-from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -157,7 +155,6 @@ class SpeakerEmbedder:
 
     def _load_wav_direct(self, audio_bytes: bytes) -> np.ndarray:
         """Load a WAV file directly without pydub/ffmpeg."""
-        import struct
 
         with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
             n_channels = wf.getnchannels()

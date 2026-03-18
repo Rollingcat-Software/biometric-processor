@@ -5,7 +5,7 @@ Provides decorators and helpers for adding tracing to functions.
 
 import functools
 import logging
-from typing import Any, Callable, Dict, Optional, TypeVar, Union
+from typing import Any, Callable, Dict, Optional, TypeVar
 
 logger = logging.getLogger(__name__)
 

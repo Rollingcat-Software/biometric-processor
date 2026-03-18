@@ -10,7 +10,6 @@ Following Facade Pattern:
 """
 
 import logging
-import time
 from typing import Optional
 
 from app.domain.interfaces.event_bus import IEventBus
@@ -18,7 +17,6 @@ from app.infrastructure.messaging.event_types import (
     EnrollmentEvent,
     EventPriority,
     EventType,
-    FaceSearchEvent,
     LivenessCheckEvent,
     QualityAssessmentEvent,
     VerificationEvent,

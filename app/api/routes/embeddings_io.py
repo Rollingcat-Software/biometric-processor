@@ -1,6 +1,6 @@
 """Embedding export/import API routes."""
 
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal
 
 from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.responses import JSONResponse

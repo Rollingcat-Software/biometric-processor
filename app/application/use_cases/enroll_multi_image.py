@@ -140,14 +140,14 @@ class EnrollMultiImageUseCase:
                 # For multi-enroll, side-angle faces (30°+) may fail OpenCV detection.
                 # Since the client (MediaPipe) already confirmed and cropped the face,
                 # we fall back to using the full image when detection fails.
-                logger.debug(f"  Step 1/3: Detecting face...")
+                logger.debug("  Step 1/3: Detecting face...")
                 try:
                     detection = await asyncio.wait_for(
                         self._detector.detect(image),
                         timeout=settings.ML_MODEL_TIMEOUT_SECONDS
                     )
                     # Extract face region from detection
-                    logger.debug(f"  Step 2/3: Extracting face region...")
+                    logger.debug("  Step 2/3: Extracting face region...")
                     face_region = detection.get_face_region(image)
                 except FaceNotDetectedError:
                     # Side-angle face: OpenCV can't detect it, but client already
@@ -161,7 +161,7 @@ class EnrollMultiImageUseCase:
                     raise MLModelTimeoutError("face_detection", settings.ML_MODEL_TIMEOUT_SECONDS)
 
                 # Assess quality with timeout
-                logger.debug(f"  Step 3/3: Assessing quality...")
+                logger.debug("  Step 3/3: Assessing quality...")
                 try:
                     quality = await asyncio.wait_for(
                         self._quality_assessor.assess(face_region),

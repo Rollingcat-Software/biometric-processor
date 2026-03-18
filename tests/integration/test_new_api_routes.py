@@ -2,7 +2,6 @@
 
 import pytest
 from unittest.mock import AsyncMock, Mock, patch
-import numpy as np
 from io import BytesIO
 from PIL import Image
 

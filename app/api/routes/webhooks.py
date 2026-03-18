@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel

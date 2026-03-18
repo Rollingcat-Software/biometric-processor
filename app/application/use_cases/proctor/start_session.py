@@ -7,7 +7,6 @@ from uuid import UUID
 
 import numpy as np
 
-from app.domain.entities.proctor_session import ProctorSession
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
 from app.domain.interfaces.proctor_session_repository import IProctorSessionRepository
 

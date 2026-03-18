@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Optional
 from uuid import UUID
 
-from app.domain.entities.proctor_session import SessionStatus, TerminationReason
+from app.domain.entities.proctor_session import TerminationReason
 from app.domain.interfaces.proctor_session_repository import IProctorSessionRepository
 
 logger = logging.getLogger(__name__)

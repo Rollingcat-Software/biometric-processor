@@ -2,12 +2,11 @@
 
 import pytest
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from app.infrastructure.persistence.repositories.memory_embedding_repository import (
     InMemoryEmbeddingRepository
 )
-from app.domain.exceptions.repository_errors import RepositoryError
 
 
 class TestInMemoryEmbeddingRepository:

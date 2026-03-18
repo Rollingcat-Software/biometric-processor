@@ -179,7 +179,7 @@ class EnhancedLivenessDetector(ILivenessDetector):
             face = max(faces, key=lambda rect: rect[2] * rect[3])
             x, y, w, h = face
             face_roi = gray[y : y + h, x : x + w]
-            face_roi_color = image[y : y + h, x : x + w]
+            image[y : y + h, x : x + w]
 
             # Active challenges based on configuration
             blink_score = 0.0
@@ -476,7 +476,7 @@ class EnhancedLivenessDetector(ILivenessDetector):
             # Analyze saturation distribution
             saturation = hsv[:, :, 1]
             sat_mean = np.mean(saturation)
-            sat_std = np.std(saturation)
+            np.std(saturation)
 
             # Analyze value (brightness) distribution
             value = hsv[:, :, 2]

@@ -11,19 +11,14 @@ Following:
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
-from uuid import UUID
 
 import numpy as np
 
 from app.domain.entities.proctor_analysis import (
-    AudioAnalysisResult,
-    DeepfakeAnalysisResult,
     FrameAnalysisResult,
-    GazeAnalysisResult,
-    ObjectDetectionResult,
 )
 from app.domain.interfaces.audio_analyzer import IAudioAnalyzer
 from app.domain.interfaces.deepfake_detector import IDeepfakeDetector

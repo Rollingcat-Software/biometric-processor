@@ -16,8 +16,6 @@ from app.core.config import settings
 from app.core.metrics import (
     get_infrastructure_monitor,
     HealthStatus,
-    ComponentHealth,
-    SystemHealth,
 )
 
 logger = logging.getLogger(__name__)
@@ -171,7 +169,6 @@ async def detailed_health() -> Response:
     Returns:
         DetailedHealthResponse with full health details
     """
-    import time
     from app.core.metrics import PROCESS_UPTIME
 
     monitor = get_infrastructure_monitor()

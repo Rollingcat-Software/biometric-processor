@@ -2,7 +2,7 @@
 
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import cv2
 import numpy as np
@@ -17,7 +17,7 @@ from app.application.use_cases.batch_process import (
 )
 from app.domain.entities.face_detection import FaceDetectionResult
 from app.domain.entities.quality_assessment import QualityAssessment
-from app.domain.exceptions.face_errors import FaceNotDetectedError, MultipleFacesError
+from app.domain.exceptions.face_errors import FaceNotDetectedError
 
 
 class TestBatchEnrollmentUseCase:

@@ -167,7 +167,7 @@ async def pause_session(
 ):
     """Pause a proctoring session."""
     try:
-        result = await use_case.execute(session_id, tenant_id)
+        await use_case.execute(session_id, tenant_id)
         return {"status": "paused", "session_id": str(session_id)}
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -181,7 +181,7 @@ async def resume_session(
 ):
     """Resume a paused proctoring session."""
     try:
-        result = await use_case.execute(session_id, tenant_id)
+        await use_case.execute(session_id, tenant_id)
         return {"status": "active", "session_id": str(session_id)}
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -503,7 +503,7 @@ async def review_incident(
             ReviewIncidentRequest as UseCaseRequest,
         )
 
-        result = await use_case.execute(
+        await use_case.execute(
             UseCaseRequest(
                 incident_id=incident_id,
                 reviewer=reviewer_id,

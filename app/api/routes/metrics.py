@@ -2,7 +2,6 @@
 
 from fastapi import APIRouter, Response
 
-from app.core.config import settings
 from app.core.metrics import get_metrics
 
 router = APIRouter(tags=["Monitoring"])

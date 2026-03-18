@@ -63,7 +63,7 @@ class DatabaseHealthChecker:
             # Execute a simple query with timeout
             async with asyncio.timeout(self._timeout):
                 async with self._pool.acquire() as conn:
-                    result = await conn.fetchval("SELECT 1")
+                    await conn.fetchval("SELECT 1")
 
             latency = (time.time() - start_time) * 1000
 

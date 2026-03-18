@@ -5,10 +5,8 @@ to improve read performance and reduce database load.
 """
 
 import asyncio
-import hashlib
 import logging
 import time
-from functools import lru_cache
 from typing import List, Optional, Tuple
 
 import numpy as np

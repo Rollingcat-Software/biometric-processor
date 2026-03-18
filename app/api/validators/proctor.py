@@ -166,7 +166,7 @@ class InputSanitizer:
 
         # Log potential SQL injection attempts (for monitoring)
         if InputSanitizer.SQL_KEYWORDS.search(value):
-            logger.warning(f"Potential SQL injection detected in input")
+            logger.warning("Potential SQL injection detected in input")
 
         return sanitized.strip()
 

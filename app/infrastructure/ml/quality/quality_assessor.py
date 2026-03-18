@@ -6,7 +6,6 @@ import cv2
 import numpy as np
 
 from app.domain.entities.quality_assessment import QualityAssessment
-from app.domain.interfaces.quality_assessor import IQualityAssessor
 
 logger = logging.getLogger(__name__)
 

@@ -1,10 +1,6 @@
 """Unit tests for new infrastructure components."""
 
 import pytest
-import numpy as np
-from unittest.mock import Mock, AsyncMock, patch
-from datetime import datetime
-import time
 
 from app.infrastructure.rate_limit.memory_storage import InMemoryRateLimitStorage
 from app.infrastructure.webhooks.mock_webhook_sender import MockWebhookSender

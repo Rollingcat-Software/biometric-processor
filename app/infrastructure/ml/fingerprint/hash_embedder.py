@@ -13,7 +13,6 @@ The embedding is L2-normalized so cosine similarity works correctly.
 
 import hashlib
 import logging
-from typing import Optional
 
 import numpy as np
 

@@ -3,7 +3,7 @@
 import base64
 import pytest
 import sys
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import Mock, AsyncMock
 from uuid import uuid4
 
 import numpy as np
@@ -24,8 +24,7 @@ from app.api.dependencies.proctor import (
     get_audio_analyzer,
     clear_proctor_cache,
 )
-from app.domain.entities.proctor_session import ProctorSession, SessionStatus
-from app.domain.entities.proctor_incident import ProctorIncident, IncidentType, IncidentSeverity
+from app.domain.entities.proctor_session import SessionStatus
 
 
 # ============================================================================

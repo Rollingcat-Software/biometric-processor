@@ -1,7 +1,7 @@
 """Unit tests for factory classes."""
 
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 import sys
 
 # Mock DeepFace before importing anything that depends on it

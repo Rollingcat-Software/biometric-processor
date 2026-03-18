@@ -24,11 +24,9 @@ from app.domain.entities.verification_result import VerificationResult
 from app.domain.entities.liveness_result import LivenessResult
 from app.domain.exceptions.face_errors import (
     FaceNotDetectedError,
-    MultipleFacesError,
     PoorImageQualityError,
 )
 from app.domain.exceptions.verification_errors import EmbeddingNotFoundError
-from datetime import datetime
 
 
 @pytest.fixture

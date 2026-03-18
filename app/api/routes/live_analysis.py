@@ -10,7 +10,6 @@ This module provides real-time frame-by-frame analysis for:
 Clients send camera frames via WebSocket and receive instant feedback.
 """
 
-import asyncio
 import base64
 import io
 import json
@@ -27,14 +26,6 @@ from app.api.schemas.live_analysis import (
     AnalysisMode,
     LiveAnalysisRequest,
     LiveAnalysisResponse,
-    FaceDetectionResult,
-    QualityResult,
-    DemographicsResult,
-    LivenessResult,
-    EnrollmentReadyResult,
-    VerificationResult,
-    SearchResult,
-    LandmarksResult,
     SessionStats,
 )
 from app.application.use_cases.live_camera_analysis import LiveCameraAnalysisUseCase

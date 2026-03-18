@@ -15,9 +15,9 @@ import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Optional
 
-from app.domain.interfaces.rate_limit_storage import IRateLimitStorage, RateLimitInfo
+from app.domain.interfaces.rate_limit_storage import RateLimitInfo
 
 logger = logging.getLogger(__name__)
 

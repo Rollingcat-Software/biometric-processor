@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, Mock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.domain.entities.api_key import APIKey, APIKeyContext
 from app.domain.interfaces.rate_limit_storage import RateLimitInfo
 
 

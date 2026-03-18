@@ -3,13 +3,11 @@
 import pytest
 import numpy as np
 from unittest.mock import AsyncMock, Mock, patch
-from pathlib import Path
 
 from app.application.use_cases.enroll_face import EnrollFaceUseCase
 from app.application.use_cases.verify_face import VerifyFaceUseCase
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
 
-from app.domain.entities.face_detection import FaceDetectionResult
 from app.domain.entities.quality_assessment import QualityAssessment
 from app.domain.entities.liveness_result import LivenessResult
 from app.domain.entities.verification_result import VerificationResult

@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from app.domain.entities.api_key import APIKey
-from app.domain.interfaces.api_key_repository import IAPIKeyRepository
 
 logger = logging.getLogger(__name__)
 

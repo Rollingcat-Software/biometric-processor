@@ -5,9 +5,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
-import uuid
 
-from app.api.schemas.active_liveness import ChallengeType
 
 
 class PuzzleDifficulty(str, Enum):

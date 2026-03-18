@@ -8,7 +8,6 @@ import json
 import hashlib
 import logging
 from typing import Optional
-from datetime import datetime
 
 import numpy as np
 import redis.asyncio as redis

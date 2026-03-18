@@ -1,7 +1,7 @@
 """DeepFace-based demographics analyzer implementation."""
 
 import logging
-from typing import Dict, List
+from typing import List
 
 import numpy as np
 from deepface import DeepFace
@@ -13,7 +13,7 @@ from app.domain.entities.demographics import (
     GenderEstimate,
     RaceEstimate,
 )
-from app.domain.exceptions.feature_errors import DemographicsError, DemographicsModelError
+from app.domain.exceptions.feature_errors import DemographicsError
 
 logger = logging.getLogger(__name__)
 

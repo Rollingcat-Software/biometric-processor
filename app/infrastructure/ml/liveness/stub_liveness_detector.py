@@ -5,7 +5,6 @@ import logging
 import numpy as np
 
 from app.domain.entities.liveness_result import LivenessResult
-from app.domain.interfaces.liveness_detector import ILivenessDetector
 
 logger = logging.getLogger(__name__)
 

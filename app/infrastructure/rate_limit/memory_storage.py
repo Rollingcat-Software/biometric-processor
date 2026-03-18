@@ -5,7 +5,7 @@ import time
 from collections import defaultdict
 from typing import Dict, Optional
 
-from app.domain.interfaces.rate_limit_storage import IRateLimitStorage, RateLimitInfo
+from app.domain.interfaces.rate_limit_storage import RateLimitInfo
 
 logger = logging.getLogger(__name__)
 

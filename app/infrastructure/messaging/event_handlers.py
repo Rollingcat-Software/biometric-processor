@@ -169,7 +169,7 @@ class BiometricEventHandler:
             event: Event data containing verification results
         """
         try:
-            event_id = event.get("event_id")
+            event.get("event_id")
             user_id = event.get("user_id")
             is_match = event.get("is_match")
             similarity_score = event.get("similarity_score")
@@ -236,7 +236,7 @@ class BiometricEventHandler:
             event: Event data containing liveness check results
         """
         try:
-            event_id = event.get("event_id")
+            event.get("event_id")
             user_id = event.get("user_id")
             is_live = event.get("is_live")
             liveness_score = event.get("liveness_score")
@@ -269,7 +269,7 @@ class BiometricEventHandler:
             event: Event data containing quality assessment results
         """
         try:
-            event_id = event.get("event_id")
+            event.get("event_id")
             user_id = event.get("user_id")
             quality_score = event.get("quality_score")
             is_acceptable = event.get("is_acceptable")

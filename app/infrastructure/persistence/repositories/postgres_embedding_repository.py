@@ -2,13 +2,11 @@
 
 import ast
 import logging
-from datetime import datetime
 from typing import List, Optional, Tuple
 
 import numpy as np
 
 from app.domain.exceptions.repository_errors import RepositoryError
-from app.domain.interfaces.embedding_repository import IEmbeddingRepository
 
 logger = logging.getLogger(__name__)
 

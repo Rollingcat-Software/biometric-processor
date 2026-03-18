@@ -11,7 +11,6 @@ from typing import Optional
 import httpx
 
 from app.domain.entities.webhook_event import WebhookEvent, WebhookResult
-from app.domain.exceptions.feature_errors import WebhookDeliveryError, WebhookTimeoutError
 
 logger = logging.getLogger(__name__)
 

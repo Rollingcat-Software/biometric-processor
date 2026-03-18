@@ -3,8 +3,8 @@
 import base64
 import io
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID, uuid4
+from unittest.mock import MagicMock
+from uuid import uuid4
 
 import numpy as np
 from PIL import Image
@@ -333,7 +333,6 @@ class TestProctorWebSocketWorkflow:
         """Test binary frame header parsing."""
         pytest.importorskip("cv2")
         from app.api.websocket.frame_handler import BinaryFrameHeader
-        import struct
 
         session_id = uuid4()
         frame_number = 42

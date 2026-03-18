@@ -11,7 +11,7 @@ Uses Ultralytics YOLO to detect prohibited objects during proctored exams:
 import logging
 from datetime import datetime
 from functools import lru_cache
-from typing import Dict, List, Optional, Set
+from typing import List, Optional, Set
 
 import numpy as np
 

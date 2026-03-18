@@ -4,13 +4,10 @@ This module defines all async tasks for the biometric processor.
 Tasks are organized by functionality: batch, proctoring, reports, maintenance.
 """
 
-import base64
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
-from uuid import UUID
 
-from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 
 from app.workers.celery_app import celery_app

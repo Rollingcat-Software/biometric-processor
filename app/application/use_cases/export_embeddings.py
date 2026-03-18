@@ -4,7 +4,7 @@ import hashlib
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from app.domain.exceptions.feature_errors import ExportError
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository

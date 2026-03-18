@@ -13,7 +13,7 @@ Design Patterns Used:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, Generic, Optional, Type, TypeVar
+from typing import Any, Dict, Generic, Type, TypeVar
 
 import logging
 

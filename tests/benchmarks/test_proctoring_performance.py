@@ -3,10 +3,8 @@
 Run with: pytest tests/benchmarks/ -v --benchmark-only
 """
 
-import asyncio
 import sys
 import time
-from datetime import datetime
 from typing import Dict, List
 from unittest.mock import Mock
 from uuid import uuid4

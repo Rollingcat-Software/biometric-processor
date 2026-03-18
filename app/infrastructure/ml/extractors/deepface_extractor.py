@@ -6,7 +6,6 @@ import numpy as np
 from deepface import DeepFace
 
 from app.domain.exceptions.face_errors import EmbeddingExtractionError
-from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 
 logger = logging.getLogger(__name__)
 
