@@ -423,15 +423,13 @@ class PgVectorEmbeddingRepository:
                         user_id,
                         embedding <=> $1::vector AS distance
                     FROM face_embeddings
-                    WHERE ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
-                      AND embedding <=> $1::vector < $3
+                    WHERE embedding <=> $1::vector < $2
                       AND deleted_at IS NULL
                       AND (enrollment_type = 'CENTROID' OR enrollment_type IS NULL)
                     ORDER BY distance ASC
-                    LIMIT $4
+                    LIMIT $3
                     """,
                     embedding_list,
-                    tenant_id,
                     threshold,
                     limit,
                 )
