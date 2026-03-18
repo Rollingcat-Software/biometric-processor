@@ -220,6 +220,36 @@ class PgVectorEmbeddingRepository:
                     user_id, tenant_id, embedding_list, normalized_quality,
                 )
 
+                # Cap individual enrollments at 5 per user — delete oldest when exceeding
+                # This prevents centroid dilution from too many low-quality enrollments
+                MAX_INDIVIDUAL_ENROLLMENTS = 5
+                count = await conn.fetchval(
+                    """
+                    SELECT count(*) FROM face_embeddings
+                    WHERE user_id = $1 AND enrollment_type = 'INDIVIDUAL' AND deleted_at IS NULL
+                    """,
+                    user_id,
+                )
+
+                if count > MAX_INDIVIDUAL_ENROLLMENTS:
+                    # Delete oldest individual enrollments beyond the cap
+                    await conn.execute(
+                        """
+                        DELETE FROM face_embeddings
+                        WHERE id IN (
+                            SELECT id FROM face_embeddings
+                            WHERE user_id = $1 AND enrollment_type = 'INDIVIDUAL' AND deleted_at IS NULL
+                            ORDER BY quality_score ASC, created_at ASC
+                            LIMIT $2
+                        )
+                        """,
+                        user_id, count - MAX_INDIVIDUAL_ENROLLMENTS,
+                    )
+                    logger.info(
+                        f"Pruned {count - MAX_INDIVIDUAL_ENROLLMENTS} lowest-quality enrollment(s) "
+                        f"for user {user_id} (cap={MAX_INDIVIDUAL_ENROLLMENTS})"
+                    )
+
                 # Check if centroid exists
                 has_centroid = await conn.fetchval(
                     """
@@ -229,41 +259,46 @@ class PgVectorEmbeddingRepository:
                     user_id,
                 )
 
+                # Quality-weighted centroid: higher quality embeddings contribute more
+                # weight = quality_score (0-1), so a 0.9 quality embedding has 9x
+                # the influence of a 0.1 quality embedding
+                weighted_centroid_sql = """
+                    SELECT
+                        (SUM(embedding * COALESCE(quality_score, 0.5)) /
+                         NULLIF(SUM(COALESCE(quality_score, 0.5)), 0))::vector(512) as weighted_emb,
+                        AVG(quality_score) as avg_q
+                    FROM face_embeddings
+                    WHERE user_id = $1 AND enrollment_type = 'INDIVIDUAL' AND deleted_at IS NULL
+                """
+
                 if has_centroid == 0:
-                    # Create centroid from all individual embeddings
+                    # Create centroid from quality-weighted individual embeddings
                     await conn.execute(
                         """
                         INSERT INTO face_embeddings (user_id, tenant_id, embedding, quality_score, enrollment_type)
-                        SELECT $1, $2,
-                               AVG(embedding)::vector(512),
-                               AVG(quality_score),
-                               'CENTROID'
-                        FROM face_embeddings
-                        WHERE user_id = $1 AND enrollment_type = 'INDIVIDUAL' AND deleted_at IS NULL
+                        SELECT $1, $2, sub.weighted_emb, sub.avg_q, 'CENTROID'
+                        FROM (""" + weighted_centroid_sql + """) sub
+                        WHERE sub.weighted_emb IS NOT NULL
                         """,
                         user_id, tenant_id,
                     )
                 else:
-                    # Update existing centroid with new average
+                    # Update existing centroid with quality-weighted average
                     await conn.execute(
                         """
                         UPDATE face_embeddings SET
-                            embedding = sub.avg_emb,
+                            embedding = sub.weighted_emb,
                             quality_score = sub.avg_q,
                             updated_at = CURRENT_TIMESTAMP
-                        FROM (
-                            SELECT AVG(embedding)::vector(512) as avg_emb,
-                                   AVG(quality_score) as avg_q
-                            FROM face_embeddings
-                            WHERE user_id = $1 AND enrollment_type = 'INDIVIDUAL' AND deleted_at IS NULL
-                        ) sub
+                        FROM (""" + weighted_centroid_sql + """) sub
                         WHERE face_embeddings.user_id = $1
                           AND face_embeddings.enrollment_type = 'CENTROID'
+                          AND sub.weighted_emb IS NOT NULL
                         """,
                         user_id,
                     )
 
-                # Count enrollments
+                # Get final count
                 count = await conn.fetchval(
                     """
                     SELECT count(*) FROM face_embeddings

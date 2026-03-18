@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     )
 
     # Thresholds
-    VERIFICATION_THRESHOLD: float = Field(default=0.6, ge=0.0, le=1.0)
+    VERIFICATION_THRESHOLD: float = Field(default=0.45, ge=0.0, le=1.0)
     LIVENESS_THRESHOLD: float = Field(default=70.0, ge=0.0, le=100.0)
     QUALITY_THRESHOLD: float = Field(default=70.0, ge=0.0, le=100.0)
 
