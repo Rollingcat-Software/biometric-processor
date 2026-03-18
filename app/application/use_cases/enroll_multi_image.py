@@ -18,7 +18,7 @@ from app.domain.exceptions.enrollment_errors import (
     InvalidImageCountError,
     MLModelTimeoutError,
 )
-from app.domain.exceptions.face_errors import PoorImageQualityError
+from app.domain.exceptions.face_errors import FaceNotDetectedError, PoorImageQualityError
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
 from app.domain.interfaces.face_detector import IFaceDetector
@@ -137,18 +137,28 @@ class EnrollMultiImageUseCase:
                     raise ValueError(f"Failed to load image: {image_path}")
 
                 # Detect face with timeout
+                # For multi-enroll, side-angle faces (30°+) may fail OpenCV detection.
+                # Since the client (MediaPipe) already confirmed and cropped the face,
+                # we fall back to using the full image when detection fails.
                 logger.debug(f"  Step 1/3: Detecting face...")
                 try:
                     detection = await asyncio.wait_for(
                         self._detector.detect(image),
                         timeout=settings.ML_MODEL_TIMEOUT_SECONDS
                     )
+                    # Extract face region from detection
+                    logger.debug(f"  Step 2/3: Extracting face region...")
+                    face_region = detection.get_face_region(image)
+                except FaceNotDetectedError:
+                    # Side-angle face: OpenCV can't detect it, but client already
+                    # confirmed face via MediaPipe. Use the full image as face region.
+                    logger.warning(
+                        f"  Image {i}: Face detection failed (likely side-angle). "
+                        f"Using full image as face region (client-side detection trusted)."
+                    )
+                    face_region = image
                 except asyncio.TimeoutError:
                     raise MLModelTimeoutError("face_detection", settings.ML_MODEL_TIMEOUT_SECONDS)
-
-                # Extract face region
-                logger.debug(f"  Step 2/3: Extracting face region...")
-                face_region = detection.get_face_region(image)
 
                 # Assess quality with timeout
                 logger.debug(f"  Step 3/3: Assessing quality...")
