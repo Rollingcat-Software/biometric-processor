@@ -45,7 +45,7 @@ services:
       REQUIRE_HTTPS: "false"
 
       # Rate Limiting
-      RATE_LIMIT_ENABLED: false
+      RATE_LIMIT_ENABLED: true
       RATE_LIMIT_STORAGE: memory
       RATE_LIMIT_PER_MINUTE: 60
 
