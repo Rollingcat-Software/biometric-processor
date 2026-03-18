@@ -259,13 +259,12 @@ class PgVectorEmbeddingRepository:
                     user_id,
                 )
 
-                # Quality-weighted centroid: higher quality embeddings contribute more
-                # weight = quality_score (0-1), so a 0.9 quality embedding has 9x
-                # the influence of a 0.1 quality embedding
-                weighted_centroid_sql = """
+                # Centroid as average of all individual embeddings
+                # pgvector doesn't support vector * scalar, so use simple AVG
+                # Quality filtering is done by the enrollment cap (keeps top 5 by quality)
+                centroid_sql = """
                     SELECT
-                        (SUM(embedding * COALESCE(quality_score, 0.5)) /
-                         NULLIF(SUM(COALESCE(quality_score, 0.5)), 0))::vector(512) as weighted_emb,
+                        AVG(embedding)::vector(512) as avg_emb,
                         AVG(quality_score) as avg_q
                     FROM face_embeddings
                     WHERE user_id = $1 AND enrollment_type = 'INDIVIDUAL' AND deleted_at IS NULL
@@ -276,9 +275,9 @@ class PgVectorEmbeddingRepository:
                     await conn.execute(
                         """
                         INSERT INTO face_embeddings (user_id, tenant_id, embedding, quality_score, enrollment_type)
-                        SELECT $1, $2, sub.weighted_emb, sub.avg_q, 'CENTROID'
-                        FROM (""" + weighted_centroid_sql + """) sub
-                        WHERE sub.weighted_emb IS NOT NULL
+                        SELECT $1, $2, sub.avg_emb, sub.avg_q, 'CENTROID'
+                        FROM (""" + centroid_sql + """) sub
+                        WHERE sub.avg_emb IS NOT NULL
                         """,
                         user_id, tenant_id,
                     )
@@ -287,13 +286,13 @@ class PgVectorEmbeddingRepository:
                     await conn.execute(
                         """
                         UPDATE face_embeddings SET
-                            embedding = sub.weighted_emb,
+                            embedding = sub.avg_emb,
                             quality_score = sub.avg_q,
                             updated_at = CURRENT_TIMESTAMP
-                        FROM (""" + weighted_centroid_sql + """) sub
+                        FROM (""" + centroid_sql + """) sub
                         WHERE face_embeddings.user_id = $1
                           AND face_embeddings.enrollment_type = 'CENTROID'
-                          AND sub.weighted_emb IS NOT NULL
+                          AND sub.avg_emb IS NOT NULL
                         """,
                         user_id,
                     )
