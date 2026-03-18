@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.middleware.error_handler import setup_exception_handlers
 from app.api.middleware.rate_limit import RateLimitMiddleware
+from app.api.middleware.security import InputSanitizationMiddleware, RequestSizeLimitMiddleware
 from app.api.middleware.security_headers import SecurityHeadersMiddleware
 from app.api.routes import batch, enrollment, health, liveness, search, verification, card_type_router
 from app.api.routes import quality, multi_face, demographics, landmarks, comparison, similarity_matrix, embeddings_io, webhooks
@@ -146,6 +147,22 @@ if settings.RATE_LIMIT_ENABLED:
         window_seconds=60,
     )
     logger.info(f"Rate limiting enabled: {settings.RATE_LIMIT_PER_MINUTE} requests/minute")
+
+# Request Size Limiting (prevents DoS via large payloads)
+app.add_middleware(
+    RequestSizeLimitMiddleware,
+    max_content_length=settings.MAX_FILE_SIZE,  # Uses configured max file size
+)
+logger.info(f"Request size limit middleware enabled (max={settings.MAX_FILE_SIZE} bytes)")
+
+# Input Sanitization (SQL injection, XSS, path traversal detection)
+app.add_middleware(
+    InputSanitizationMiddleware,
+    check_sql=True,
+    check_xss=True,
+    check_path_traversal=True,
+)
+logger.info("Input sanitization middleware enabled")
 
 # ============================================================================
 # API Routes

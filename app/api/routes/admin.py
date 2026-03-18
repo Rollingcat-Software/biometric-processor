@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app.core.container import get_embedding_repository
+from app.api.middleware.jwt_auth import require_auth, AuthContext
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
 
 router = APIRouter(
@@ -111,6 +112,7 @@ def record_liveness_check(is_spoof: bool):
 
 @router.get("/stats", response_model=SystemStats)
 async def get_system_stats(
+    auth: AuthContext = Depends(require_auth),
     repository: IEmbeddingRepository = Depends(get_embedding_repository),
 ) -> SystemStats:
     """Get system statistics.
@@ -157,7 +159,9 @@ async def get_system_stats(
 
 
 @router.get("/activity", response_model=RecentActivity)
-async def get_recent_activity() -> RecentActivity:
+async def get_recent_activity(
+    auth: AuthContext = Depends(require_auth),
+) -> RecentActivity:
     """Get recent system activity.
 
     Returns the last 10 operations performed on the system.

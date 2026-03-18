@@ -17,9 +17,11 @@ from typing import Optional
 
 import numpy as np
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from app.api.schemas.biometric_response import BiometricResponse as _SharedBiometricResponse
 from app.core.container import get_speaker_embedder, get_voice_repository
+from app.core.validation import validate_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -29,19 +31,13 @@ router = APIRouter(tags=["Voice"])
 
 
 class VoiceRequest(BaseModel):
-    user_id: str
-    voice_data: str  # base64-encoded audio (WebM/WAV)
+    user_id: str = Field(..., max_length=255)
+    voice_data: str = Field(..., max_length=50_000_000)  # ~37MB decoded max
 
 
-class BiometricResponse(BaseModel):
-    success: bool
-    message: str
-    user_id: Optional[str] = None
-    confidence: Optional[float] = None
+class BiometricResponse(_SharedBiometricResponse):
+    """Voice-specific biometric response with modality default."""
     modality: str = "voice"
-    implemented: bool = True
-    embedding_dimension: Optional[int] = None
-    verified: Optional[bool] = None
 
 
 # ── POST /voice/enroll ──────────────────────────────────────────────
@@ -56,9 +52,7 @@ async def enroll_voice(request: VoiceRequest) -> BiometricResponse:
     the CENTROID.
     """
     try:
-        user_id = request.user_id.strip()
-        if not user_id:
-            raise HTTPException(status_code=400, detail="user_id is required")
+        user_id = validate_user_id(request.user_id)
 
         voice_data = request.voice_data.strip()
         if not voice_data:
@@ -98,7 +92,7 @@ async def enroll_voice(request: VoiceRequest) -> BiometricResponse:
         logger.error(f"Voice enrollment failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Voice enrollment failed: {e}",
+            detail="Voice enrollment failed. Please try again.",
         )
 
 
@@ -114,9 +108,7 @@ async def verify_voice(request: VoiceRequest) -> BiometricResponse:
     VERIFY_THRESHOLD = 0.65
 
     try:
-        user_id = request.user_id.strip()
-        if not user_id:
-            raise HTTPException(status_code=400, detail="user_id is required")
+        user_id = validate_user_id(request.user_id)
 
         voice_data = request.voice_data.strip()
         if not voice_data:
@@ -171,7 +163,7 @@ async def verify_voice(request: VoiceRequest) -> BiometricResponse:
         logger.error(f"Voice verification failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Voice verification failed: {e}",
+            detail="Voice verification failed. Please try again.",
         )
 
 
@@ -179,7 +171,7 @@ async def verify_voice(request: VoiceRequest) -> BiometricResponse:
 
 
 class VoiceSearchRequest(BaseModel):
-    voice_data: str  # base64-encoded audio
+    voice_data: str = Field(..., max_length=50_000_000)  # base64-encoded audio
 
 
 @router.post("/voice/search")
@@ -215,7 +207,7 @@ async def search_voice(request: VoiceSearchRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Voice search failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Voice search failed: {e}")
+        raise HTTPException(status_code=500, detail="Voice search failed. Please try again.")
 
 
 # ── DELETE /voice/{user_id} ────────────────────────────────────────
@@ -225,9 +217,7 @@ async def search_voice(request: VoiceSearchRequest):
 async def delete_voice(user_id: str) -> BiometricResponse:
     """Soft-delete all voice enrollments for a user."""
     try:
-        user_id = user_id.strip()
-        if not user_id:
-            raise HTTPException(status_code=400, detail="user_id is required")
+        user_id = validate_user_id(user_id)
 
         logger.info(f"Voice deletion request: user_id={user_id}")
 
@@ -249,11 +239,14 @@ async def delete_voice(user_id: str) -> BiometricResponse:
             user_id=user_id,
         )
 
+    except ValueError as e:
+        logger.warning(f"Voice deletion validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Voice deletion failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Voice deletion failed: {e}",
+            detail="Voice deletion failed. Please try again.",
         )

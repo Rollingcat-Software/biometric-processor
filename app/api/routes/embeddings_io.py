@@ -2,11 +2,12 @@
 
 from typing import Any, Dict, Literal
 
-from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import JSONResponse
 import json
 
 from app.core.container import get_export_embeddings_use_case, get_import_embeddings_use_case
+from app.api.middleware.jwt_auth import require_auth, AuthContext
 
 router = APIRouter(
     prefix="/embeddings",
@@ -23,6 +24,7 @@ router = APIRouter(
     ),
 )
 async def export_embeddings(
+    auth: AuthContext = Depends(require_auth),
     tenant_id: str = Query(default="default", description="Tenant identifier"),
     format: Literal["json"] = Query(default="json", description="Export format"),
     include_metadata: bool = Query(
@@ -60,6 +62,7 @@ async def export_embeddings(
     ),
 )
 async def import_embeddings(
+    auth: AuthContext = Depends(require_auth),
     file: UploadFile = File(..., description="JSON export file"),
     mode: Literal["merge", "replace", "skip_existing"] = Form(
         default="merge",

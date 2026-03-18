@@ -470,6 +470,20 @@ class Settings(BaseSettings):
     BATCH_MAX_CONCURRENT: int = Field(default=5, ge=1, le=20)
     BATCH_ADAPTIVE_CONCURRENCY: bool = Field(default=False)
 
+    @field_validator("JWT_SECRET")
+    @classmethod
+    def validate_jwt_secret(cls, v, info):
+        """Ensure JWT_SECRET is set when JWT is enabled."""
+        jwt_enabled = info.data.get("JWT_ENABLED", True)
+        if jwt_enabled and not v:
+            import warnings
+            warnings.warn(
+                "JWT_SECRET is empty while JWT_ENABLED=True. "
+                "Set JWT_SECRET environment variable for secure JWT validation.",
+                stacklevel=2,
+            )
+        return v
+
     @field_validator("PROCTOR_RISK_THRESHOLD_CRITICAL")
     @classmethod
     def validate_risk_thresholds(cls, v, info):

@@ -17,9 +17,11 @@ from typing import Optional
 
 import numpy as np
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from app.api.schemas.biometric_response import BiometricResponse as _SharedBiometricResponse
 from app.core.container import get_fingerprint_embedder, get_fingerprint_repository
+from app.core.validation import validate_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -29,19 +31,13 @@ router = APIRouter(tags=["Fingerprint"])
 
 
 class FingerprintRequest(BaseModel):
-    user_id: str
-    fingerprint_data: str  # base64-encoded fingerprint image
+    user_id: str = Field(..., max_length=255)
+    fingerprint_data: str = Field(..., max_length=50_000_000)  # ~37MB decoded max
 
 
-class BiometricResponse(BaseModel):
-    success: bool
-    message: str
-    user_id: Optional[str] = None
-    confidence: Optional[float] = None
+class BiometricResponse(_SharedBiometricResponse):
+    """Fingerprint-specific biometric response with modality default."""
     modality: str = "fingerprint"
-    implemented: bool = True
-    embedding_dimension: Optional[int] = None
-    verified: Optional[bool] = None
 
 
 # ── POST /fingerprint/enroll ────────────────────────────────────────
@@ -56,9 +52,7 @@ async def enroll_fingerprint(request: FingerprintRequest) -> BiometricResponse:
     and recomputes the CENTROID.
     """
     try:
-        user_id = request.user_id.strip()
-        if not user_id:
-            raise HTTPException(status_code=400, detail="user_id is required")
+        user_id = validate_user_id(request.user_id)
 
         fingerprint_data = request.fingerprint_data.strip()
         if not fingerprint_data:
@@ -98,7 +92,7 @@ async def enroll_fingerprint(request: FingerprintRequest) -> BiometricResponse:
         logger.error(f"Fingerprint enrollment failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Fingerprint enrollment failed: {e}",
+            detail="Fingerprint enrollment failed. Please try again.",
         )
 
 
@@ -114,9 +108,7 @@ async def verify_fingerprint(request: FingerprintRequest) -> BiometricResponse:
     VERIFY_THRESHOLD = 0.70
 
     try:
-        user_id = request.user_id.strip()
-        if not user_id:
-            raise HTTPException(status_code=400, detail="user_id is required")
+        user_id = validate_user_id(request.user_id)
 
         fingerprint_data = request.fingerprint_data.strip()
         if not fingerprint_data:
@@ -170,7 +162,7 @@ async def verify_fingerprint(request: FingerprintRequest) -> BiometricResponse:
         logger.error(f"Fingerprint verification failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Fingerprint verification failed: {e}",
+            detail="Fingerprint verification failed. Please try again.",
         )
 
 
@@ -181,9 +173,7 @@ async def verify_fingerprint(request: FingerprintRequest) -> BiometricResponse:
 async def delete_fingerprint(user_id: str) -> BiometricResponse:
     """Soft-delete all fingerprint enrollments for a user."""
     try:
-        user_id = user_id.strip()
-        if not user_id:
-            raise HTTPException(status_code=400, detail="user_id is required")
+        user_id = validate_user_id(user_id)
 
         logger.info(f"Fingerprint deletion request: user_id={user_id}")
 
@@ -205,11 +195,14 @@ async def delete_fingerprint(user_id: str) -> BiometricResponse:
             user_id=user_id,
         )
 
+    except ValueError as e:
+        logger.warning(f"Fingerprint deletion validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Fingerprint deletion failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Fingerprint deletion failed: {e}",
+            detail="Fingerprint deletion failed. Please try again.",
         )

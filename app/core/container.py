@@ -828,6 +828,26 @@ async def shutdown_dependencies(wait: bool = True) -> None:
     except Exception as e:
         logger.error(f"Error closing database connections: {e}", exc_info=True)
 
+    # Close voice repository connection pool
+    try:
+        voice_repo = get_voice_repository()
+        if hasattr(voice_repo, 'close'):
+            logger.info("Closing voice repository connection pool...")
+            await voice_repo.close()
+            logger.info("Voice repository connection pool closed")
+    except Exception as e:
+        logger.error(f"Error closing voice repository: {e}", exc_info=True)
+
+    # Close fingerprint repository connection pool
+    try:
+        fingerprint_repo = get_fingerprint_repository()
+        if hasattr(fingerprint_repo, 'close'):
+            logger.info("Closing fingerprint repository connection pool...")
+            await fingerprint_repo.close()
+            logger.info("Fingerprint repository connection pool closed")
+    except Exception as e:
+        logger.error(f"Error closing fingerprint repository: {e}", exc_info=True)
+
     # Close event bus connections
     if settings.EVENT_BUS_ENABLED:
         try:

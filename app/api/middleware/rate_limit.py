@@ -84,9 +84,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not settings.RATE_LIMIT_ENABLED:
             return await call_next(request)
 
-        # Skip rate limiting for authenticated service-to-service calls
-        api_key = request.headers.get("X-API-Key")
-        if api_key:
+        # Skip rate limiting only for validated API key requests
+        # (api_key_context is set by APIKeyAuthMiddleware after validation)
+        if hasattr(request.state, "api_key_context") and request.state.api_key_context is not None:
             return await call_next(request)
 
         # Skip excluded paths

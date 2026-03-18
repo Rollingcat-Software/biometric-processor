@@ -4,6 +4,7 @@ import logging
 from typing import Optional
 from uuid import UUID
 
+import jwt
 from fastapi import (
     APIRouter,
     Query,
@@ -20,6 +21,7 @@ from app.api.dependencies.proctor import (
     get_submit_frame_use_case,
 )
 from app.core.config import settings
+from app.core.validation import validate_user_id, validate_tenant_id
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +50,11 @@ async def authenticate_websocket(
     websocket: WebSocket,
     token: str,
 ) -> tuple[str, str]:
-    """Authenticate WebSocket connection.
+    """Authenticate WebSocket connection via JWT token.
 
     Args:
         websocket: The WebSocket connection
-        token: Authentication token
+        token: JWT authentication token
 
     Returns:
         Tuple of (tenant_id, user_id)
@@ -60,16 +62,49 @@ async def authenticate_websocket(
     Raises:
         WebSocketException if authentication fails
     """
-    # For now, simple token validation
-    # In production, this would validate JWT or API key
-    if not token or len(token) < 10:
+    if not token:
+        logger.warning("WebSocket auth failed: no token provided")
         raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
 
-    # Extract tenant from query params or token
-    tenant_id = websocket.query_params.get("tenant_id", "default")
-    user_id = websocket.query_params.get("user_id", "anonymous")
+    if not settings.JWT_SECRET:
+        logger.error("WebSocket auth failed: JWT_SECRET not configured")
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
 
-    return tenant_id, user_id
+    try:
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[settings.JWT_ALGORITHM],
+            options={
+                "verify_exp": True,
+                "verify_iat": True,
+                "require": ["sub", "exp"],
+            },
+        )
+
+        user_id = payload.get("sub", "")
+        tenant_id = payload.get("tenant_id", "default")
+
+        if not user_id:
+            logger.warning("WebSocket auth failed: missing sub claim in JWT")
+            raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
+
+        # Validate extracted IDs
+        user_id = validate_user_id(user_id)
+        tenant_id = validate_tenant_id(tenant_id) or "default"
+
+        logger.info(f"WebSocket authenticated: user_id={user_id}, tenant_id={tenant_id}")
+        return tenant_id, user_id
+
+    except jwt.ExpiredSignatureError:
+        logger.warning("WebSocket auth failed: token expired")
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
+    except jwt.InvalidTokenError as e:
+        logger.warning(f"WebSocket auth failed: invalid token - {e}")
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
+    except (ValueError, Exception) as e:
+        logger.warning(f"WebSocket auth failed: {e}")
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
 
 
 @router.websocket("/proctoring/sessions/{session_id}/stream")
