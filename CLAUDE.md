@@ -38,10 +38,10 @@ pytest tests/unit/ -v           # Unit tests only
 ### Fully implemented:
 - **Face**: enroll, verify, search, liveness, quality, demographics, landmarks, comparison
 - Routes: `enrollment.py`, `verification.py`, `search.py`, `liveness.py`, `quality.py`, etc.
-
-### STUB only (always return failure):
-- **Fingerprint**: `app/api/routes/fingerprint.py` - enroll/verify/delete endpoints exist but return `success: false`
-- **Voice**: `app/api/routes/voice.py` - enroll/verify/delete endpoints exist but return `success: false`
+- **Voice**: enroll, verify, search, delete — Resemblyzer 256-dim speaker embeddings, centroid-based
+- Routes: `voice.py`, repo: `pgvector_voice_repository.py`, embedder: `speaker_embedder.py`
+- **Fingerprint**: enroll, verify, delete — SHA-256 hash-based 256-dim embeddings, centroid-based
+- Routes: `fingerprint.py`, repo: `pgvector_fingerprint_repository.py`, embedder: `hash_embedder.py`
 
 ### Not implemented:
 - **Iris**: No endpoints at all
@@ -49,9 +49,7 @@ pytest tests/unit/ -v           # Unit tests only
 ## Known Issues (March 2026)
 
 ### CRITICAL:
-1. Fingerprint stubs cause identity-core-api FingerprintAuthHandler to always fail
-2. Voice stubs cause identity-core-api VoiceAuthHandler to always fail
-3. Only 5 of 20+ endpoint groups are consumed by other services
+1. Only 5 of 20+ endpoint groups are consumed by other services
 
 ### Integration points:
 - Called by **identity-core-api** (Java/Spring on port 8080) via BiometricServiceAdapter
