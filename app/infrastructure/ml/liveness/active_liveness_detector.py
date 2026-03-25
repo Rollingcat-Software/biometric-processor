@@ -130,6 +130,12 @@ class ActiveLivenessDetector(ILivenessDetector):
                 liveness_score=0.0,
                 challenge=challenge,
                 challenge_completed=False,
+                details={
+                    "ear": 0.0,
+                    "mar": 0.0,
+                    "eyes_open": False,
+                    "smiling": False,
+                },
             )
 
         landmarks = results.multi_face_landmarks[0].landmark
@@ -171,6 +177,12 @@ class ActiveLivenessDetector(ILivenessDetector):
             liveness_score=liveness_score,
             challenge=challenge,
             challenge_completed=is_live,
+            details={
+                "ear": avg_ear,
+                "mar": mar,
+                "eyes_open": eyes_open,
+                "smiling": is_smiling,
+            },
         )
 
     def _calculate_ear(

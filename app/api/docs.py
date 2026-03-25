@@ -161,7 +161,8 @@ EXAMPLE_RESPONSES: Dict[str, Any] = {
     },
     "liveness_success": {
         "is_live": True,
-        "liveness_score": 94.2,
+        "score": 94.2,
+        "confidence": 0.93,
         "challenges_completed": ["blink", "smile"],
         "anti_spoofing_checks": {
             "texture_analysis": True,

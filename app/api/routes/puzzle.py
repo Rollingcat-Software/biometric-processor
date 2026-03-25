@@ -228,6 +228,7 @@ async def verify_puzzle(
             puzzle_id=request.puzzle_id,
             results=[r.model_dump() for r in request.results],
             final_frame=request.final_frame,
+            spot_frames=request.spot_frames,
             client_meta=request.client_meta.model_dump() if request.client_meta else None,
         )
 

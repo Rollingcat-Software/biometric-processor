@@ -96,6 +96,10 @@ class VerifyPuzzleRequest(BaseModel):
     final_frame: Optional[str] = Field(
         default=None, description="Base64 encoded final frame (for audit)"
     )
+    spot_frames: Optional[List[str]] = Field(
+        default=None,
+        description="Base64 encoded frames for server-side spot-check (optional)",
+    )
     client_meta: ClientMeta = Field(
         default_factory=ClientMeta, description="Client metadata"
     )

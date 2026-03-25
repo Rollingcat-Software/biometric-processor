@@ -120,6 +120,12 @@ class TextureLivenessDetector(ILivenessDetector):
             liveness_score=liveness_score,
             challenge=challenge,
             challenge_completed=True,
+            details={
+                "texture": texture_score,
+                "color": color_score,
+                "frequency": frequency_score,
+                "moire": moire_score,
+            },
         )
 
     def _calculate_texture_score(self, image: np.ndarray) -> float:

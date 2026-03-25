@@ -15,7 +15,7 @@ Follows the same ILivenessDetector protocol as other implementations
 """
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 import cv2
 import numpy as np
@@ -114,9 +114,12 @@ class UniFaceLivenessDetector(ILivenessDetector):
 
             # Run MiniFASNet prediction
             # The model returns a list of predictions per detected face
-            predictions = self._model.predict(image_rgb)
+            h, w = image_rgb.shape[:2]
+            bbox = [0, 0, w, h]
+            raw_prediction = self._model.predict(image_rgb, bbox)
+            predictions = self._normalize_predictions(raw_prediction)
 
-            if not predictions or len(predictions) == 0:
+            if not predictions:
                 # No face detected by MiniFASNet - fall back to "real" with low confidence
                 logger.warning(
                     "MiniFASNet did not detect any face, "
@@ -124,9 +127,11 @@ class UniFaceLivenessDetector(ILivenessDetector):
                 )
                 return LivenessResult(
                     is_live=True,
-                    liveness_score=51.0,
+                    score=51.0,
                     challenge="uniface_minifasnet",
                     challenge_completed=True,
+                    confidence=0.51,
+                    details={"backend_score": 0.51, "fallback_reason": "no_face_detected"},
                 )
 
             # Use the first (or largest) prediction
@@ -149,9 +154,11 @@ class UniFaceLivenessDetector(ILivenessDetector):
 
             return LivenessResult(
                 is_live=is_live,
-                liveness_score=liveness_score,
+                score=liveness_score,
                 challenge="uniface_minifasnet",
                 challenge_completed=True,
+                confidence=score,
+                details={"backend_score": score},
             )
 
         except LivenessCheckError:
@@ -166,10 +173,28 @@ class UniFaceLivenessDetector(ILivenessDetector):
             )
             return LivenessResult(
                 is_live=True,
-                liveness_score=51.0,
+                score=51.0,
                 challenge="uniface_minifasnet",
                 challenge_completed=True,
+                confidence=0.51,
+                details={"backend_score": 0.51, "fallback_reason": "model_inference_failed"},
             )
+
+    def _normalize_predictions(self, raw_prediction: Any) -> list[Any]:
+        """Normalize UniFace prediction output to a list.
+
+        UniFace can return either:
+        - a list/tuple of predictions
+        - a single SpoofingResult-like object
+        - None
+        """
+        if raw_prediction is None:
+            return []
+
+        if isinstance(raw_prediction, (list, tuple)):
+            return list(raw_prediction)
+
+        return [raw_prediction]
 
     def _extract_score(self, prediction) -> float:
         """Extract the anti-spoofing confidence score from a MiniFASNet prediction.

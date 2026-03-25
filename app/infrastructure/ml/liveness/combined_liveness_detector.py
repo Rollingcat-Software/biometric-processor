@@ -108,8 +108,12 @@ class CombinedLivenessDetector(ILivenessDetector):
         # Calculate score based on available results
         if active_result is not None:
             combined_score = (
-                texture_result.liveness_score * self._texture_weight +
-                active_result.liveness_score * self._active_weight
+                texture_result.score * self._texture_weight +
+                active_result.score * self._active_weight
+            )
+            combined_confidence = (
+                texture_result.confidence * self._texture_weight
+                + active_result.confidence * self._active_weight
             )
             challenge_completed = (
                 texture_result.challenge_completed and
@@ -119,27 +123,42 @@ class CombinedLivenessDetector(ILivenessDetector):
             logger.info(
                 f"Combined liveness detection complete: "
                 f"score={combined_score:.2f}, "
-                f"texture_score={texture_result.liveness_score:.2f}, "
-                f"active_score={active_result.liveness_score:.2f}"
+                f"texture_score={texture_result.score:.2f}, "
+                f"active_score={active_result.score:.2f}"
             )
+            details = {
+                **texture_result.details,
+                **active_result.details,
+                "passive_score": texture_result.score,
+                "active_score": active_result.score,
+                "combined_score": combined_score,
+            }
         else:
             # Texture-only fallback
-            combined_score = texture_result.liveness_score
+            combined_score = texture_result.score
+            combined_confidence = texture_result.confidence
             challenge_completed = texture_result.challenge_completed
             used_challenge = "texture"
             logger.info(
                 f"Texture-only liveness detection complete: "
                 f"score={combined_score:.2f}"
             )
+            details = {
+                **texture_result.details,
+                "passive_score": texture_result.score,
+                "combined_score": combined_score,
+            }
 
         # Determine liveness
         is_live = combined_score >= self._liveness_threshold
 
         return LivenessResult(
             is_live=is_live,
-            liveness_score=combined_score,
+            score=combined_score,
             challenge=used_challenge,
             challenge_completed=challenge_completed,
+            confidence=combined_confidence,
+            details=details,
         )
 
     def get_challenge_type(self) -> str:

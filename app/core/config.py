@@ -3,7 +3,7 @@
 import os
 from typing import List, Literal, Optional
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -74,7 +74,8 @@ class Settings(BaseSettings):
     # Anti-Spoofing (DeepFace 0.0.98+ built-in)
     ANTI_SPOOFING_ENABLED: bool = Field(
         default=False,
-        description="Enable DeepFace built-in anti-spoofing on face detection"
+        description="Enable DeepFace built-in anti-spoofing on face detection",
+        validation_alias=AliasChoices("ANTI_SPOOFING_ENABLED", "DEEPFACE_ANTI_SPOOFING"),
     )
     ANTI_SPOOFING_THRESHOLD: float = Field(
         default=0.5,
@@ -116,6 +117,22 @@ class Settings(BaseSettings):
             return min(cpu_count, 8)
         return self.ML_THREAD_POOL_SIZE
 
+    def get_liveness_backend(self) -> Literal["enhanced", "texture", "uniface"]:
+        """Get the effective liveness backend.
+
+        LIVENESS_MODE is the canonical configuration source. LIVENESS_BACKEND is
+        kept only for backwards compatibility and explicit backend overrides.
+        """
+        if self.LIVENESS_BACKEND is not None:
+            return self.LIVENESS_BACKEND
+
+        mode_to_backend = {
+            "passive": "texture",
+            "active": "enhanced",
+            "combined": "uniface" if self.LIVENESS_UNIFACE_DEFAULT_ENABLED else "enhanced",
+        }
+        return mode_to_backend[self.LIVENESS_MODE]
+
     # Request Timeouts (prevents hung requests)
     REQUEST_TIMEOUT_SECONDS: int = Field(
         default=60,
@@ -139,16 +156,30 @@ class Settings(BaseSettings):
     )
 
     # Liveness Detection Mode
-    LIVENESS_MODE: Literal["passive", "active", "combined"] = Field(default="combined")
+    LIVENESS_MODE: Literal["passive", "active", "combined"] = Field(
+        default="combined",
+        description=(
+            "Canonical liveness configuration. "
+            "'passive' maps to texture analysis, "
+            "'active' maps to enhanced active checks, "
+            "'combined' maps to enhanced multi-modal checks."
+        ),
+    )
 
     # Liveness Detection Backend
-    LIVENESS_BACKEND: Literal["enhanced", "texture", "uniface"] = Field(
-        default="enhanced",
+    LIVENESS_BACKEND: Optional[Literal["enhanced", "texture", "uniface"]] = Field(
+        default=None,
         description=(
-            "Liveness detection backend: "
-            "'enhanced' = multi-modal (LBP + blink + smile, default), "
-            "'texture' = texture analysis only, "
-            "'uniface' = UniFace MiniFASNet ONNX model"
+            "Deprecated compatibility alias for backend selection. "
+            "Prefer LIVENESS_MODE. When set, this value overrides the backend "
+            "derived from LIVENESS_MODE."
+        ),
+    )
+    LIVENESS_UNIFACE_DEFAULT_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Feature flag for rolling out UniFace as the default backend for "
+            "combined liveness mode when no explicit LIVENESS_BACKEND override is set."
         ),
     )
 

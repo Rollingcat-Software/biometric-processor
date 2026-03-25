@@ -1,108 +1,151 @@
-"""Factory for creating liveness detectors."""
+"""Compatibility factory for creating liveness detectors.
+
+This module keeps the public ``LivenessDetectorFactory`` symbol available while
+aligning detector selection with the current application architecture:
+
+- Canonical configuration comes from ``LIVENESS_MODE``
+- Explicit backend override comes from ``LIVENESS_BACKEND``
+- Effective runtime backends are ``enhanced``, ``texture``, and ``uniface``
+
+Legacy mode names (``passive``, ``active``, ``combined``, ``stub``) are still
+accepted to avoid breaking older imports and scripts.
+"""
 
 import logging
 import os
-from typing import Literal
+from typing import Literal, Optional
 
+from app.core.config import settings
 from app.domain.interfaces.liveness_detector import ILivenessDetector
-from app.infrastructure.ml.liveness.active_liveness_detector import ActiveLivenessDetector
-from app.infrastructure.ml.liveness.combined_liveness_detector import CombinedLivenessDetector
+from app.infrastructure.ml.liveness.enhanced_liveness_detector import EnhancedLivenessDetector
 from app.infrastructure.ml.liveness.stub_liveness_detector import StubLivenessDetector
 from app.infrastructure.ml.liveness.texture_liveness_detector import TextureLivenessDetector
+from app.infrastructure.ml.liveness.uniface_liveness_detector import UniFaceLivenessDetector
 
 logger = logging.getLogger(__name__)
 
 LivenessMode = Literal["passive", "active", "combined", "stub"]
+LivenessBackend = Literal["enhanced", "texture", "uniface"]
+SupportedLivenessSelection = Literal[
+    "passive",
+    "active",
+    "combined",
+    "stub",
+    "enhanced",
+    "texture",
+    "uniface",
+]
 
 
 class LivenessDetectorFactory:
     """Factory for creating liveness detector instances.
 
-    Implements Factory Pattern for creating different liveness detector implementations.
-    This allows adding new detectors without modifying client code (Open/Closed Principle).
-
-    Supported Modes:
-    - passive: Texture-based analysis (printed photos, screens)
-    - active: Smile/blink detection via MediaPipe
-    - combined: Both methods for highest accuracy
-    - stub: Always passes (for testing)
+    Prefer the dependency container for runtime use. This factory remains as a
+    backwards-compatible construction helper for tests, scripts, and imports
+    that still expect ``LivenessDetectorFactory`` to exist.
     """
 
     @staticmethod
     def create(
-        mode: LivenessMode = "combined",
-        liveness_threshold: float = 70.0,
+        mode: Optional[SupportedLivenessSelection] = None,
+        liveness_threshold: Optional[float] = None,
         **kwargs,
     ) -> ILivenessDetector:
         """Create a liveness detector instance.
 
         Args:
-            mode: Type of liveness detection
-                Options: "passive", "active", "combined", "stub"
-            liveness_threshold: Score threshold for liveness (0-100)
-            **kwargs: Additional arguments passed to detector constructor
+            mode: Optional selection value. Supports both legacy modes
+                (``passive``, ``active``, ``combined``, ``stub``) and current
+                backends (``enhanced``, ``texture``, ``uniface``). When omitted,
+                the current application settings are used.
+            liveness_threshold: Optional threshold override. Falls back to the
+                configured application threshold when omitted.
+            **kwargs: Detector-specific compatibility arguments.
 
         Returns:
-            Liveness detector instance implementing ILivenessDetector
-
-        Raises:
-            ValueError: If mode is not supported
-
-        Example:
-            ```python
-            detector = LivenessDetectorFactory.create("combined", liveness_threshold=70.0)
-            ```
+            A liveness detector implementation.
         """
-        mode = mode.lower()
+        selection = (mode or settings.LIVENESS_BACKEND or settings.LIVENESS_MODE).lower()
+        threshold = settings.LIVENESS_THRESHOLD if liveness_threshold is None else liveness_threshold
 
-        logger.info(f"Creating liveness detector: {mode}")
+        logger.info("Creating liveness detector via factory: selection=%s", selection)
 
-        if mode == "passive":
+        if selection == "stub":
+            return LivenessDetectorFactory._create_stub(threshold, **kwargs)
+
+        backend = LivenessDetectorFactory._resolve_backend(selection)
+
+        if backend == "uniface":
+            return UniFaceLivenessDetector(
+                liveness_threshold=threshold,
+            )
+
+        if backend == "texture":
             return TextureLivenessDetector(
                 texture_threshold=kwargs.get("texture_threshold", 100.0),
                 color_threshold=kwargs.get("color_threshold", 0.3),
                 frequency_threshold=kwargs.get("frequency_threshold", 0.5),
-                liveness_threshold=kwargs.get("passive_threshold", 60.0),
+                liveness_threshold=threshold,
             )
-        elif mode == "active":
-            return ActiveLivenessDetector(
-                ear_threshold=kwargs.get("ear_threshold", 0.25),
-                mar_threshold=kwargs.get("mar_threshold", 0.6),
+
+        return EnhancedLivenessDetector(
+            texture_threshold=kwargs.get("texture_threshold", 100.0),
+            liveness_threshold=threshold,
+            enable_blink_detection=kwargs.get("enable_blink_detection", True),
+            enable_smile_detection=kwargs.get("enable_smile_detection", True),
+            blink_frames_required=kwargs.get("blink_frames_required", 2),
+        )
+
+    @staticmethod
+    def _resolve_backend(selection: str) -> LivenessBackend:
+        """Resolve legacy mode/backend names to an effective backend."""
+        if selection in ("enhanced", "texture", "uniface"):
+            return selection
+
+        legacy_mode_to_backend: dict[str, LivenessBackend] = {
+            "passive": "texture",
+            "active": "enhanced",
+            "combined": "enhanced",
+        }
+        if selection in legacy_mode_to_backend:
+            logger.warning(
+                "Legacy liveness mode '%s' used with LivenessDetectorFactory; "
+                "mapping to backend '%s'. Prefer explicit backends.",
+                selection,
+                legacy_mode_to_backend[selection],
+            )
+            return legacy_mode_to_backend[selection]
+
+        raise ValueError(
+            f"Unsupported liveness selection: {selection}. "
+            f"Supported values: {', '.join(LivenessDetectorFactory.get_available_modes())}"
+        )
+
+    @staticmethod
+    def _create_stub(liveness_threshold: float, **kwargs) -> ILivenessDetector:
+        """Create a stub detector only in non-production environments."""
+        env = os.getenv("APP_ENV", "production").lower()
+        if env not in ("development", "test", "testing", "ci"):
+            logger.error(
+                "StubLivenessDetector requested in non-test environment '%s'. "
+                "Falling back to enhanced detector for safety.",
+                env,
+            )
+            return EnhancedLivenessDetector(
+                texture_threshold=kwargs.get("texture_threshold", 100.0),
                 liveness_threshold=liveness_threshold,
+                enable_blink_detection=kwargs.get("enable_blink_detection", True),
+                enable_smile_detection=kwargs.get("enable_smile_detection", True),
+                blink_frames_required=kwargs.get("blink_frames_required", 2),
             )
-        elif mode == "combined":
-            return CombinedLivenessDetector(
-                texture_weight=kwargs.get("texture_weight", 0.4),
-                active_weight=kwargs.get("active_weight", 0.6),
-                liveness_threshold=liveness_threshold,
-            )
-        elif mode == "stub":
-            env = os.getenv("APP_ENV", "production").lower()
-            if env not in ("development", "test", "testing", "ci"):
-                logger.error(
-                    "StubLivenessDetector requested in non-test environment '%s'. "
-                    "Falling back to CombinedLivenessDetector for security.",
-                    env,
-                )
-                return CombinedLivenessDetector(
-                    liveness_threshold=liveness_threshold,
-                )
-            logger.warning("Using StubLivenessDetector - only for testing environments")
-            return StubLivenessDetector()
-        else:
-            raise ValueError(
-                f"Unsupported liveness mode: {mode}. "
-                f"Supported modes: passive, active, combined, stub"
-            )
+
+        logger.warning("Using StubLivenessDetector - only for testing environments")
+        return StubLivenessDetector(default_score=kwargs.get("default_score", 85.0))
 
     @staticmethod
     def get_available_modes() -> list[str]:
-        """Get list of available liveness modes.
-
-        Returns:
-            List of supported mode names
-        """
-        modes = ["passive", "active", "combined"]
+        """Get supported legacy and current selection values."""
+        modes = ["passive", "active", "combined", "enhanced", "texture", "uniface"]
         env = os.getenv("APP_ENV", "production").lower()
         if env in ("development", "test", "testing", "ci"):
             modes.append("stub")
@@ -110,9 +153,5 @@ class LivenessDetectorFactory:
 
     @staticmethod
     def get_recommended_mode() -> str:
-        """Get recommended mode for production use.
-
-        Returns:
-            Recommended mode name
-        """
-        return "combined"  # Highest accuracy with both methods
+        """Get the recommended selection value for current architecture."""
+        return "enhanced"

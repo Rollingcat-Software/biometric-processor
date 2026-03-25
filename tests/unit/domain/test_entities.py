@@ -688,15 +688,28 @@ class TestLivenessResult:
         """Test creating valid passing liveness result."""
         result = LivenessResult(
             is_live=True,
-            liveness_score=92.0,
+            score=92.0,
             challenge="smile",
             challenge_completed=True,
         )
 
         assert result.is_live is True
+        assert result.score == 92.0
         assert result.liveness_score == 92.0
         assert result.challenge == "smile"
         assert result.challenge_completed is True
+
+    def test_legacy_liveness_score_alias_still_works(self):
+        """Test backward-compatible construction via liveness_score."""
+        result = LivenessResult(
+            is_live=True,
+            liveness_score=88.0,
+            challenge="smile",
+            challenge_completed=True,
+        )
+
+        assert result.score == 88.0
+        assert result.liveness_score == 88.0
 
     def test_valid_liveness_result_fail(self):
         """Test creating valid failing liveness result."""
@@ -855,6 +868,7 @@ class TestLivenessResult:
         data = result.to_dict()
 
         assert data["is_live"] is True
+        assert data["score"] == 85.0
         assert data["liveness_score"] == 85.0
         assert data["challenge"] == "smile"
         assert data["challenge_completed"] is True

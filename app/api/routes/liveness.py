@@ -2,11 +2,23 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 
+from app.api.schemas.active_liveness import ActiveLivenessResponse, ActiveLivenessStartRequest
 from app.api.schemas.liveness import LivenessResponse
+from app.application.use_cases.process_active_liveness_frame import (
+    ActiveLivenessSessionExpiredError,
+    ActiveLivenessSessionNotFoundError,
+    ProcessActiveLivenessFrameUseCase,
+)
+from app.application.use_cases.start_active_liveness import StartActiveLivenessUseCase
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
-from app.core.container import get_check_liveness_use_case, get_file_storage
+from app.core.container import (
+    get_check_liveness_use_case,
+    get_file_storage,
+    get_process_active_liveness_frame_use_case,
+    get_start_active_liveness_use_case,
+)
 from app.core.config import get_settings
 from app.core.validation import ValidationError, validate_image_file
 from app.domain.interfaces.file_storage import IFileStorage
@@ -75,7 +87,8 @@ async def check_liveness(
 
         return LivenessResponse(
             is_live=result.is_live,
-            liveness_score=result.liveness_score,
+            score=result.score,
+            confidence=result.confidence,
             challenge=result.challenge,
             challenge_completed=result.challenge_completed,
             message=message,
@@ -83,5 +96,47 @@ async def check_liveness(
 
     finally:
         # Cleanup temporary file
+        if image_path:
+            await storage.cleanup(image_path)
+
+
+@router.post("/liveness/active/start", response_model=ActiveLivenessResponse, status_code=200)
+async def start_active_liveness(
+    request: ActiveLivenessStartRequest | None = Body(default=None),
+    use_case: StartActiveLivenessUseCase = Depends(get_start_active_liveness_use_case),
+) -> ActiveLivenessResponse:
+    """Start a new active liveness session."""
+
+    return await use_case.execute(config=request)
+
+
+@router.post("/liveness/active/frame", response_model=ActiveLivenessResponse, status_code=200)
+async def process_active_liveness_frame(
+    session_id: str = Form(..., description="Active liveness session ID"),
+    image: UploadFile = File(..., description="Frame image file"),
+    use_case: ProcessActiveLivenessFrameUseCase = Depends(get_process_active_liveness_frame_use_case),
+    storage: IFileStorage = Depends(get_file_storage),
+) -> ActiveLivenessResponse:
+    """Process a frame for an existing active liveness session."""
+
+    image_path = None
+    try:
+        if not image.content_type or not image.content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail="File must be an image")
+
+        image_path = await storage.save_temp(image)
+
+        try:
+            validate_image_file(image_path, allowed_formats=settings.ALLOWED_IMAGE_FORMATS)
+        except ValidationError as exc:
+            await storage.cleanup(image_path)
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        return await use_case.execute(session_id=session_id, image_path=image_path)
+    except ActiveLivenessSessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ActiveLivenessSessionExpiredError as exc:
+        raise HTTPException(status_code=410, detail=str(exc))
+    finally:
         if image_path:
             await storage.cleanup(image_path)

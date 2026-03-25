@@ -52,6 +52,7 @@ class StubLivenessDetector:
             liveness_score=self._default_score,
             challenge="none",
             challenge_completed=True,
+            details={"backend_score": self._default_score / 100.0, "stub": True},
         )
 
     def get_challenge_type(self) -> str:

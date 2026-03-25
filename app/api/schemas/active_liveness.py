@@ -1,7 +1,8 @@
-"""Schemas for active liveness detection with challenges."""
+"""Schemas for active liveness detection with challenge sessions."""
 
 from enum import Enum
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -39,29 +40,41 @@ class Challenge(BaseModel):
     confidence: float = Field(default=0.0, description="Detection confidence when completed")
 
 
+class ActiveLivenessConfig(BaseModel):
+    """Configuration for an active liveness session."""
+
+    num_challenges: int = Field(default=3, ge=1, le=5, description="Number of challenges")
+    challenge_timeout: float = Field(default=5.0, gt=0, description="Seconds per challenge")
+    randomize: bool = Field(default=True, description="Randomize challenge order")
+    session_timeout_seconds: float = Field(default=120.0, gt=0, description="Session time-to-live")
+    required_challenges: Optional[List[ChallengeType]] = Field(
+        default=None,
+        description="Specific challenges to include",
+    )
+
+
+class ActiveLivenessStartRequest(ActiveLivenessConfig):
+    """Request body for starting a session."""
+
+
 class ActiveLivenessSession(BaseModel):
     """Active liveness session state."""
 
     session_id: str = Field(..., description="Unique session ID")
     challenges: List[Challenge] = Field(default_factory=list)
     current_challenge_index: int = Field(default=0)
-    started_at: Optional[float] = Field(default=None)
+    started_at: float = Field(..., description="Unix timestamp when the session started")
+    expires_at: float = Field(..., description="Unix timestamp when the session expires")
+    last_activity_at: float = Field(..., description="Unix timestamp of the last session activity")
+    current_challenge_started_at: float = Field(..., description="Unix timestamp for the current challenge")
     completed_at: Optional[float] = Field(default=None)
     is_complete: bool = Field(default=False)
     passed: bool = Field(default=False)
     overall_score: float = Field(default=0.0)
-
-
-class ActiveLivenessConfig(BaseModel):
-    """Configuration for active liveness session."""
-
-    num_challenges: int = Field(default=3, ge=1, le=5, description="Number of challenges")
-    challenge_timeout: float = Field(default=5.0, description="Seconds per challenge")
-    randomize: bool = Field(default=True, description="Randomize challenge order")
-    required_challenges: Optional[List[ChallengeType]] = Field(
-        default=None,
-        description="Specific challenges to include"
-    )
+    baseline_ear: Optional[float] = Field(default=None)
+    baseline_mar: Optional[float] = Field(default=None)
+    blink_detected: bool = Field(default=False)
+    last_ear: float = Field(default=0.3)
 
 
 class ChallengeResult(BaseModel):
@@ -74,29 +87,23 @@ class ChallengeResult(BaseModel):
 
 
 class ActiveLivenessResponse(BaseModel):
-    """Response for active liveness frame analysis."""
+    """Response for active liveness session state and frame analysis."""
 
-    # Current challenge info
+    session_id: Optional[str] = Field(default=None, description="Active liveness session ID")
     current_challenge: Optional[Challenge] = None
+    challenge: Optional[Challenge] = None
     challenge_progress: float = Field(default=0.0, description="Progress 0-1")
     time_remaining: float = Field(default=0.0, description="Seconds remaining")
-
-    # Detection result for current frame
     detection: Optional[ChallengeResult] = None
-
-    # Session info
     challenges_completed: int = Field(default=0)
     challenges_total: int = Field(default=0)
     session_complete: bool = Field(default=False)
     session_passed: bool = Field(default=False)
     overall_score: float = Field(default=0.0)
-
-    # Guidance
     instruction: str = Field(default="", description="Current instruction to display")
     feedback: str = Field(default="", description="Feedback on user's action")
 
 
-# Challenge instructions mapping
 CHALLENGE_INSTRUCTIONS = {
     ChallengeType.BLINK: "Please blink your eyes",
     ChallengeType.SMILE: "Please smile",
@@ -110,4 +117,5 @@ CHALLENGE_INSTRUCTIONS = {
 
 def get_challenge_instruction(challenge_type: ChallengeType) -> str:
     """Get the instruction for a challenge type."""
+
     return CHALLENGE_INSTRUCTIONS.get(challenge_type, f"Please perform: {challenge_type.value}")
