@@ -7,7 +7,7 @@ import numpy as np
 from deepface import DeepFace
 
 from app.domain.entities.face_detection import FaceDetectionResult
-from app.domain.exceptions.face_errors import FaceNotDetectedError, SpoofDetectedError
+from app.domain.exceptions.face_errors import FaceNotDetectedError
 
 logger = logging.getLogger(__name__)
 
@@ -67,13 +67,7 @@ class DeepFaceDetector:
         """
         try:
             # Extract faces using DeepFace (blocking operation)
-            face_objs = DeepFace.extract_faces(
-                img_path=image,
-                detector_backend=self._detector_backend,
-                enforce_detection=True,
-                align=self._align,
-                anti_spoofing=self._anti_spoofing,
-            )
+            face_objs = self._extract_faces(image, anti_spoofing=self._anti_spoofing)
 
             if not face_objs or len(face_objs) == 0:
                 logger.warning("No face detected in image")
@@ -91,23 +85,20 @@ class DeepFaceDetector:
             # Get the largest/primary detected face
             face_obj = face_objs[0]
 
+            antispoof_score = None
+            antispoof_label = None
+
             # Anti-spoofing check (DeepFace 0.0.98+)
             if self._anti_spoofing:
                 is_real = face_obj.get("is_real", True)
                 antispoof_score = float(face_obj.get("antispoof_score", 1.0))
+                antispoof_label = "real" if is_real else "spoof"
 
                 logger.info(
                     f"Anti-spoofing result: is_real={is_real}, "
                     f"antispoof_score={antispoof_score:.3f}, "
                     f"threshold={self._anti_spoofing_threshold}"
                 )
-
-                if not is_real or antispoof_score < self._anti_spoofing_threshold:
-                    logger.warning(
-                        f"Spoof detected: is_real={is_real}, "
-                        f"antispoof_score={antispoof_score:.3f}"
-                    )
-                    raise SpoofDetectedError(antispoof_score=antispoof_score)
 
             # Extract facial area (bounding box)
             facial_area = face_obj.get("facial_area", {})
@@ -133,6 +124,8 @@ class DeepFaceDetector:
                 bounding_box=bounding_box,
                 landmarks=landmarks,
                 confidence=confidence,
+                antispoof_score=antispoof_score,
+                antispoof_label=antispoof_label,
             )
 
         except ValueError as e:
@@ -141,8 +134,12 @@ class DeepFaceDetector:
                 logger.warning(f"No face detected: {e}")
                 raise FaceNotDetectedError()
             elif "spoof" in err_str or "real face" in err_str:
-                logger.warning(f"DeepFace anti-spoofing rejected face: {e}")
-                raise SpoofDetectedError(antispoof_score=0.0)
+                logger.warning(
+                    "DeepFace anti-spoofing raised spoof exception; "
+                    "falling back to plain face extraction and tagging detection as spoof: %s",
+                    e,
+                )
+                return self._detect_with_spoof_fallback(image)
             else:
                 logger.error(f"Face detection error: {e}", exc_info=True)
                 raise
@@ -176,3 +173,61 @@ class DeepFaceDetector:
             Detector backend name
         """
         return self._detector_backend
+
+    def _extract_faces(self, image: np.ndarray, anti_spoofing: bool) -> list[dict]:
+        """Call DeepFace.extract_faces with the current detector settings."""
+        return DeepFace.extract_faces(
+            img_path=image,
+            detector_backend=self._detector_backend,
+            enforce_detection=True,
+            align=self._align,
+            anti_spoofing=anti_spoofing,
+        )
+
+    def _detect_with_spoof_fallback(self, image: np.ndarray) -> FaceDetectionResult:
+        """Recover face metadata when DeepFace anti-spoofing throws before returning a face.
+
+        Some DeepFace versions surface spoof decisions as exceptions instead of a
+        normal face object. In that case, run a second pass without anti-spoofing
+        so the use case can apply the veto policy without losing the face crop.
+        """
+        face_objs = self._extract_faces(image, anti_spoofing=False)
+
+        if not face_objs:
+            logger.warning("Spoof fallback could not recover a face")
+            raise FaceNotDetectedError()
+
+        if len(face_objs) > 1:
+            logger.info(
+                "Spoof fallback detected multiple faces (%d), selecting largest face",
+                len(face_objs),
+            )
+            face_objs.sort(
+                key=lambda f: f.get("facial_area", {}).get("w", 0)
+                * f.get("facial_area", {}).get("h", 0),
+                reverse=True,
+            )
+
+        face_obj = face_objs[0]
+        facial_area = face_obj.get("facial_area", {})
+        x = facial_area.get("x", 0)
+        y = facial_area.get("y", 0)
+        w = facial_area.get("w", 0)
+        h = facial_area.get("h", 0)
+
+        logger.info(
+            "Recovered face metadata after spoof exception: bbox=(%s,%s,%s,%s)",
+            x,
+            y,
+            w,
+            h,
+        )
+
+        return FaceDetectionResult(
+            found=True,
+            bounding_box=(x, y, w, h),
+            landmarks=None,
+            confidence=float(face_obj.get("confidence", 0.99)),
+            antispoof_score=1.0,
+            antispoof_label="spoof",
+        )

@@ -89,7 +89,15 @@ class LivenessResult(BaseModel):
     method: str = Field(..., description="Liveness detection method used")
     checks: Dict[str, bool] = Field(
         default_factory=dict,
-        description="Individual liveness checks"
+        description="Boolean liveness checks and flags"
+    )
+    scores: Dict[str, float] = Field(
+        default_factory=dict,
+        description="Numeric liveness scores from the backend"
+    )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional backend metadata for observability and debugging"
     )
 
 

@@ -152,7 +152,7 @@ class LiveCameraAnalysisUseCase:
                 AnalysisMode.FULL_ANALYSIS,
             ]:
                 if self._liveness_detector:
-                    liveness = await self._analyze_liveness(image, detection)
+                    liveness = await self._analyze_liveness(face_region)
                     response.liveness = liveness
                 else:
                     response.liveness = LivenessResult(
@@ -316,30 +316,87 @@ class LiveCameraAnalysisUseCase:
             emotion_scores=None,
         )
 
-    async def _analyze_liveness(
-        self, image: np.ndarray, detection
-    ) -> LivenessResult:
+    async def _analyze_liveness(self, face_image: np.ndarray) -> LivenessResult:
         """Analyze liveness from image.
 
         Args:
-            image: Full frame
-            detection: Face detection result
+            face_image: Cropped face region
 
         Returns:
             Liveness analysis result
         """
         try:
-            # Use the liveness detector if available
-            liveness_result = await self._liveness_detector.detect(image)
+            liveness_result = await self._liveness_detector.check_liveness(face_image)
+            details = liveness_result.details or {}
+
+            method = str(
+                details.get("method")
+                or details.get("face_roi_source")
+                or details.get("fallback_reason")
+                or liveness_result.challenge
+            )
+
+            checks = {
+                "challenge_completed": liveness_result.challenge_completed,
+            }
+            scores = {}
+            metadata = {}
+
+            bool_detail_keys = (
+                "texture_check",
+                "depth_check",
+                "eyes_open",
+                "smiling",
+                "deepface_veto_applied",
+            )
+            for key in bool_detail_keys:
+                if key in details:
+                    checks[key] = bool(details[key])
+
+            score_detail_keys = (
+                "texture",
+                "lbp",
+                "color",
+                "frequency",
+                "moire",
+                "blink",
+                "smile",
+                "passive_score",
+                "active_score",
+                "combined_score",
+                "backend_score",
+                "antispoof_score",
+            )
+            for key in score_detail_keys:
+                if key in details:
+                    scores[key] = float(details[key])
+
+            metadata_keys = (
+                "face_roi_source",
+                "fallback_reason",
+                "antispoof_label",
+            )
+            for key in metadata_keys:
+                if key in details:
+                    metadata[key] = details[key]
+
+            for key, value in details.items():
+                if key in checks or key in scores or key in metadata:
+                    continue
+                if isinstance(value, bool):
+                    checks[key] = value
+                elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                    scores[key] = float(value)
+                else:
+                    metadata[key] = value
 
             return LivenessResult(
                 is_live=liveness_result.is_live,
                 confidence=liveness_result.confidence,
-                method=liveness_result.method if hasattr(liveness_result, 'method') else "passive",
-                checks={
-                    "texture": liveness_result.texture_check if hasattr(liveness_result, 'texture_check') else True,
-                    "depth": liveness_result.depth_check if hasattr(liveness_result, 'depth_check') else True,
-                },
+                method=method,
+                checks=checks,
+                scores=scores,
+                metadata=metadata,
             )
 
         except Exception as e:
@@ -349,7 +406,9 @@ class LiveCameraAnalysisUseCase:
                 is_live=False,
                 confidence=0.0,
                 method="error",
-                checks={"error": str(e)},
+                checks={},
+                scores={},
+                metadata={"error": str(e)},
             )
 
     def _check_enrollment_ready(

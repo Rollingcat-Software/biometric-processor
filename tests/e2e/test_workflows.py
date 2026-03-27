@@ -466,7 +466,8 @@ class TestLivenessWorkflow:
         assert response.status_code == 200
         data = response.json()
         assert data["is_live"] is True
-        assert data["liveness_score"] >= 70.0  # Stub returns high score
+        assert data["score"] >= 70.0  # Stub returns high score
+        assert 0.0 <= data["confidence"] <= 1.0
 
 
 # ============================================================================

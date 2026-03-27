@@ -173,13 +173,20 @@ class EnhancedLivenessDetector(ILivenessDetector):
             )
 
             if len(faces) == 0:
-                raise FaceNotDetectedError()
-
-            # Use the largest face
-            face = max(faces, key=lambda rect: rect[2] * rect[3])
-            x, y, w, h = face
-            face_roi = gray[y : y + h, x : x + w]
-            image[y : y + h, x : x + w]
+                logger.debug(
+                    "Enhanced liveness detector could not find a nested face ROI; "
+                    "using full input image as face ROI fallback"
+                )
+                h, w = gray.shape[:2]
+                face = (0, 0, w, h)
+                face_roi = gray
+                face_roi_source = "full_image_fallback"
+            else:
+                # Use the largest face
+                face = max(faces, key=lambda rect: rect[2] * rect[3])
+                x, y, w, h = face
+                face_roi = gray[y : y + h, x : x + w]
+                face_roi_source = "detected_face"
 
             # Active challenges based on configuration
             blink_score = 0.0
@@ -215,20 +222,43 @@ class EnhancedLivenessDetector(ILivenessDetector):
 
             # Normalize to 0-100
             liveness_score = min(100.0, max(0.0, liveness_score))
+            confidence, signal_consistency, face_quality = self._calculate_confidence(
+                component_scores={
+                    "texture": texture_score,
+                    "lbp": lbp_score,
+                    "color": color_score,
+                    "blink": blink_score if self._enable_blink else None,
+                    "smile": smile_score if self._enable_smile else None,
+                },
+                face_rect=face,
+                frame_shape=image.shape,
+                face_roi_source=face_roi_source,
+            )
 
             is_live = liveness_score >= self._liveness_threshold
 
             logger.info(
-                f"Liveness detection complete: score={liveness_score:.2f}, "
+                f"Liveness detection complete: score={liveness_score:.2f}, confidence={confidence:.2f}, "
                 f"is_live={is_live}, challenge={challenge_type}, "
                 f"challenge_completed={challenge_completed}"
             )
 
             return LivenessResult(
                 is_live=is_live,
-                liveness_score=liveness_score,
+                score=liveness_score,
                 challenge=challenge_type,
                 challenge_completed=challenge_completed,
+                confidence=confidence,
+                details={
+                    "texture": texture_score,
+                    "lbp": lbp_score,
+                    "color": color_score,
+                    "blink": blink_score,
+                    "smile": smile_score,
+                    "signal_consistency": signal_consistency,
+                    "face_quality": face_quality,
+                    "face_roi_source": face_roi_source,
+                },
             )
 
         except FaceNotDetectedError:
@@ -264,6 +294,35 @@ class EnhancedLivenessDetector(ILivenessDetector):
             weights["color"] += unused / 3
 
         return weights
+
+    def _calculate_confidence(
+        self,
+        component_scores: dict[str, Optional[float]],
+        face_rect: Tuple[int, int, int, int],
+        frame_shape: tuple[int, ...],
+        face_roi_source: str,
+    ) -> tuple[float, float, float]:
+        """Estimate confidence from signal consistency and face quality."""
+        normalized_scores = [
+            max(0.0, min(1.0, score / 100.0))
+            for score in component_scores.values()
+            if score is not None
+        ]
+        if not normalized_scores:
+            return 0.0, 0.0, 0.0
+
+        signal_std = float(np.std(normalized_scores))
+        signal_consistency = max(0.0, 1.0 - min(1.0, signal_std * 2.5))
+
+        frame_area = max(1, frame_shape[0] * frame_shape[1])
+        face_area_ratio = (face_rect[2] * face_rect[3]) / frame_area
+        expected_ratio = 0.18
+        size_quality = min(1.0, face_area_ratio / expected_ratio)
+        roi_quality = 1.0 if face_roi_source == "detected_face" else 0.65
+        face_quality = max(0.0, min(1.0, 0.7 * size_quality + 0.3 * roi_quality))
+
+        confidence = max(0.0, min(1.0, 0.65 * signal_consistency + 0.35 * face_quality))
+        return confidence, signal_consistency, face_quality
 
     def _detect_blink(self, face_roi: np.ndarray, face_rect: Tuple) -> Tuple[float, bool]:
         """Detect eye blink using Haar cascade eye detection.

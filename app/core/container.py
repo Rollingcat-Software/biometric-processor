@@ -13,9 +13,12 @@ import logging
 from functools import lru_cache
 
 from app.application.services.event_publisher import EventPublisher
+from app.application.services.active_liveness_manager import ActiveLivenessManager
 from app.application.use_cases.batch_process import BatchEnrollmentUseCase, BatchVerificationUseCase
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
 from app.application.use_cases.generate_puzzle import GeneratePuzzleUseCase
+from app.application.use_cases.process_active_liveness_frame import ProcessActiveLivenessFrameUseCase
+from app.application.use_cases.start_active_liveness import StartActiveLivenessUseCase
 from app.application.use_cases.verify_puzzle import VerifyPuzzleUseCase
 
 # Application use cases
@@ -30,6 +33,7 @@ from app.domain.interfaces.card_type_detector import ICardTypeDetector
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
 from app.domain.interfaces.event_bus import IEventBus
+from app.domain.interfaces.active_liveness_session_repository import IActiveLivenessSessionRepository
 
 # Domain interfaces (imported for type hints)
 from app.domain.interfaces.face_detector import IFaceDetector
@@ -52,6 +56,12 @@ from app.infrastructure.messaging.event_handlers import BiometricEventHandler, E
 from app.infrastructure.messaging.redis_event_bus import RedisEventBus
 from app.infrastructure.persistence.repositories.pgvector_embedding_repository import (
     PgVectorEmbeddingRepository,
+)
+from app.infrastructure.persistence.repositories.in_memory_active_liveness_session_repository import (
+    InMemoryActiveLivenessSessionRepository,
+)
+from app.infrastructure.persistence.repositories.redis_active_liveness_session_repository import (
+    RedisActiveLivenessSessionRepository,
 )
 from app.infrastructure.storage.local_file_storage import LocalFileStorage
 from app.infrastructure.async_execution.thread_pool_manager import ThreadPoolManager
@@ -166,6 +176,26 @@ def get_file_storage() -> IFileStorage:
 
 
 @lru_cache()
+def get_active_liveness_manager() -> ActiveLivenessManager:
+    """Get active liveness manager instance."""
+
+    return ActiveLivenessManager()
+
+
+@lru_cache()
+def get_active_liveness_session_repository() -> IActiveLivenessSessionRepository:
+    """Get active liveness session repository instance."""
+
+    if settings.TESTING:
+        return InMemoryActiveLivenessSessionRepository()
+
+    return RedisActiveLivenessSessionRepository(
+        redis_url=settings.redis_url,
+        max_connections=settings.REDIS_MAX_CONNECTIONS,
+    )
+
+
+@lru_cache()
 def get_idempotency_store() -> IdempotencyStore:
     """Get idempotency store instance (singleton).
 
@@ -218,12 +248,11 @@ def get_embedding_repository() -> IEmbeddingRepository:
     )
 
 
-@lru_cache()
 def get_liveness_detector() -> ILivenessDetector:
-    """Get liveness detector instance (singleton).
+    """Get liveness detector instance.
 
     Returns:
-        Liveness detector implementation based on LIVENESS_BACKEND config.
+        Liveness detector implementation based on effective liveness config.
 
     Supported backends:
         - 'enhanced' (default): Multi-modal detector combining LBP texture analysis,
@@ -234,9 +263,22 @@ def get_liveness_detector() -> ILivenessDetector:
           anti-spoofing (print, replay, mask attack detection).
 
     Configuration:
-        Set LIVENESS_BACKEND environment variable to switch backends.
+        LIVENESS_MODE is the canonical configuration source.
+        LIVENESS_BACKEND is treated as a backwards-compatible override.
+
+    Important:
+        This dependency is intentionally NOT cached. The enhanced liveness detector
+        maintains blink-related state internally, and sharing a singleton instance
+        across requests can leak state between users and produce false positives.
+        Creating a fresh detector per request/session isolates that state.
     """
-    backend = settings.LIVENESS_BACKEND
+    backend = settings.get_liveness_backend()
+    logger.info(
+        "Resolving liveness detector: mode=%s, backend_override=%s, effective_backend=%s",
+        settings.LIVENESS_MODE,
+        settings.LIVENESS_BACKEND,
+        backend,
+    )
 
     if backend == "uniface":
         logger.info("Creating liveness detector (UniFace MiniFASNet)")
@@ -477,6 +519,24 @@ def get_check_liveness_use_case() -> CheckLivenessUseCase:
     return CheckLivenessUseCase(
         detector=get_face_detector(),
         liveness_detector=get_liveness_detector(),
+    )
+
+
+def get_start_active_liveness_use_case() -> StartActiveLivenessUseCase:
+    """Get start active liveness use case instance."""
+
+    return StartActiveLivenessUseCase(
+        manager=get_active_liveness_manager(),
+        session_repository=get_active_liveness_session_repository(),
+    )
+
+
+def get_process_active_liveness_frame_use_case() -> ProcessActiveLivenessFrameUseCase:
+    """Get process active liveness frame use case instance."""
+
+    return ProcessActiveLivenessFrameUseCase(
+        manager=get_active_liveness_manager(),
+        session_repository=get_active_liveness_session_repository(),
     )
 
 
@@ -848,6 +908,16 @@ async def shutdown_dependencies(wait: bool = True) -> None:
     except Exception as e:
         logger.error(f"Error closing fingerprint repository: {e}", exc_info=True)
 
+    # Close active liveness session repository
+    try:
+        active_liveness_repository = get_active_liveness_session_repository()
+        if hasattr(active_liveness_repository, 'close'):
+            logger.info("Closing active liveness session repository...")
+            await active_liveness_repository.close()
+            logger.info("Active liveness session repository closed")
+    except Exception as e:
+        logger.error(f"Error closing active liveness session repository: {e}", exc_info=True)
+
     # Close event bus connections
     if settings.EVENT_BUS_ENABLED:
         try:
@@ -899,9 +969,10 @@ def get_generate_puzzle_use_case() -> GeneratePuzzleUseCase:
 
 
 def get_verify_puzzle_use_case() -> VerifyPuzzleUseCase:
-    """Get verify puzzle use case instance."""
-    return VerifyPuzzleUseCase(puzzle_repository=get_puzzle_repository())
-
+    return VerifyPuzzleUseCase(
+        puzzle_repository=get_puzzle_repository(),
+        liveness_detector=get_liveness_detector(),
+    )
 
 def clear_cache() -> None:
     """Clear dependency cache (for testing).
@@ -918,8 +989,9 @@ def clear_cache() -> None:
     get_quality_assessor.cache_clear()
     get_similarity_calculator.cache_clear()
     get_file_storage.cache_clear()
+    get_active_liveness_manager.cache_clear()
+    get_active_liveness_session_repository.cache_clear()
     get_embedding_repository.cache_clear()
-    get_liveness_detector.cache_clear()
     get_event_bus.cache_clear()
     get_event_handler.cache_clear()
     get_event_router.cache_clear()

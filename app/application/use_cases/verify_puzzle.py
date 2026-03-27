@@ -3,10 +3,13 @@
 This module provides the use case for verifying puzzle completion
 with anti-replay protection and confidence validation.
 """
-
+import base64
+import numpy as np
+import cv2
 import logging
 from typing import Dict, List, Optional
 
+from app.domain.interfaces.liveness_detector import ILivenessDetector
 from app.domain.entities.puzzle import Puzzle, VerificationResult
 from app.domain.interfaces.puzzle_repository import IPuzzleRepository
 
@@ -39,13 +42,13 @@ class VerifyPuzzleUseCase:
     # Overall pass threshold
     PASS_THRESHOLD = 0.6  # 60% overall score
 
-    def __init__(self, puzzle_repository: IPuzzleRepository):
-        """Initialize verify puzzle use case.
-
-        Args:
-            puzzle_repository: Repository for puzzle persistence
-        """
+    def __init__(
+            self,
+            puzzle_repository: IPuzzleRepository,
+            liveness_detector: Optional[ILivenessDetector] = None,
+    ):
         self._repository = puzzle_repository
+        self._liveness_detector = liveness_detector
         logger.info("VerifyPuzzleUseCase initialized")
 
     def _validate_timestamps(
@@ -148,15 +151,59 @@ class VerifyPuzzleUseCase:
 
         return max(0.0, last_end - first_start)
 
+    async def _run_spot_check(
+            self,
+            spot_frames: List[str],
+    ) -> tuple[bool, str]:
+        """Spot-check frames with passive liveness detector.
+
+        Args:
+            spot_frames: List of base64 encoded frames
+
+        Returns:
+            Tuple of (passed, reason_code)
+        """
+        if not self._liveness_detector or not spot_frames:
+            return True, ""
+
+        failed_count = 0
+
+        for i, frame_b64 in enumerate(spot_frames[:3]):  # max 3 frame
+            try:
+                frame_bytes = base64.b64decode(frame_b64)
+                np_arr = np.frombuffer(frame_bytes, np.uint8)
+                frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+                if frame is None:
+                    logger.warning(f"Spot-check frame {i} could not be decoded")
+                    continue
+
+                result = await self._liveness_detector.check_liveness(frame)
+
+                if not result.is_live:
+                    failed_count += 1
+                    logger.warning(
+                        f"Spot-check frame {i} failed: score={result.liveness_score}"
+                    )
+
+            except Exception as e:
+                logger.warning(f"Spot-check frame {i} error: {e}")
+                continue
+
+        if failed_count >= 2:
+            return False, "SPOT_CHECK_FAILED"
+
+        return True, ""
+
     async def execute(
-        self,
-        puzzle_id: str,
-        results: List[Dict],
-        final_frame: Optional[str] = None,
-        client_meta: Optional[Dict] = None,
+            self,
+            puzzle_id: str,
+            results: List[Dict],
+            final_frame: Optional[str] = None,
+            spot_frames: Optional[List[str]] = None,
+            client_meta: Optional[Dict] = None,
     ) -> VerificationResult:
         """Execute puzzle verification.
-
         Args:
             puzzle_id: Puzzle ID to verify
             results: List of step results from client
@@ -237,6 +284,11 @@ class VerifyPuzzleUseCase:
             overall_score = avg_confidence * 100  # Convert to 0-100
         else:
             overall_score = 0.0
+
+        # Spot-check — optional server-side frame verification
+        spot_check_passed, spot_reason = await self._run_spot_check(spot_frames or [])
+        if not spot_check_passed:
+            reason_codes.append(spot_reason)
 
         # Determine liveness
         liveness_confirmed = (

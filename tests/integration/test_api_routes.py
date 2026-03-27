@@ -18,6 +18,8 @@ from app.core.container import (
     get_verify_face_use_case,
     get_check_liveness_use_case,
     get_file_storage,
+    get_process_active_liveness_frame_use_case,
+    get_start_active_liveness_use_case,
 )
 from app.domain.entities.face_embedding import FaceEmbedding
 from app.domain.entities.verification_result import VerificationResult
@@ -27,6 +29,13 @@ from app.domain.exceptions.face_errors import (
     PoorImageQualityError,
 )
 from app.domain.exceptions.verification_errors import EmbeddingNotFoundError
+from app.api.schemas.active_liveness import (
+    ActiveLivenessResponse,
+    Challenge,
+    ChallengeResult,
+    ChallengeStatus,
+    ChallengeType,
+)
 
 
 @pytest.fixture
@@ -82,9 +91,10 @@ def mock_liveness_use_case():
     # Create mock result (liveness passed)
     result = LivenessResult(
         is_live=True,
-        liveness_score=92.0,
+        score=92.0,
         challenge="none",
         challenge_completed=True,
+        confidence=0.91,
     )
 
     use_case.execute = AsyncMock(return_value=result)
@@ -98,6 +108,68 @@ def mock_file_storage():
     storage.save_temp = AsyncMock(return_value="/tmp/test_image.jpg")
     storage.cleanup = AsyncMock()
     return storage
+
+
+@pytest.fixture
+def mock_start_active_liveness_use_case():
+    """Create mock active liveness start use case."""
+    use_case = Mock()
+    challenge = Challenge(
+        type=ChallengeType.BLINK,
+        instruction="Please blink your eyes",
+        status=ChallengeStatus.PENDING,
+    )
+    use_case.execute = AsyncMock(
+        return_value=ActiveLivenessResponse(
+            session_id="session-123",
+            current_challenge=challenge,
+            challenge=challenge,
+            challenge_progress=0.0,
+            time_remaining=5.0,
+            challenges_completed=0,
+            challenges_total=3,
+            session_complete=False,
+            session_passed=False,
+            overall_score=0.0,
+            instruction=challenge.instruction,
+            feedback="",
+        )
+    )
+    return use_case
+
+
+@pytest.fixture
+def mock_process_active_liveness_frame_use_case():
+    """Create mock active liveness frame use case."""
+    use_case = Mock()
+    next_challenge = Challenge(
+        type=ChallengeType.SMILE,
+        instruction="Please smile",
+        status=ChallengeStatus.IN_PROGRESS,
+    )
+    use_case.execute = AsyncMock(
+        return_value=ActiveLivenessResponse(
+            session_id="session-123",
+            current_challenge=next_challenge,
+            challenge=next_challenge,
+            challenge_progress=1 / 3,
+            time_remaining=4.0,
+            detection=ChallengeResult(
+                challenge_type=ChallengeType.BLINK,
+                detected=True,
+                confidence=0.95,
+                details={"method": "test"},
+            ),
+            challenges_completed=1,
+            challenges_total=3,
+            session_complete=False,
+            session_passed=False,
+            overall_score=0.0,
+            instruction=next_challenge.instruction,
+            feedback="Great job!",
+        )
+    )
+    return use_case
 
 
 @pytest.fixture
@@ -450,7 +522,8 @@ class TestLivenessEndpoint:
         data = response.json()
 
         assert data["is_live"] is True
-        assert data["liveness_score"] == 92.0
+        assert data["score"] == 92.0
+        assert data["confidence"] == 0.91
         assert data["challenge"] == "none"
         assert data["challenge_completed"] is True
 
@@ -465,9 +538,10 @@ class TestLivenessEndpoint:
         # Configure use case to return liveness failed
         result = LivenessResult(
             is_live=False,
-            liveness_score=35.0,
+            score=35.0,
             challenge="none",
             challenge_completed=True,
+            confidence=0.42,
         )
         mock_liveness_use_case.execute = AsyncMock(return_value=result)
 
@@ -480,7 +554,8 @@ class TestLivenessEndpoint:
         data = response.json()
 
         assert data["is_live"] is False
-        assert data["liveness_score"] == 35.0
+        assert data["score"] == 35.0
+        assert data["confidence"] == 0.42
 
     def test_liveness_invalid_file_type(self, client):
         """Test liveness check rejects non-image files."""
@@ -537,3 +612,124 @@ class TestLivenessEndpoint:
         mock_file_storage.cleanup.assert_called_once()
         cleanup_path = mock_file_storage.cleanup.call_args.args[0]
         assert cleanup_path == "/tmp/test_image.jpg"
+
+
+class TestActiveLivenessEndpoint:
+    """Test active liveness endpoints."""
+
+    def test_start_active_liveness_success(
+        self, client, mock_start_active_liveness_use_case
+    ):
+        """Test starting an active liveness session."""
+        app.dependency_overrides[get_start_active_liveness_use_case] = lambda: mock_start_active_liveness_use_case
+
+        response = client.post("/api/v1/liveness/active/start", json={})
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["session_id"] == "session-123"
+        assert data["current_challenge"]["type"] == "blink"
+        assert data["instruction"] == "Please blink your eyes"
+        assert data["session_complete"] is False
+
+    def test_process_active_liveness_frame_success(
+        self,
+        client,
+        mock_process_active_liveness_frame_use_case,
+        mock_file_storage,
+        test_image_file,
+    ):
+        """Test submitting a valid active liveness frame."""
+        app.dependency_overrides[get_process_active_liveness_frame_use_case] = lambda: mock_process_active_liveness_frame_use_case
+        app.dependency_overrides[get_file_storage] = lambda: mock_file_storage
+
+        response = client.post(
+            "/api/v1/liveness/active/frame",
+            data={"session_id": "session-123"},
+            files={"image": test_image_file},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["session_id"] == "session-123"
+        assert data["detection"]["detected"] is True
+        assert data["challenges_completed"] == 1
+        assert data["current_challenge"]["type"] == "smile"
+
+    def test_process_active_liveness_frame_invalid_session(
+        self,
+        client,
+        mock_process_active_liveness_frame_use_case,
+        mock_file_storage,
+        test_image_file,
+    ):
+        """Test submitting a frame with an invalid session ID."""
+        from app.application.use_cases.process_active_liveness_frame import ActiveLivenessSessionNotFoundError
+
+        mock_process_active_liveness_frame_use_case.execute = AsyncMock(
+            side_effect=ActiveLivenessSessionNotFoundError("Active liveness session not found")
+        )
+        app.dependency_overrides[get_process_active_liveness_frame_use_case] = lambda: mock_process_active_liveness_frame_use_case
+        app.dependency_overrides[get_file_storage] = lambda: mock_file_storage
+
+        response = client.post(
+            "/api/v1/liveness/active/frame",
+            data={"session_id": "missing-session"},
+            files={"image": test_image_file},
+        )
+
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"].lower()
+
+    def test_process_active_liveness_frame_invalid_upload(self, client):
+        """Test active liveness frame rejects non-image uploads."""
+        text_file = ("test.txt", io.BytesIO(b"not an image"), "text/plain")
+
+        response = client.post(
+            "/api/v1/liveness/active/frame",
+            data={"session_id": "session-123"},
+            files={"image": text_file},
+        )
+
+        assert response.status_code == 400
+        assert "image" in response.json()["detail"].lower()
+
+    def test_process_active_liveness_frame_completed_session(
+        self,
+        client,
+        mock_process_active_liveness_frame_use_case,
+        mock_file_storage,
+        test_image_file,
+    ):
+        """Test completed sessions return a terminal response."""
+        mock_process_active_liveness_frame_use_case.execute = AsyncMock(
+            return_value=ActiveLivenessResponse(
+                session_id="session-123",
+                current_challenge=None,
+                challenge=None,
+                challenge_progress=1.0,
+                time_remaining=0.0,
+                challenges_completed=3,
+                challenges_total=3,
+                session_complete=True,
+                session_passed=True,
+                overall_score=100.0,
+                instruction="All challenges completed! Liveness verified.",
+                feedback="Passed 3/3 challenges",
+            )
+        )
+        app.dependency_overrides[get_process_active_liveness_frame_use_case] = lambda: mock_process_active_liveness_frame_use_case
+        app.dependency_overrides[get_file_storage] = lambda: mock_file_storage
+
+        response = client.post(
+            "/api/v1/liveness/active/frame",
+            data={"session_id": "session-123"},
+            files={"image": test_image_file},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["session_complete"] is True
+        assert data["session_passed"] is True

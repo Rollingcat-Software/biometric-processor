@@ -18,6 +18,8 @@ class FaceDetectionResult:
         bounding_box: Face bounding box as (x, y, width, height), None if not found
         landmarks: Facial landmarks as numpy array, None if not available
         confidence: Detection confidence score (0.0-1.0)
+        antispoof_score: Optional detector anti-spoof score (0.0-1.0)
+        antispoof_label: Optional anti-spoof label such as "real" or "spoof"
 
     Note:
         This class is immutable (frozen) to ensure data integrity.
@@ -27,6 +29,8 @@ class FaceDetectionResult:
     bounding_box: Optional[Tuple[int, int, int, int]]
     landmarks: Optional[np.ndarray]
     confidence: float
+    antispoof_score: Optional[float] = None
+    antispoof_label: Optional[str] = None
 
     def __post_init__(self) -> None:
         """Validate face detection result data."""
@@ -35,6 +39,9 @@ class FaceDetectionResult:
 
         if self.confidence < 0.0 or self.confidence > 1.0:
             raise ValueError(f"Confidence must be 0-1, got {self.confidence}")
+
+        if self.antispoof_score is not None and not 0.0 <= self.antispoof_score <= 1.0:
+            raise ValueError(f"Anti-spoof score must be 0-1, got {self.antispoof_score}")
 
         if self.found and self.bounding_box:
             x, y, w, h = self.bounding_box

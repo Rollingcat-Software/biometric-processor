@@ -1,14 +1,18 @@
 """Liveness check use case."""
 
 import logging
+from dataclasses import replace
 
 import cv2
 
+from app.core.config import get_settings
 from app.domain.entities.liveness_result import LivenessResult
 from app.domain.interfaces.face_detector import IFaceDetector
 from app.domain.interfaces.liveness_detector import ILivenessDetector
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
+DEEPFACE_VETO_CONFIDENCE_THRESHOLD = 0.85
 
 
 class CheckLivenessUseCase:
@@ -71,12 +75,78 @@ class CheckLivenessUseCase:
 
         # Step 3: Perform liveness check
         logger.debug("Step 2/2: Checking liveness...")
-        liveness_result = await self._liveness_detector.check_liveness(image)
+        face_region = detection.get_face_region(image)
+        liveness_result = await self._liveness_detector.check_liveness(face_region)
+
+        antispoof_score = detection.antispoof_score
+        antispoof_label = detection.antispoof_label
+        deepface_spoof_detected = (
+            settings.ANTI_SPOOFING_ENABLED
+            and antispoof_label == "spoof"
+            and antispoof_score is not None
+            and antispoof_score >= settings.ANTI_SPOOFING_THRESHOLD
+        )
+
+        if deepface_spoof_detected and liveness_result.confidence < DEEPFACE_VETO_CONFIDENCE_THRESHOLD:
+            logger.warning(
+                "DeepFace anti-spoof veto applied: antispoof_score=%.3f, liveness_confidence=%.3f",
+                antispoof_score,
+                liveness_result.confidence,
+            )
+            updated_details = {
+                **liveness_result.details,
+                "antispoof_score": antispoof_score,
+                "antispoof_label": antispoof_label,
+                "deepface_veto_applied": True,
+            }
+            liveness_result = replace(
+                liveness_result,
+                is_live=False,
+                details=updated_details,
+            )
+        else:
+            liveness_result = replace(
+                liveness_result,
+                details={
+                    **liveness_result.details,
+                    "antispoof_score": antispoof_score,
+                    "antispoof_label": antispoof_label,
+                    "deepface_veto_applied": False,
+                },
+            )
+
+        logger.info(
+            "liveness_check",
+            extra={
+                "score": liveness_result.score,
+                "confidence": liveness_result.confidence,
+                "is_live": liveness_result.is_live,
+                "threshold": settings.LIVENESS_THRESHOLD,
+                "backend": settings.get_liveness_backend(),
+                "mode": settings.LIVENESS_MODE,
+                "challenge": liveness_result.challenge,
+                "challenge_completed": liveness_result.challenge_completed,
+                "texture_score": liveness_result.details.get("texture"),
+                "lbp_score": liveness_result.details.get("lbp"),
+                "color_score": liveness_result.details.get("color"),
+                "frequency_score": liveness_result.details.get("frequency"),
+                "moire_score": liveness_result.details.get("moire"),
+                "blink_score": liveness_result.details.get("blink"),
+                "smile_score": liveness_result.details.get("smile"),
+                "passive_score": liveness_result.details.get("passive_score"),
+                "active_score": liveness_result.details.get("active_score"),
+                "antispoof_score": antispoof_score,
+                "antispoof_label": antispoof_label,
+                "deepface_veto_applied": liveness_result.details.get("deepface_veto_applied"),
+                "antispoof_threshold": settings.ANTI_SPOOFING_THRESHOLD,
+                "face_detection_confidence": detection.confidence,
+            },
+        )
 
         logger.info(
             f"Liveness check completed: "
             f"is_live={liveness_result.is_live}, "
-            f"score={liveness_result.liveness_score:.1f}, "
+            f"score={liveness_result.score:.1f}, "
             f"challenge={liveness_result.challenge}"
         )
 
