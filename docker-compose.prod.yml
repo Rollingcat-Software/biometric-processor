@@ -70,6 +70,7 @@ services:
       - "traefik.http.routers.biometric.rule=Host(`bpa-fivucsas.rollingcatsoftware.com`)"
       - "traefik.http.routers.biometric.entrypoints=websecure"
       - "traefik.http.routers.biometric.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.biometric.middlewares=secure-headers@file,rate-limit@file"
       - "traefik.http.services.biometric.loadbalancer.server.port=8001"
     networks:
       - proxy
@@ -79,6 +80,7 @@ services:
         limits:
           cpus: '2.0'
           memory: 4G
+          pids: 256
         reservations:
           cpus: '0.5'
           memory: 2.5G
