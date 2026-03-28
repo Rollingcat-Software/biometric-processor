@@ -33,7 +33,7 @@ structlog==24.1.0
 # ===========================================
 # Image Processing
 # ===========================================
-pillow==10.3.0
+pillow==12.1.1
 opencv-python-headless==4.9.0.80
 scikit-image==0.22.0
 
