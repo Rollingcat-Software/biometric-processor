@@ -25,6 +25,7 @@ from app.api.middleware.security import InputSanitizationMiddleware, RequestSize
 from app.api.middleware.security_headers import SecurityHeadersMiddleware
 from app.api.routes import batch, enrollment, health, liveness, search, verification, card_type_router
 from app.api.routes import quality, multi_face, demographics, landmarks, comparison, similarity_matrix, embeddings_io, webhooks
+from app.api.routes import verification_pipeline
 from app.api.routes import proctor
 from app.api.routes import proctor_ws
 from app.api.routes import admin
@@ -179,6 +180,9 @@ app.include_router(puzzle.router, prefix=API_PREFIX)
 app.include_router(search.router, prefix=API_PREFIX)
 app.include_router(batch.router, prefix=API_PREFIX)
 app.include_router(card_type_router.router, prefix=API_PREFIX)
+
+# Verification Pipeline routes (Phase 8B/8C: Document Processing + Face-to-Document Matching)
+app.include_router(verification_pipeline.router, prefix=API_PREFIX)
 
 # New feature routes
 app.include_router(quality.router, prefix=API_PREFIX)
