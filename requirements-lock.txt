@@ -64,7 +64,7 @@ h5py==3.10.0
 libclang==16.0.6
 ml-dtypes==0.2.0
 opt-einsum==3.3.0
-protobuf==4.25.2
+protobuf==5.29.6
 tensorboard==2.15.1
 tensorboard-data-server==0.7.2
 tensorflow-estimator==2.15.0
