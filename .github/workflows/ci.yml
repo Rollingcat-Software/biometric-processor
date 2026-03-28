@@ -3,8 +3,24 @@ name: CI Pipeline
 on:
   push:
     branches: [main, dev, 'feature/*']
+    paths:
+      - '**.py'
+      - 'requirements*.txt'
+      - 'Dockerfile*'
+      - 'demo-ui/**'
+      - '.github/workflows/ci.yml'
   pull_request:
     branches: [main, dev]
+    paths:
+      - '**.py'
+      - 'requirements*.txt'
+      - 'Dockerfile*'
+      - 'demo-ui/**'
+      - '.github/workflows/ci.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   PYTHON_VERSION: '3.11'
@@ -13,7 +29,7 @@ jobs:
   # Lint and type check
   lint:
     name: Lint & Type Check
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     steps:
       - uses: actions/checkout@v4
 
@@ -21,11 +37,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          df -h
 
       - name: Install dependencies
         run: |
@@ -41,7 +52,7 @@ jobs:
   # Unit tests
   test:
     name: Unit Tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     needs: lint
     steps:
       - uses: actions/checkout@v4
@@ -51,10 +62,6 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          df -h
 
       - name: Cache pip packages
         uses: actions/cache@v4
@@ -89,7 +96,7 @@ jobs:
   # Integration tests
   integration-test:
     name: Integration Tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     needs: test
     services:
       redis:
@@ -110,10 +117,6 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          df -h
 
       - name: Install dependencies
         run: |
@@ -131,7 +134,7 @@ jobs:
   # Build frontend
   frontend-build:
     name: Build Frontend
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     needs: [test]
     steps:
       - uses: actions/checkout@v4
@@ -159,7 +162,7 @@ jobs:
   # Security scan
   security:
     name: Security Scan
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     needs: lint
     steps:
       - uses: actions/checkout@v4
@@ -169,10 +172,6 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          df -h
 
       - name: Install Bandit
         run: pip install bandit[toml]
