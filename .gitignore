@@ -108,6 +108,9 @@ celerybeat.pid
 
 # Environments
 .env
+.env.prod
+.env.laptop
+.env.docker
 .venv
 env/
 venv/
