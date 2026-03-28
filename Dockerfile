@@ -24,6 +24,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Tesseract OCR with Turkish language pack (for document text extraction)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tesseract-ocr \
+    tesseract-ocr-tur \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy requirements
 COPY requirements.txt .
 

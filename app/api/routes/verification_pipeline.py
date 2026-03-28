@@ -26,6 +26,7 @@ from app.core.container import (
     get_file_storage,
     get_similarity_calculator,
 )
+from app.domain.services.document_ocr import DocumentOCR
 from app.domain.services.mrz_parser import (
     MRZData,
     detect_and_parse_mrz,
@@ -85,7 +86,7 @@ class DataExtractResponse(BaseModel):
     document_type: Optional[str] = None
     extracted_data: ExtractedData
     confidence: float
-    method: str  # "mrz_parse" | "card_type_only"
+    method: str  # "mrz_parse" | "tesseract_ocr" | "card_type_only"
 
 
 class FaceMatchResponse(BaseModel):
@@ -313,9 +314,9 @@ async def data_extract(
 
     # Determine document type from image
     if file:
-        _, img_np = await _read_image_from_upload(file)
+        pil_img, img_np = await _read_image_from_upload(file)
     elif image_base64:
-        _, img_np = _decode_base64_image(image_base64)
+        pil_img, img_np = _decode_base64_image(image_base64)
     else:
         raise HTTPException(
             status_code=400,
@@ -337,8 +338,6 @@ async def data_extract(
             method="card_type_only",
         )
 
-    # For now, return the document type and let the frontend handle data capture.
-    # MRZ parsing happens when mrz_text is provided (client-side OCR or manual entry).
     doc_type_map = {
         "tc_kimlik": "turkish_id",
         "pasaport": "passport",
@@ -349,6 +348,33 @@ async def data_extract(
 
     document_type = doc_type_map.get(result.class_name, result.class_name)
 
+    # For TC Kimlik (no MRZ): run Tesseract OCR to extract fields
+    if document_type == "turkish_id":
+        try:
+            ocr = DocumentOCR()
+            ocr_result = ocr.extract_tc_kimlik(pil_img)
+            if ocr_result.confidence > 0.0:
+                f = ocr_result.fields
+                extracted = ExtractedData(
+                    id_number=f.get("tc_number"),
+                    surname=f.get("surname"),
+                    name=f.get("name"),
+                    given_names=f.get("name"),
+                    date_of_birth=f.get("date_of_birth"),
+                    expiry_date=f.get("expiry_date"),
+                    sex=f.get("gender"),
+                    nationality=f.get("nationality"),
+                )
+                return DataExtractResponse(
+                    document_type=document_type,
+                    extracted_data=extracted,
+                    confidence=ocr_result.confidence,
+                    method="tesseract_ocr",
+                )
+        except Exception as e:
+            logger.warning(f"OCR extraction failed for TC Kimlik, falling back: {e}")
+
+    # Fallback: return document type only (frontend handles field capture)
     return DataExtractResponse(
         document_type=document_type,
         extracted_data=ExtractedData(),
@@ -652,7 +678,7 @@ async def pipeline_test(
                 ))
                 overall_success = False
         else:
-            # No MRZ provided - report document type from card detection
+            # No MRZ provided - try OCR for TC Kimlik, otherwise report type only
             doc_type_map = {
                 "tc_kimlik": "turkish_id",
                 "pasaport": "passport",
@@ -660,12 +686,34 @@ async def pipeline_test(
                 "ogrenci_karti": "student_id",
             }
             doc_type = doc_type_map.get(card_type, card_type) if card_type else None
-            steps.append(PipelineStepResult(
-                step="data_extract",
-                success=bool(doc_type),
-                data={"document_type": doc_type, "method": "card_type_only"},
-            ))
-            if not doc_type:
+
+            ocr_success = False
+            if doc_type == "turkish_id":
+                try:
+                    ocr = DocumentOCR()
+                    ocr_result = ocr.extract_tc_kimlik(doc_pil)
+                    if ocr_result.confidence > 0.0:
+                        steps.append(PipelineStepResult(
+                            step="data_extract",
+                            success=True,
+                            data={
+                                "document_type": doc_type,
+                                "method": "tesseract_ocr",
+                                "confidence": ocr_result.confidence,
+                                **{k: v for k, v in ocr_result.fields.items() if v},
+                            },
+                        ))
+                        ocr_success = True
+                except Exception as ocr_err:
+                    logger.warning(f"Pipeline OCR failed: {ocr_err}")
+
+            if not ocr_success:
+                steps.append(PipelineStepResult(
+                    step="data_extract",
+                    success=bool(doc_type),
+                    data={"document_type": doc_type, "method": "card_type_only"},
+                ))
+            if not doc_type and not ocr_success:
                 overall_success = False
     except Exception as e:
         overall_success = False
