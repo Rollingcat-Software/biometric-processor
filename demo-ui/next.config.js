@@ -10,10 +10,7 @@ const nextConfig = {
 
   reactStrictMode: true,
 
-  // Ignore ESLint and TypeScript errors during build (pre-existing issues)
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
+  // Ignore TypeScript errors during build (pre-existing issues)
   typescript: {
     ignoreBuildErrors: true,
   },
@@ -31,17 +28,8 @@ const nextConfig = {
     NEXT_PUBLIC_API_URL: '',
   },
 
-  // Webpack configuration
-  webpack: (config, { isServer }) => {
-    // Handle canvas for server-side rendering
-    if (isServer) {
-      config.externals.push({
-        canvas: 'commonjs canvas',
-      });
-    }
-
-    return config;
-  },
+  // Turbopack configuration (Next.js 16 default bundler)
+  turbopack: {},
 
   // Experimental features
   experimental: {
@@ -51,7 +39,6 @@ const nextConfig = {
 
   // Static export specific
   trailingSlash: true,
-  skipTrailingSlashRedirect: true,
 };
 
 module.exports = withBundleAnalyzer(nextConfig);
