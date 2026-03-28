@@ -202,7 +202,7 @@ app.include_router(live_analysis.router, prefix=API_PREFIX)
 # Admin routes
 app.include_router(admin.router, prefix=API_PREFIX)
 
-# Biometric stub routes (fingerprint, voice)
+# Fingerprint routes (501 Not Implemented -- use WebAuthn) and Voice routes (Resemblyzer)
 app.include_router(fingerprint.router, prefix=API_PREFIX)
 app.include_router(voice.router, prefix=API_PREFIX)
 

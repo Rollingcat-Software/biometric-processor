@@ -1,9 +1,12 @@
-"""Voice biometric endpoints — enrollment, verification, deletion.
+"""Voice biometric endpoints -- enrollment, verification, deletion.
 
 Uses Resemblyzer for 256-dimensional speaker embeddings with a centroid-based
 storage pattern (same as face enrollment). Audio from the browser arrives as
 base64-encoded WebM (Opus codec) and is converted to 16 kHz mono WAV for the
 embedding model.
+
+CPU-bound embedding extraction is offloaded to the shared thread pool via
+``run_in_executor`` so the FastAPI event loop is never blocked.
 
 Integration:
     Called by identity-core-api BiometricServiceAdapter via JSON:
@@ -12,6 +15,7 @@ Integration:
         DELETE /voice/{user_id}
 """
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -20,14 +24,14 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.api.schemas.biometric_response import BiometricResponse as _SharedBiometricResponse
-from app.core.container import get_speaker_embedder, get_voice_repository
+from app.core.container import get_speaker_embedder, get_voice_repository, get_thread_pool
 from app.core.validation import validate_user_id
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Voice"])
 
-# ── Request / Response schemas ──────────────────────────────────────
+# -- Request / Response schemas ------------------------------------------------
 
 
 class VoiceRequest(BaseModel):
@@ -40,7 +44,17 @@ class BiometricResponse(_SharedBiometricResponse):
     modality: str = "voice"
 
 
-# ── POST /voice/enroll ──────────────────────────────────────────────
+# -- Helpers -------------------------------------------------------------------
+
+
+async def _extract_voice_embedding(voice_data: str) -> np.ndarray:
+    """Extract speaker embedding off the event loop via thread pool."""
+    embedder = get_speaker_embedder()
+    pool = get_thread_pool()
+    return await pool.run_blocking(embedder.extract_embedding_from_base64, voice_data)
+
+
+# -- POST /voice/enroll --------------------------------------------------------
 
 
 @router.post("/voice/enroll", response_model=BiometricResponse)
@@ -49,7 +63,8 @@ async def enroll_voice(request: VoiceRequest) -> BiometricResponse:
 
     Accepts base64-encoded audio, extracts a 256-dim speaker embedding via
     Resemblyzer, stores it as an INDIVIDUAL enrollment row, and recomputes
-    the CENTROID.
+    the CENTROID.  Re-enrolling the same user adds a new sample and updates
+    the centroid (idempotent accumulation).
     """
     try:
         user_id = validate_user_id(request.user_id)
@@ -60,11 +75,10 @@ async def enroll_voice(request: VoiceRequest) -> BiometricResponse:
 
         logger.info(f"Voice enrollment request: user_id={user_id}")
 
-        # Extract speaker embedding
-        embedder = get_speaker_embedder()
-        embedding = embedder.extract_embedding_from_base64(voice_data)
+        # Extract speaker embedding (CPU-bound -- offloaded to thread pool)
+        embedding = await _extract_voice_embedding(voice_data)
 
-        # Store in database
+        # Store in database (async I/O -- safe on event loop)
         repo = get_voice_repository()
         await repo.save(
             user_id=user_id,
@@ -96,14 +110,14 @@ async def enroll_voice(request: VoiceRequest) -> BiometricResponse:
         )
 
 
-# ── POST /voice/verify ─────────────────────────────────────────────
+# -- POST /voice/verify -------------------------------------------------------
 
 
 @router.post("/voice/verify", response_model=BiometricResponse)
 async def verify_voice(request: VoiceRequest) -> BiometricResponse:
     """Verify a user's voice against their enrolled centroid.
 
-    Returns cosine similarity as confidence. Threshold is 0.75 by default.
+    Returns cosine similarity as confidence. Threshold is 0.65.
     """
     VERIFY_THRESHOLD = 0.65
 
@@ -116,11 +130,10 @@ async def verify_voice(request: VoiceRequest) -> BiometricResponse:
 
         logger.info(f"Voice verification request: user_id={user_id}")
 
-        # Extract speaker embedding from probe audio
-        embedder = get_speaker_embedder()
-        probe_embedding = embedder.extract_embedding_from_base64(voice_data)
+        # Extract speaker embedding from probe audio (CPU-bound)
+        probe_embedding = await _extract_voice_embedding(voice_data)
 
-        # Load enrolled centroid
+        # Load enrolled centroid (async I/O)
         repo = get_voice_repository()
         enrolled_embedding = await repo.find_by_user_id(user_id)
 
@@ -167,7 +180,7 @@ async def verify_voice(request: VoiceRequest) -> BiometricResponse:
         )
 
 
-# ── POST /voice/search ────────────────────────────────────────────
+# -- POST /voice/search -------------------------------------------------------
 
 
 class VoiceSearchRequest(BaseModel):
@@ -186,8 +199,8 @@ async def search_voice(request: VoiceSearchRequest):
 
         logger.info("Voice search request")
 
-        embedder = get_speaker_embedder()
-        probe_embedding = embedder.extract_embedding_from_base64(voice_data)
+        # CPU-bound extraction offloaded to thread pool
+        probe_embedding = await _extract_voice_embedding(voice_data)
 
         repo = get_voice_repository()
         matches = await repo.find_similar(probe_embedding, threshold=SEARCH_THRESHOLD)
@@ -210,7 +223,7 @@ async def search_voice(request: VoiceSearchRequest):
         raise HTTPException(status_code=500, detail="Voice search failed. Please try again.")
 
 
-# ── DELETE /voice/{user_id} ────────────────────────────────────────
+# -- DELETE /voice/{user_id} ---------------------------------------------------
 
 
 @router.delete("/voice/{user_id}", response_model=BiometricResponse)

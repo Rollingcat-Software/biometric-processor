@@ -1,208 +1,57 @@
-"""Fingerprint biometric endpoints — enrollment, verification, deletion.
+"""Fingerprint biometric endpoints -- DISABLED.
 
-Uses a hash-based embedder to produce 256-dimensional embeddings from
-fingerprint image data, stored in pgvector with a centroid-based pattern
-(same as face/voice). When a real fingerprint scanner SDK is available,
-only the embedding extraction layer needs to change.
+Fingerprint biometric processing is not available on the server side.
+All endpoints return HTTP 501 Not Implemented with a message directing
+callers to use WebAuthn for device-based fingerprint authentication.
 
-Integration:
-    Called by identity-core-api BiometricServiceAdapter via JSON:
-        POST /fingerprint/enroll  {"user_id": "...", "fingerprint_data": "<base64>"}
-        POST /fingerprint/verify  {"user_id": "...", "fingerprint_data": "<base64>"}
-        DELETE /fingerprint/{user_id}
+The identity-core-api FingerprintAuthHandler already delegates to
+WebAuthn (FIDO2) instead of server-side biometric processing.
 """
 
 import logging
-from typing import Optional
 
-import numpy as np
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
-
-from app.api.schemas.biometric_response import BiometricResponse as _SharedBiometricResponse
-from app.core.container import get_fingerprint_embedder, get_fingerprint_repository
-from app.core.validation import validate_user_id
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Fingerprint"])
 
-# ── Request / Response schemas ──────────────────────────────────────
+_NOT_IMPLEMENTED_DETAIL = (
+    "Fingerprint biometric processing not available. "
+    "Use WebAuthn for device-based fingerprint authentication."
+)
 
 
-class FingerprintRequest(BaseModel):
-    user_id: str = Field(..., max_length=255)
-    fingerprint_data: str = Field(..., max_length=50_000_000)  # ~37MB decoded max
+def _fingerprint_501() -> JSONResponse:
+    """Return a standard 501 response for all fingerprint endpoints."""
+    return JSONResponse(
+        status_code=501,
+        content={
+            "success": False,
+            "message": _NOT_IMPLEMENTED_DETAIL,
+            "modality": "fingerprint",
+            "alternative": "WebAuthn (FIDO2)",
+        },
+    )
 
 
-class BiometricResponse(_SharedBiometricResponse):
-    """Fingerprint-specific biometric response with modality default."""
-    modality: str = "fingerprint"
+@router.post("/fingerprint/enroll")
+async def enroll_fingerprint() -> JSONResponse:
+    """Fingerprint enrollment -- not implemented (use WebAuthn)."""
+    logger.info("Fingerprint enroll requested -- returning 501")
+    return _fingerprint_501()
 
 
-# ── POST /fingerprint/enroll ────────────────────────────────────────
+@router.post("/fingerprint/verify")
+async def verify_fingerprint() -> JSONResponse:
+    """Fingerprint verification -- not implemented (use WebAuthn)."""
+    logger.info("Fingerprint verify requested -- returning 501")
+    return _fingerprint_501()
 
 
-@router.post("/fingerprint/enroll", response_model=BiometricResponse)
-async def enroll_fingerprint(request: FingerprintRequest) -> BiometricResponse:
-    """Enroll a user's fingerprint biometric.
-
-    Accepts base64-encoded fingerprint image, extracts a 256-dim embedding
-    via hash-based embedder, stores it as an INDIVIDUAL enrollment row,
-    and recomputes the CENTROID.
-    """
-    try:
-        user_id = validate_user_id(request.user_id)
-
-        fingerprint_data = request.fingerprint_data.strip()
-        if not fingerprint_data:
-            raise HTTPException(status_code=400, detail="fingerprint_data is required")
-
-        logger.info(f"Fingerprint enrollment request: user_id={user_id}")
-
-        # Extract fingerprint embedding
-        embedder = get_fingerprint_embedder()
-        embedding = embedder.extract_embedding_from_base64(fingerprint_data)
-
-        # Store in database
-        repo = get_fingerprint_repository()
-        await repo.save(
-            user_id=user_id,
-            embedding=embedding,
-            quality_score=1.0,
-        )
-
-        logger.info(
-            f"Fingerprint enrolled: user_id={user_id}, dim={len(embedding)}"
-        )
-
-        return BiometricResponse(
-            success=True,
-            message="Fingerprint enrolled successfully",
-            user_id=user_id,
-            embedding_dimension=len(embedding),
-        )
-
-    except ValueError as e:
-        logger.warning(f"Fingerprint enrollment validation error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Fingerprint enrollment failed: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail="Fingerprint enrollment failed. Please try again.",
-        )
-
-
-# ── POST /fingerprint/verify ───────────────────────────────────────
-
-
-@router.post("/fingerprint/verify", response_model=BiometricResponse)
-async def verify_fingerprint(request: FingerprintRequest) -> BiometricResponse:
-    """Verify a user's fingerprint against their enrolled centroid.
-
-    Returns cosine similarity as confidence. Threshold is 0.70.
-    """
-    VERIFY_THRESHOLD = 0.70
-
-    try:
-        user_id = validate_user_id(request.user_id)
-
-        fingerprint_data = request.fingerprint_data.strip()
-        if not fingerprint_data:
-            raise HTTPException(status_code=400, detail="fingerprint_data is required")
-
-        logger.info(f"Fingerprint verification request: user_id={user_id}")
-
-        # Extract fingerprint embedding from probe image
-        embedder = get_fingerprint_embedder()
-        probe_embedding = embedder.extract_embedding_from_base64(fingerprint_data)
-
-        # Load enrolled centroid
-        repo = get_fingerprint_repository()
-        enrolled_embedding = await repo.find_by_user_id(user_id)
-
-        if enrolled_embedding is None:
-            return BiometricResponse(
-                success=False,
-                verified=False,
-                message="No fingerprint enrollment found for this user",
-                user_id=user_id,
-                confidence=0.0,
-            )
-
-        # Cosine similarity (both vectors are L2-normalized)
-        similarity = float(np.dot(probe_embedding, enrolled_embedding))
-        similarity = max(0.0, min(1.0, similarity))
-
-        verified = similarity >= VERIFY_THRESHOLD
-
-        logger.info(
-            f"Fingerprint verification: user_id={user_id}, "
-            f"similarity={similarity:.4f}, threshold={VERIFY_THRESHOLD}, "
-            f"verified={verified}"
-        )
-
-        return BiometricResponse(
-            success=True,
-            verified=verified,
-            confidence=round(similarity, 4),
-            message="Fingerprint verified successfully" if verified else "Fingerprint verification failed",
-            user_id=user_id,
-        )
-
-    except ValueError as e:
-        logger.warning(f"Fingerprint verification validation error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Fingerprint verification failed: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail="Fingerprint verification failed. Please try again.",
-        )
-
-
-# ── DELETE /fingerprint/{user_id} ──────────────────────────────────
-
-
-@router.delete("/fingerprint/{user_id}", response_model=BiometricResponse)
-async def delete_fingerprint(user_id: str) -> BiometricResponse:
-    """Soft-delete all fingerprint enrollments for a user."""
-    try:
-        user_id = validate_user_id(user_id)
-
-        logger.info(f"Fingerprint deletion request: user_id={user_id}")
-
-        repo = get_fingerprint_repository()
-        deleted = await repo.delete_by_user_id(user_id)
-
-        if not deleted:
-            return BiometricResponse(
-                success=True,
-                message="No fingerprint enrollment found to delete",
-                user_id=user_id,
-            )
-
-        logger.info(f"Fingerprint data deleted: user_id={user_id}")
-
-        return BiometricResponse(
-            success=True,
-            message="Fingerprint data deleted successfully",
-            user_id=user_id,
-        )
-
-    except ValueError as e:
-        logger.warning(f"Fingerprint deletion validation error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Fingerprint deletion failed: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail="Fingerprint deletion failed. Please try again.",
-        )
+@router.delete("/fingerprint/{user_id}")
+async def delete_fingerprint(user_id: str) -> JSONResponse:
+    """Fingerprint deletion -- not implemented (use WebAuthn)."""
+    logger.info(f"Fingerprint delete requested for user_id={user_id} -- returning 501")
+    return _fingerprint_501()

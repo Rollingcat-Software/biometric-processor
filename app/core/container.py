@@ -67,6 +67,8 @@ from app.infrastructure.storage.local_file_storage import LocalFileStorage
 from app.infrastructure.async_execution.thread_pool_manager import ThreadPoolManager
 from app.infrastructure.ml.voice.speaker_embedder import SpeakerEmbedder
 from app.infrastructure.persistence.repositories.pgvector_voice_repository import PgVectorVoiceRepository
+# Fingerprint infrastructure is retained for potential future use but
+# endpoints return 501 (WebAuthn is the production path).
 from app.infrastructure.ml.fingerprint.hash_embedder import FingerprintHashEmbedder
 from app.infrastructure.persistence.repositories.pgvector_fingerprint_repository import PgVectorFingerprintRepository
 
