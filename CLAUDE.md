@@ -43,6 +43,15 @@ pytest tests/unit/ -v           # Unit tests only
 - **Fingerprint**: enroll, verify, delete — SHA-256 hash-based 256-dim embeddings, centroid-based
 - Routes: `fingerprint.py`, repo: `pgvector_fingerprint_repository.py`, embedder: `hash_embedder.py`
 
+### Verification Pipeline (Phase 8B/8C, 2026-03-28):
+- **Document scan** — YOLO-based document detection and classification
+- **MRZ parser** — TD1/TD3 machine-readable zone extraction
+- **Tesseract OCR** — TC Kimlik field extraction (name, TC number, DOB, photo)
+- **Face-to-document matching** — DeepFace cosine similarity between selfie and document photo
+- **Liveness pipeline** — server-authoritative liveness verdict with configurable thresholds
+- **Video interview upload** — endpoint for verification pipeline video step
+- Routes: `document.py`, `verification_pipeline.py`, `video_interview.py`
+
 ### Not implemented:
 - **Iris**: No endpoints at all
 
