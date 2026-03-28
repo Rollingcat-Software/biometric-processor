@@ -2,6 +2,7 @@
 
 Phase 8B: Document Processing (document-scan, data-extract)
 Phase 8C: Face-to-Document Matching (face-match, liveness-check, pipeline test)
+Phase 8D: Video Interview (upload and store for manual admin review)
 
 These endpoints compose existing infrastructure (YOLO card detection, DeepFace,
 liveness detection) into a sequential verification pipeline.
@@ -10,13 +11,18 @@ liveness detection) into a sequential verification pipeline.
 import asyncio
 import base64
 import logging
+import os
+import uuid
 from io import BytesIO
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from PIL import Image
 from pydantic import BaseModel
+
+from app.core.config import get_settings
 
 from app.core.container import (
     get_check_liveness_use_case,
@@ -121,6 +127,16 @@ class PipelineTestResponse(BaseModel):
 
     overall_success: bool
     steps: list[PipelineStepResult]
+
+
+class VideoInterviewResponse(BaseModel):
+    """Response from video interview upload."""
+
+    stored: bool
+    filename: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    status: str = "PENDING_REVIEW"
+    error: Optional[str] = None
 
 
 # ============================================================================
@@ -803,4 +819,85 @@ async def pipeline_test(
     return PipelineTestResponse(
         overall_success=overall_success,
         steps=steps,
+    )
+
+
+# ============================================================================
+# 6. VIDEO_INTERVIEW Step
+# ============================================================================
+
+# Max video file size: 50MB
+_MAX_VIDEO_SIZE = 50 * 1024 * 1024
+_ACCEPTED_VIDEO_TYPES = {"video/webm", "video/mp4"}
+
+
+@router.post(
+    "/video-interview",
+    response_model=VideoInterviewResponse,
+    summary="Upload a video interview recording",
+    description=(
+        "Accepts a short video recording (webm/mp4) from the user's webcam. "
+        "Stores the file for manual admin review. Max 50MB."
+    ),
+)
+async def video_interview(
+    file: UploadFile = File(..., description="Video file (webm or mp4)"),
+) -> VideoInterviewResponse:
+    """Upload a video interview recording for manual review.
+
+    The video is stored on disk with a unique filename. No AI analysis
+    is performed -- an admin reviews the video and approves or rejects it.
+    """
+    # Validate content type
+    content_type = file.content_type or ""
+    if content_type not in _ACCEPTED_VIDEO_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported video format: {content_type}. Accepted: video/webm, video/mp4",
+        )
+
+    # Read file content
+    content = await file.read()
+
+    # Validate file size
+    if len(content) > _MAX_VIDEO_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Video file too large ({len(content)} bytes). Maximum: {_MAX_VIDEO_SIZE} bytes (50MB)",
+        )
+
+    if len(content) == 0:
+        raise HTTPException(status_code=400, detail="Empty video file")
+
+    # Determine file extension
+    extension = "mp4" if content_type == "video/mp4" else "webm"
+
+    # Generate unique filename
+    unique_name = f"interview_{uuid.uuid4().hex}.{extension}"
+
+    # Store in uploads directory
+    settings = get_settings()
+    video_dir = Path(settings.UPLOAD_FOLDER) / "video_interviews"
+    video_dir.mkdir(parents=True, exist_ok=True)
+
+    file_path = video_dir / unique_name
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    # Estimate duration from file size (rough: ~100KB/s for webm, ~150KB/s for mp4)
+    bytes_per_second = 150_000 if extension == "mp4" else 100_000
+    estimated_duration = round(len(content) / bytes_per_second, 1)
+
+    logger.info(
+        "Video interview stored: %s (%d bytes, ~%.1fs)",
+        unique_name,
+        len(content),
+        estimated_duration,
+    )
+
+    return VideoInterviewResponse(
+        stored=True,
+        filename=unique_name,
+        duration_seconds=estimated_duration,
+        status="PENDING_REVIEW",
     )
