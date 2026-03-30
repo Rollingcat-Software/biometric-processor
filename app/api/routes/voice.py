@@ -15,9 +15,7 @@ Integration:
         DELETE /voice/{user_id}
 """
 
-import asyncio
 import logging
-from typing import Optional
 
 import numpy as np
 from fastapi import APIRouter, HTTPException

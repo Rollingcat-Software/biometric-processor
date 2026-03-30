@@ -7,6 +7,8 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+import threading
+
 from app.core.container import get_embedding_repository
 from app.api.middleware.jwt_auth import require_auth, AuthContext
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
@@ -15,8 +17,6 @@ router = APIRouter(
     prefix="/admin",
     tags=["Admin"],
 )
-
-import threading
 
 # Track metrics in memory (would use Redis in production)
 _metrics_lock = threading.Lock()

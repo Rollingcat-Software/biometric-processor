@@ -13,6 +13,7 @@ INT8 quantization benefits:
 import os
 import logging
 from pathlib import Path
+from typing import Any
 from typing import List, Optional, Iterator
 
 import numpy as np
@@ -229,7 +230,7 @@ class ModelQuantizer:
 
         return output_path
 
-    def load_quantized_tflite(self, model_path: Path) -> "tf.lite.Interpreter":
+    def load_quantized_tflite(self, model_path: Path) -> "Any":
         """Load a quantized TFLite model.
 
         Args:
@@ -251,7 +252,7 @@ class ModelQuantizer:
         self,
         model_path: Path,
         use_gpu: bool = True,
-    ) -> "ort.InferenceSession":
+    ) -> "Any":
         """Load a quantized ONNX model with optimizations.
 
         Args:

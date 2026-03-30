@@ -11,7 +11,6 @@ liveness detection) into a sequential verification pipeline.
 import asyncio
 import base64
 import logging
-import os
 import uuid
 from io import BytesIO
 from pathlib import Path
@@ -635,7 +634,6 @@ async def pipeline_test(
 
     # ---- Step 1: Document Scan ----
     card_type = None
-    doc_face_b64 = None
     try:
         use_case = get_detect_card_type_use_case()
         card_result = await asyncio.wait_for(use_case.execute_from_array(doc_np), timeout=30)
@@ -650,8 +648,7 @@ async def pipeline_test(
             if len(yolo_results[0].boxes) > 0:
                 best_box = max(yolo_results[0].boxes, key=lambda b: float(b.conf[0]))
                 coords = best_box.xyxy[0].cpu().numpy().astype(int)
-                cropped = doc_pil.crop((int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3])))
-                doc_face_b64 = _image_to_base64(cropped)
+                doc_pil.crop((int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3])))
 
             steps.append(PipelineStepResult(
                 step="document_scan",
@@ -779,7 +776,6 @@ async def pipeline_test(
 
     # ---- Step 4: Liveness Check ----
     try:
-        storage = get_file_storage()
         # Write face image to temp file for liveness use case
         face_buffer = BytesIO()
         face_pil.save(face_buffer, format="JPEG")

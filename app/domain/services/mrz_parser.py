@@ -305,24 +305,24 @@ def detect_and_parse_mrz(text: str) -> Optional[MRZData]:
 
     # Try TD3 (2 lines x 44 chars)
     if len(mrz_lines) >= 2:
-        td3_candidates = [l for l in mrz_lines if len(l) == 44]
+        td3_candidates = [line for line in mrz_lines if len(line) == 44]
         if len(td3_candidates) >= 2:
             logger.info("Detected TD3 (passport) MRZ format")
             return parse_td3(td3_candidates[:2])
 
     # Try TD1 (3 lines x 30 chars)
     if len(mrz_lines) >= 3:
-        td1_candidates = [l for l in mrz_lines if len(l) == 30]
+        td1_candidates = [line for line in mrz_lines if len(line) == 30]
         if len(td1_candidates) >= 3:
             logger.info("Detected TD1 (ID card) MRZ format")
             return parse_td1(td1_candidates[:3])
 
     # Fallback: try with whatever lines we have, padding if needed
-    if len(mrz_lines) >= 2 and all(len(l) >= 40 for l in mrz_lines[:2]):
+    if len(mrz_lines) >= 2 and all(len(line) >= 40 for line in mrz_lines[:2]):
         logger.info("Attempting TD3 parse with approximate-length lines")
         return parse_td3(mrz_lines[:2])
 
-    if len(mrz_lines) >= 3 and all(len(l) >= 28 for l in mrz_lines[:3]):
+    if len(mrz_lines) >= 3 and all(len(line) >= 28 for line in mrz_lines[:3]):
         logger.info("Attempting TD1 parse with approximate-length lines")
         return parse_td1(mrz_lines[:3])
 

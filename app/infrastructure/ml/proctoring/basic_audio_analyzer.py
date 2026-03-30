@@ -78,10 +78,9 @@ class BasicAudioAnalyzer(IAudioAnalyzer):
             logger.debug("webrtcvad not installed, using basic VAD")
 
         # Check for scipy
-        try:
-            import scipy.signal
-            self._has_scipy = True
-        except ImportError:
+        import importlib.util
+        self._has_scipy = importlib.util.find_spec("scipy") is not None
+        if not self._has_scipy:
             logger.debug("scipy not installed, using basic analysis")
 
     async def analyze(

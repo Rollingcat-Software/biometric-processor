@@ -58,7 +58,6 @@ class ActiveLivenessManager:
     def _get_face_landmarker(self):
         if self._face_landmarker is None:
             try:
-                import mediapipe as mp
                 from mediapipe.tasks import python
                 from mediapipe.tasks.python import vision
 

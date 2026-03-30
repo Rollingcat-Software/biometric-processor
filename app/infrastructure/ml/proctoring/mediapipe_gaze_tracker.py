@@ -204,11 +204,8 @@ class MediaPipeGazeTracker(IGazeTracker):
 
     def is_available(self) -> bool:
         """Check if gaze tracker is available."""
-        try:
-            import mediapipe
-            return True
-        except ImportError:
-            return False
+        import importlib.util
+        return importlib.util.find_spec("mediapipe") is not None
 
     def _estimate_head_pose(
         self,

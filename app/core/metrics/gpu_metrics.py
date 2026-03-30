@@ -4,6 +4,7 @@ Collects and exposes GPU metrics including memory usage, utilization,
 and temperature for monitoring and alerting purposes.
 """
 
+import asyncio
 import subprocess
 import logging
 from typing import Optional

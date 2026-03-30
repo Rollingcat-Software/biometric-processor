@@ -278,8 +278,5 @@ class YOLOObjectDetector(IObjectDetector):
 
     def is_available(self) -> bool:
         """Check if object detector is available."""
-        try:
-            from ultralytics import YOLO
-            return True
-        except ImportError:
-            return False
+        import importlib.util
+        return importlib.util.find_spec("ultralytics") is not None
