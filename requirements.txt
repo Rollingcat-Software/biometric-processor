@@ -20,7 +20,7 @@ structlog>=25.0.0
 # Image Processing
 # ===========================================
 pillow>=11.0.0
-numpy>=1.26.0,<2.0
+numpy>=1.26.0
 scikit-image>=0.24.0
 
 # ===========================================
@@ -30,10 +30,11 @@ pytesseract>=0.3.10
 
 # ===========================================
 # Machine Learning - TensorFlow CPU Only
-# DO NOT change tensorflow or deepface versions!
+# TF 2.21 + tf-keras (Keras 2 compat) for DeepFace support
+# TF_USE_LEGACY_KERAS=1 set in Dockerfile to route tf.keras -> tf-keras
 # ===========================================
-tensorflow-cpu==2.15.0
-mediapipe==0.10.14
+tensorflow-cpu==2.21.0
+mediapipe>=0.10.30
 
 # DeepFace dependencies (deepface itself installed via --no-deps)
 # DeepFace 0.0.98+: built-in anti-spoofing, YOLOv11/v12, GhostFaceNet, CenterFace
@@ -41,7 +42,9 @@ tqdm>=4.67.0
 gdown>=5.2.0
 pandas>=2.2.0
 flask>=3.1.0
-tf-keras>=2.15.0,<2.16.0
+flask-cors>=4.0.1
+fire>=0.4.0
+tf-keras>=2.21.0
 mtcnn>=0.1.0
 retina-face>=0.0.1
 

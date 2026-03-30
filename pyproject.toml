@@ -2,11 +2,11 @@
 name = "biometric-processor"
 version = "1.0.0"
 description = "Face biometric processing system with enrollment, verification, and liveness detection"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 
 [tool.black]
 line-length = 100
-target-version = ['py311']
+target-version = ['py313']
 include = '\.pyi?$'
 exclude = '''
 /(
@@ -35,7 +35,7 @@ skip_gitignore = true
 skip = [".git", "__pycache__", ".mypy_cache", ".pytest_cache", "venv", ".venv"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -61,7 +61,7 @@ disallow_untyped_defs = false
 disallow_incomplete_defs = false
 
 [tool.pylint.main]
-py-version = "3.11"
+py-version = "3.13"
 jobs = 0
 ignore = ["tests", "venv", ".venv"]
 ignore-patterns = ["test_.*"]

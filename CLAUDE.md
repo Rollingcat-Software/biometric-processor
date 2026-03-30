@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Python 3.11+ / FastAPI biometric processing microservice for FIVUCSAS platform.
+Python 3.13 / FastAPI biometric processing microservice for FIVUCSAS platform.
 Handles face enrollment, verification, liveness detection, and document classification.
 Clean Architecture with dependency injection.
 

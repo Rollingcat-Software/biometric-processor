@@ -1,10 +1,11 @@
 # Dockerfile for Google Cloud Run deployment
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TF_CPP_MIN_LOG_LEVEL=2 \
+    TF_USE_LEGACY_KERAS=1 \
     DEEPFACE_HOME=/tmp/.deepface \
     PORT=8080
 
@@ -33,31 +34,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy requirements
 COPY requirements.txt .
 
-# Create constraint file to prevent incompatible package versions
-RUN echo "numpy<2.0" > /tmp/constraints.txt && \
-    echo "keras<3.0" >> /tmp/constraints.txt
+# 1. First install opencv-python-headless to claim cv2 namespace
+RUN pip install --no-cache-dir opencv-python-headless>=4.8.0
 
-# Install dependencies with constraints to prevent numpy upgrade:
-# 1. Pin numpy to compatible version (TensorFlow 2.15 requires numpy<2.0)
-RUN pip install --no-cache-dir -c /tmp/constraints.txt "numpy>=1.26.0,<2.0"
+# 2. Install tensorflow-cpu (big dependency)
+RUN pip install --no-cache-dir tensorflow-cpu==2.21.0
 
-# 2. First install opencv-python-headless to claim cv2 namespace
-RUN pip install --no-cache-dir -c /tmp/constraints.txt opencv-python-headless>=4.8.0
-
-# 3. Install tensorflow-cpu (big dependency)
-RUN pip install --no-cache-dir -c /tmp/constraints.txt tensorflow-cpu==2.15.0
-
-# 4. Install deepface WITHOUT dependencies to avoid opencv-python
+# 3. Install deepface WITHOUT dependencies to avoid opencv-python
 #    Then install missing deepface dependencies manually
 RUN pip install --no-cache-dir --no-deps deepface==0.0.98 && \
-    pip install --no-cache-dir -c /tmp/constraints.txt lightphe lightdsa
+    pip install --no-cache-dir lightphe lightdsa
 
-# 5. Install remaining requirements with constraints
-RUN pip install --no-cache-dir -c /tmp/constraints.txt -r requirements.txt
+# 4. Install remaining requirements
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 6. Force uninstall opencv-python if it got installed, reinstall headless
+# 5. Force uninstall opencv-python if it got installed, reinstall headless
 RUN pip uninstall -y opencv-python opencv-contrib-python 2>/dev/null || true && \
-    pip install --no-cache-dir -c /tmp/constraints.txt --force-reinstall opencv-python-headless>=4.8.0
+    pip install --no-cache-dir --force-reinstall opencv-python-headless>=4.8.0
 
 # Verify dependencies work together
 RUN python -c "import cv2; print('OpenCV version:', cv2.__version__)" && \
