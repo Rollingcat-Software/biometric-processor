@@ -1,7 +1,7 @@
 # Development Dockerfile with Hot Reload
 # Optimized for fast iteration and debugging
 
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \

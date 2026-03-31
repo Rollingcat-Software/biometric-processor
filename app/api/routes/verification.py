@@ -9,6 +9,7 @@ from app.application.use_cases.verify_face import VerifyFaceUseCase
 from app.core.container import get_file_storage, get_verify_face_use_case
 from app.core.config import get_settings
 from app.core.validation import ValidationError, validate_image_file, validate_user_id, validate_tenant_id
+from app.domain.exceptions.face_errors import PoorImageQualityError
 from app.domain.interfaces.file_storage import IFileStorage
 
 settings = get_settings()
@@ -80,7 +81,18 @@ async def verify_face(
             raise HTTPException(status_code=400, detail=str(e))
 
         # Execute verification use case
-        result = await use_case.execute(user_id=user_id, image_path=image_path, tenant_id=tenant_id)
+        try:
+            result = await use_case.execute(user_id=user_id, image_path=image_path, tenant_id=tenant_id)
+        except PoorImageQualityError as e:
+            logger.warning(f"Verification rejected due to poor image quality: {e.message}")
+            return VerificationResponse(
+                verified=False,
+                confidence=0.0,
+                distance=1.0,
+                threshold=0.0,
+                message=f"Image quality too low for verification (score: {e.quality_score:.0f}/100). "
+                "Please ensure good lighting and face the camera directly.",
+            )
 
         message = "Face verified successfully" if result.verified else "Face does not match"
 

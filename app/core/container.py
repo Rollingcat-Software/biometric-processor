@@ -319,7 +319,7 @@ def get_card_type_detector() -> ICardTypeDetector:
         - Ogrenci Karti (Student ID)
     """
     logger.info("Creating card type detector (YOLO-based)")
-    return YOLOCardTypeDetector(confidence_threshold=0.5)
+    return YOLOCardTypeDetector(confidence_threshold=settings.CARD_DETECTION_THRESHOLD)
 
 
 @lru_cache()
@@ -509,6 +509,7 @@ def get_verify_face_use_case() -> VerifyFaceUseCase:
         extractor=get_embedding_extractor(),
         similarity_calculator=get_similarity_calculator(),
         repository=get_embedding_repository(),
+        quality_assessor=get_quality_assessor(),
     )
 
 

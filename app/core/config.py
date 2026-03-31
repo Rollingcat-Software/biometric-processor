@@ -497,6 +497,12 @@ class Settings(BaseSettings):
     LIVENESS_ENABLE_OPTIMIZED: bool = Field(default=True)
     LIVENESS_FFT_DOWNSAMPLE_SIZE: int = Field(default=192, ge=64, le=512)
 
+    # Card Detection
+    CARD_DETECTION_THRESHOLD: float = Field(
+        default=0.25, ge=0.0, le=1.0,
+        description="YOLO card detection confidence threshold (lowered from 0.5 for better recall on non-passport cards)"
+    )
+
     # Batch Processing
     BATCH_MAX_CONCURRENT: int = Field(default=5, ge=1, le=20)
     BATCH_ADAPTIVE_CONCURRENCY: bool = Field(default=False)
@@ -506,7 +512,13 @@ class Settings(BaseSettings):
     def validate_jwt_secret(cls, v, info):
         """Ensure JWT_SECRET is set when JWT is enabled."""
         jwt_enabled = info.data.get("JWT_ENABLED", True)
+        environment = info.data.get("ENVIRONMENT", "development")
         if jwt_enabled and not v:
+            if environment == "production":
+                raise ValueError(
+                    "SECURITY ERROR: JWT_SECRET must be set when JWT_ENABLED=True in production. "
+                    "Set JWT_SECRET environment variable with a secure 256-bit key."
+                )
             import warnings
             warnings.warn(
                 "JWT_SECRET is empty while JWT_ENABLED=True. "

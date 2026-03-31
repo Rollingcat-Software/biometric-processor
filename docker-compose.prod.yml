@@ -7,6 +7,8 @@ services:
       dockerfile: Dockerfile
     container_name: biometric-api
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
       APP_NAME: "Biometric Processor API"
       VERSION: "1.0.0"
@@ -41,8 +43,10 @@ services:
 
       # Security
       CORS_ORIGINS: '["https://ica-fivucsas.rollingcatsoftware.com","https://fivucsas.rollingcatsoftware.com","https://auth.rollingcatsoftware.com"]'
-      API_KEY_ENABLED: "false"
-      REQUIRE_HTTPS: "false"
+      API_KEY_ENABLED: "true"
+      REQUIRE_HTTPS: "true"
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${JWT_SECRET}
 
       # Rate Limiting
       RATE_LIMIT_ENABLED: true

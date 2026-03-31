@@ -118,15 +118,29 @@ class YOLOCardTypeDetector(ICardTypeDetector):
         logger.debug("Starting card type detection")
 
         model = self._get_model()
-        results = model(image, conf=self._confidence_threshold, verbose=False)
-        result = results[0]
 
-        if len(result.boxes) == 0:
-            logger.debug("No card detected in image")
+        # Run inference at a low conf floor so we can log ALL raw detections
+        raw_results = model(image, conf=0.05, verbose=False)
+        raw_result = raw_results[0]
+
+        # Log every detection the model produces (diagnostic)
+        for box in raw_result.boxes:
+            cls_id = int(box.cls[0])
+            conf = float(box.conf[0])
+            logger.info(f"YOLO raw detections: {model.names[cls_id]}={conf:.3f}")
+
+        # Apply the configured confidence threshold
+        filtered_boxes = [
+            b for b in raw_result.boxes
+            if float(b.conf[0]) >= self._confidence_threshold
+        ]
+
+        if len(filtered_boxes) == 0:
+            logger.debug("No card detected in image above threshold %.2f", self._confidence_threshold)
             return CardTypeResult(detected=False)
 
         # Get the detection with highest confidence
-        best_box = max(result.boxes, key=lambda b: float(b.conf[0]))
+        best_box = max(filtered_boxes, key=lambda b: float(b.conf[0]))
         class_id = int(best_box.cls[0])
         confidence = float(best_box.conf[0])
         class_name = model.names[class_id]

@@ -1,4 +1,4 @@
-# Dockerfile for Google Cloud Run deployment
+# Dockerfile for FIVUCSAS Biometric Processor (FastAPI)
 FROM python:3.13-slim
 
 # Set environment variables
@@ -7,11 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TF_CPP_MIN_LOG_LEVEL=2 \
     TF_USE_LEGACY_KERAS=1 \
     DEEPFACE_HOME=/tmp/.deepface \
-    PORT=8080
+    PORT=8001
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies + Tesseract OCR with Turkish language pack
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     libsm6 \
@@ -23,10 +23,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     gcc \
     build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Tesseract OCR with Turkish language pack (for document text extraction)
-RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-tur \
     && rm -rf /var/lib/apt/lists/*
@@ -60,12 +56,18 @@ RUN python -c "import cv2; print('OpenCV version:', cv2.__version__)" && \
 # Copy application code
 COPY . .
 
-# Expose port (default 8080 for GCP, overridden by env in docker-compose)
-EXPOSE ${PORT:-8080}
+# Create non-root user for security
+RUN addgroup --system app && adduser --system --ingroup app app \
+    && chown -R app:app /app
+
+# Expose port
+EXPOSE ${PORT:-8001}
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:${PORT:-8080}/api/v1/health || exit 1
+    CMD curl -f http://localhost:${PORT:-8001}/api/v1/health || exit 1
 
-# Start the application (uses PORT from environment, defaults to 8080)
-CMD ["sh", "-c", "python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+USER app
+
+# Start the application (uses PORT from environment, defaults to 8001)
+CMD ["sh", "-c", "python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8001}"]

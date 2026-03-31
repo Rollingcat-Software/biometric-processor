@@ -9,7 +9,6 @@ This module provides validation functions for user inputs to prevent:
 - File type spoofing
 """
 
-import imghdr
 import re
 from pathlib import Path
 from typing import Optional
@@ -327,9 +326,19 @@ def validate_image_file(file_path: str, allowed_formats: list[str] = None) -> st
     if not Path(file_path).exists():
         raise ValidationError(f"File not found: {file_path}")
 
-    # Detect actual file type using magic bytes
+    # Detect actual file type using magic bytes (imghdr removed in Python 3.13)
     try:
-        detected_type = imghdr.what(file_path)
+        with open(file_path, 'rb') as f:
+            header = f.read(32)
+        detected_type = None
+        if header[:8] == b'\x89PNG\r\n\x1a\n':
+            detected_type = 'png'
+        elif header[:3] == b'\xff\xd8\xff':
+            detected_type = 'jpeg'
+        elif header[:6] in (b'GIF87a', b'GIF89a'):
+            detected_type = 'gif'
+        elif header[:2] == b'BM':
+            detected_type = 'bmp'
     except Exception as e:
         raise ValidationError(f"Failed to detect image type: {str(e)}")
 
@@ -339,10 +348,6 @@ def validate_image_file(file_path: str, allowed_formats: list[str] = None) -> st
             "File is not a valid image. File type detection failed. "
             "Please upload a valid JPEG, PNG, GIF, or BMP image."
         )
-
-    # Normalize detected type (imghdr returns 'jpeg' for both jpg and jpeg)
-    if detected_type == 'jpeg':
-        detected_type = 'jpeg'  # Already normalized
 
     # Check if format is allowed
     if detected_type not in allowed_formats:
