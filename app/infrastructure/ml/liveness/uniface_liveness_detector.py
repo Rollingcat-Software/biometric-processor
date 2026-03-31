@@ -123,15 +123,19 @@ class UniFaceLivenessDetector(ILivenessDetector):
                 # No face detected by MiniFASNet - fall back to "real" with low confidence
                 logger.warning(
                     "MiniFASNet did not detect any face, "
-                    "falling back to default (real with low confidence)"
+                    "returning indeterminate failure result"
                 )
                 return LivenessResult(
-                    is_live=True,
-                    score=51.0,
+                    is_live=False,
+                    score=0.0,
                     challenge="uniface_minifasnet",
-                    challenge_completed=True,
-                    confidence=0.51,
-                    details={"backend_score": 0.51, "fallback_reason": "no_face_detected"},
+                    challenge_completed=False,
+                    confidence=0.0,
+                    details={
+                        "backend_score": 0.0,
+                        "fallback_reason": "no_face_detected",
+                        "indeterminate": True,
+                    },
                 )
 
             # Use the first (or largest) prediction
@@ -165,19 +169,20 @@ class UniFaceLivenessDetector(ILivenessDetector):
             raise
         except Exception as e:
             logger.error(f"UniFace liveness check error: {e}", exc_info=True)
-            # Graceful fallback: treat as real with low confidence
-            # This prevents the entire pipeline from failing if the model errors
             logger.warning(
-                "Falling back to default result (real with low confidence) "
-                "due to MiniFASNet error"
+                "Returning indeterminate failure result due to MiniFASNet error"
             )
             return LivenessResult(
-                is_live=True,
-                score=51.0,
+                is_live=False,
+                score=0.0,
                 challenge="uniface_minifasnet",
-                challenge_completed=True,
-                confidence=0.51,
-                details={"backend_score": 0.51, "fallback_reason": "model_inference_failed"},
+                challenge_completed=False,
+                confidence=0.0,
+                details={
+                    "backend_score": 0.0,
+                    "fallback_reason": "model_inference_failed",
+                    "indeterminate": True,
+                },
             )
 
     def _normalize_predictions(self, raw_prediction: Any) -> list[Any]:

@@ -32,7 +32,13 @@ class ProcessActiveLivenessFrameUseCase:
         self._session_repository = session_repository
         logger.info("ProcessActiveLivenessFrameUseCase initialized")
 
-    async def execute(self, session_id: str, image_path: str) -> ActiveLivenessResponse:
+    async def execute(
+        self,
+        session_id: str,
+        image_path: str,
+        frame_timestamp: float | None = None,
+    ) -> ActiveLivenessResponse:
+        normalized_frame_timestamp = self._normalize_and_validate_frame_timestamp(frame_timestamp)
         image = cv2.imread(image_path)
         if image is None:
             raise ValueError("Failed to load the uploaded image")
@@ -47,7 +53,11 @@ class ProcessActiveLivenessFrameUseCase:
                 return self._manager.build_response(session=session)
 
             session.last_activity_at = current_time
-            return await self._manager.process_frame(session=session, image=image)
+            return await self._manager.process_frame(
+                session=session,
+                image=image,
+                frame_timestamp=normalized_frame_timestamp,
+            )
 
         try:
             response = await self._session_repository.mutate(session_id, handle_session)
@@ -56,5 +66,22 @@ class ProcessActiveLivenessFrameUseCase:
             raise
         if response is None:
             raise ActiveLivenessSessionNotFoundError("Active liveness session not found")
+        if response.session_complete and response.session_passed:
+            await self._session_repository.delete(session_id)
 
         return response
+
+    @staticmethod
+    def _normalize_and_validate_frame_timestamp(frame_timestamp: float | None) -> float:
+        if frame_timestamp is None:
+            raise ValueError("frame_timestamp is required")
+
+        normalized = frame_timestamp / 1000.0 if frame_timestamp > 1_000_000_000_000 else frame_timestamp
+        current_time = time.time()
+        if normalized <= 0:
+            raise ValueError("frame_timestamp must be a positive Unix timestamp")
+        if normalized < 946684800:
+            raise ValueError("frame_timestamp is too old")
+        if normalized > current_time + 30:
+            raise ValueError("frame_timestamp is too far in the future")
+        return normalized

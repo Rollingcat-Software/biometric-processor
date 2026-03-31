@@ -3,6 +3,7 @@
 import logging
 from typing import Optional
 
+import cv2
 import numpy as np
 
 from app.api.schemas.live_analysis import (
@@ -24,9 +25,14 @@ from app.domain.interfaces.liveness_detector import ILivenessDetector
 from app.domain.interfaces.quality_assessor import IQualityAssessor
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
+from app.domain.interfaces.landmark_detector import ILandmarkDetector
 from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
+from app.infrastructure.ml.liveness.rppg_analyzer import RPPGAnalyzer
+from app.infrastructure.ml.liveness.temporal_consistency_analyzer import TemporalConsistencyAnalyzer
 
 logger = logging.getLogger(__name__)
+TEMPORAL_CONSISTENCY_WEIGHT = 0.2
+RPPG_WEIGHT = 0.15
 
 
 class LiveCameraAnalysisUseCase:
@@ -48,6 +54,9 @@ class LiveCameraAnalysisUseCase:
         detector: IFaceDetector,
         quality_assessor: IQualityAssessor,
         liveness_detector: Optional[ILivenessDetector] = None,
+        landmark_detector: Optional[ILandmarkDetector] = None,
+        temporal_consistency_analyzer: Optional[TemporalConsistencyAnalyzer] = None,
+        rppg_analyzer: Optional[RPPGAnalyzer] = None,
         embedding_extractor: Optional[IEmbeddingExtractor] = None,
         embedding_repository: Optional[IEmbeddingRepository] = None,
         similarity_calculator: Optional[ISimilarityCalculator] = None,
@@ -55,6 +64,9 @@ class LiveCameraAnalysisUseCase:
         self._detector = detector
         self._quality_assessor = quality_assessor
         self._liveness_detector = liveness_detector
+        self._landmark_detector = landmark_detector
+        self._temporal_consistency_analyzer = temporal_consistency_analyzer
+        self._rppg_analyzer = rppg_analyzer
         self._extractor = embedding_extractor
         self._repository = embedding_repository
         self._similarity = similarity_calculator
@@ -107,6 +119,10 @@ class LiveCameraAnalysisUseCase:
                 face_region = detection.get_face_region(image)
 
             except FaceNotDetectedError:
+                if self._temporal_consistency_analyzer is not None:
+                    self._temporal_consistency_analyzer.reset()
+                if self._rppg_analyzer is not None:
+                    self._rppg_analyzer.reset()
                 response.face = FaceDetectionResult(
                     detected=False,
                     confidence=0.0,
@@ -115,6 +131,10 @@ class LiveCameraAnalysisUseCase:
                 return response
 
             except MultipleFacesError:
+                if self._temporal_consistency_analyzer is not None:
+                    self._temporal_consistency_analyzer.reset()
+                if self._rppg_analyzer is not None:
+                    self._rppg_analyzer.reset()
                 response.face = FaceDetectionResult(
                     detected=False,
                     confidence=0.0,
@@ -328,6 +348,9 @@ class LiveCameraAnalysisUseCase:
         try:
             liveness_result = await self._liveness_detector.check_liveness(face_image)
             details = liveness_result.details or {}
+            effective_score = float(liveness_result.score)
+            effective_is_live = liveness_result.is_live
+            effective_confidence = liveness_result.confidence
 
             method = str(
                 details.get("method")
@@ -354,6 +377,7 @@ class LiveCameraAnalysisUseCase:
                     checks[key] = bool(details[key])
 
             score_detail_keys = (
+                "liveness_score",
                 "texture",
                 "lbp",
                 "color",
@@ -370,6 +394,8 @@ class LiveCameraAnalysisUseCase:
             for key in score_detail_keys:
                 if key in details:
                     scores[key] = float(details[key])
+
+            scores["liveness_score"] = effective_score
 
             metadata_keys = (
                 "face_roi_source",
@@ -390,9 +416,70 @@ class LiveCameraAnalysisUseCase:
                 else:
                     metadata[key] = value
 
+            temporal_result = await self._analyze_temporal_consistency(face_image)
+            if temporal_result is not None:
+                metadata["temporal_consistency_reason"] = temporal_result["reason"]
+                metadata["temporal_frame_count"] = temporal_result["frame_count"]
+                metadata["temporal_window_size"] = temporal_result["window_size"]
+                metadata["temporal_avg_movement"] = temporal_result["avg_movement"]
+                metadata["temporal_variance"] = temporal_result["variance"]
+                checks["temporal_consistency_available"] = temporal_result["reason"] != "insufficient_frames"
+                scores["temporal_consistency_score"] = temporal_result["score"] * 100.0
+
+                if temporal_result["reason"] != "insufficient_frames":
+                    effective_score = (
+                        effective_score * (1.0 - TEMPORAL_CONSISTENCY_WEIGHT)
+                        + (temporal_result["score"] * 100.0) * TEMPORAL_CONSISTENCY_WEIGHT
+                    )
+                    effective_confidence = max(
+                        0.0,
+                        min(
+                            1.0,
+                            effective_confidence * (1.0 - TEMPORAL_CONSISTENCY_WEIGHT)
+                            + temporal_result["score"] * TEMPORAL_CONSISTENCY_WEIGHT,
+                        ),
+                    )
+                    liveness_threshold_getter = getattr(self._liveness_detector, "get_liveness_threshold", None)
+                    if callable(liveness_threshold_getter):
+                        effective_is_live = effective_score >= float(liveness_threshold_getter())
+                    scores["base_liveness_score"] = float(liveness_result.score)
+                    scores["liveness_score"] = float(effective_score)
+                    scores["temporal_adjusted_liveness_score"] = float(effective_score)
+
+            rppg_result = self._analyze_rppg(face_image)
+            if rppg_result is not None:
+                metadata["rppg_reason"] = rppg_result["reason"]
+                metadata["rppg_frame_count"] = rppg_result["frame_count"]
+                metadata["rppg_signal_strength"] = rppg_result["signal_strength"]
+                if rppg_result["bpm"] is not None:
+                    metadata["rppg_bpm"] = rppg_result["bpm"]
+                checks["rppg_available"] = rppg_result["reason"] != "insufficient_frames"
+                checks["rppg_pulse_detected"] = rppg_result["reason"] == "pulse_detected"
+                scores["rppg_score"] = rppg_result["score"] * 100.0
+
+                if rppg_result["reason"] != "insufficient_frames":
+                    effective_score = (
+                        effective_score * (1.0 - RPPG_WEIGHT)
+                        + (rppg_result["score"] * 100.0) * RPPG_WEIGHT
+                    )
+                    effective_confidence = max(
+                        0.0,
+                        min(
+                            1.0,
+                            effective_confidence * (1.0 - RPPG_WEIGHT)
+                            + rppg_result["score"] * RPPG_WEIGHT,
+                        ),
+                    )
+                    liveness_threshold_getter = getattr(self._liveness_detector, "get_liveness_threshold", None)
+                    if callable(liveness_threshold_getter):
+                        effective_is_live = effective_score >= float(liveness_threshold_getter())
+                    scores.setdefault("base_liveness_score", float(liveness_result.score))
+                    scores["liveness_score"] = float(effective_score)
+                    scores["rppg_adjusted_liveness_score"] = float(effective_score)
+
             return LivenessResult(
-                is_live=liveness_result.is_live,
-                confidence=liveness_result.confidence,
+                is_live=effective_is_live,
+                confidence=effective_confidence,
                 method=method,
                 checks=checks,
                 scores=scores,
@@ -410,6 +497,71 @@ class LiveCameraAnalysisUseCase:
                 scores={},
                 metadata={"error": str(e)},
             )
+
+    def _analyze_rppg(
+        self,
+        face_image: np.ndarray,
+    ) -> Optional[dict[str, float | str | None | int]]:
+        """Analyze pulse-like color variation across recent live frames."""
+        if self._rppg_analyzer is None:
+            return None
+
+        try:
+            self._rppg_analyzer.add_frame(face_image)
+            return self._rppg_analyzer.analyze()
+        except Exception as exc:
+            logger.debug("rPPG analysis skipped: %s", exc)
+            return {
+                "score": 0.5,
+                "reason": "analysis_failed",
+                "bpm": None,
+                "signal_strength": 0.0,
+                "frame_count": 0,
+            }
+
+    async def _analyze_temporal_consistency(
+        self,
+        face_image: np.ndarray,
+    ) -> Optional[dict[str, float | int | str]]:
+        """Analyze natural landmark motion across recent live frames."""
+        if self._temporal_consistency_analyzer is None or self._landmark_detector is None:
+            return None
+
+        try:
+            rgb_face = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
+            landmark_result = self._landmark_detector.detect(rgb_face, include_3d=False)
+            normalized_landmarks = self._normalize_landmarks(
+                landmark_result.landmarks,
+                width=face_image.shape[1],
+                height=face_image.shape[0],
+            )
+            self._temporal_consistency_analyzer.add_frame(normalized_landmarks)
+            analysis = self._temporal_consistency_analyzer.analyze()
+            return {
+                **analysis,
+                "window_size": self._temporal_consistency_analyzer.window_size,
+            }
+        except Exception as exc:
+            logger.debug("Temporal consistency analysis skipped: %s", exc)
+            return {
+                "score": 0.5,
+                "reason": "landmark_detection_failed",
+                "frame_count": 0,
+                "avg_movement": 0.0,
+                "variance": 0.0,
+                "window_size": self._temporal_consistency_analyzer.window_size,
+            }
+
+    def _normalize_landmarks(
+        self,
+        landmarks,
+        width: int,
+        height: int,
+    ) -> list[tuple[float, float]]:
+        """Normalize pixel landmarks into crop-relative coordinates."""
+        safe_width = max(1, width)
+        safe_height = max(1, height)
+        return [(landmark.x / safe_width, landmark.y / safe_height) for landmark in landmarks]
 
     def _check_enrollment_ready(
         self, response: LiveAnalysisResponse, quality_threshold: float

@@ -176,11 +176,15 @@ class Settings(BaseSettings):
         ),
     )
     LIVENESS_UNIFACE_DEFAULT_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Feature flag for rolling out UniFace as the default backend for "
-            "combined liveness mode when no explicit LIVENESS_BACKEND override is set."
+            "Feature flag for using UniFace as the default backend for combined "
+            "liveness mode when no explicit LIVENESS_BACKEND override is set."
         ),
+    )
+    LIVENESS_CALIBRATION_LOG_PATH: str = Field(
+        default="logs/liveness_calibration.jsonl",
+        description="Dedicated JSONL sink for liveness calibration events.",
     )
 
     # Quality Assessment

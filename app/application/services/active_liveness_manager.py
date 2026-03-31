@@ -20,6 +20,8 @@ from app.api.schemas.active_liveness import (
     ChallengeType,
     get_challenge_instruction,
 )
+from app.application.services.active_liveness_token_service import ActiveLivenessTokenService
+from app.application.services.light_challenge_service import LightChallengeService
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +48,16 @@ class ActiveLivenessManager:
         head_turn_threshold: float = 0.15,
         mouth_open_threshold: float = 0.5,
         eyebrow_threshold: float = 0.08,
+        light_challenge_service: Optional[LightChallengeService] = None,
+        token_service: Optional[ActiveLivenessTokenService] = None,
     ) -> None:
         self._blink_threshold = blink_threshold
         self._smile_threshold = smile_threshold
         self._head_turn_threshold = head_turn_threshold
         self._mouth_open_threshold = mouth_open_threshold
         self._eyebrow_threshold = eyebrow_threshold
+        self._light_challenge_service = light_challenge_service or LightChallengeService()
+        self._token_service = token_service or ActiveLivenessTokenService()
         self._face_landmarker = None
         logger.info("ActiveLivenessManager initialized")
 
@@ -107,6 +113,9 @@ class ActiveLivenessManager:
             last_activity_at=created_at,
             current_challenge_started_at=created_at,
         )
+        first_challenge = self.get_current_challenge(session)
+        if first_challenge is not None:
+            self._prepare_challenge(session, first_challenge, created_at=created_at)
         logger.info("Created active liveness session %s with %s challenges", session.session_id, len(challenges))
         return session
 
@@ -115,6 +124,7 @@ class ActiveLivenessManager:
             challenge_types = config.required_challenges[: config.num_challenges]
         else:
             available = [
+                ChallengeType.LIGHT,
                 ChallengeType.BLINK,
                 ChallengeType.SMILE,
                 ChallengeType.TURN_LEFT,
@@ -143,14 +153,18 @@ class ActiveLivenessManager:
     def is_expired(self, session: ActiveLivenessSession, now: Optional[float] = None) -> bool:
         return (now or time.time()) >= session.expires_at
 
-    async def process_frame(self, session: ActiveLivenessSession, image: np.ndarray) -> ActiveLivenessResponse:
+    async def process_frame(
+        self,
+        session: ActiveLivenessSession,
+        image: np.ndarray,
+        frame_timestamp: Optional[float] = None,
+    ) -> ActiveLivenessResponse:
         current_challenge = self.get_current_challenge(session)
         if current_challenge is None:
             return self.build_response(session=session)
 
         if current_challenge.status == ChallengeStatus.PENDING:
-            current_challenge.status = ChallengeStatus.IN_PROGRESS
-            session.current_challenge_started_at = time.time()
+            self._prepare_challenge(session, current_challenge)
 
         elapsed = time.time() - session.current_challenge_started_at
         time_remaining = max(0.0, current_challenge.timeout_seconds - elapsed)
@@ -162,12 +176,18 @@ class ActiveLivenessManager:
                 current_challenge.status = ChallengeStatus.FAILED
                 self._advance_to_next_challenge(session)
             else:
-                session.current_challenge_started_at = time.time()
+                self._prepare_challenge(session, current_challenge)
                 time_remaining = current_challenge.timeout_seconds
                 feedback = "Time's up! Try again."
             return self.build_response(session=session, feedback=feedback)
 
-        detection = await self._detect_challenge(session, image, current_challenge.type)
+        detection = await self._detect_challenge(
+            session,
+            image,
+            current_challenge.type,
+            challenge=current_challenge,
+            frame_timestamp=frame_timestamp,
+        )
         feedback = self._get_guidance(current_challenge.type, detection)
 
         if detection.detected:
@@ -182,13 +202,31 @@ class ActiveLivenessManager:
 
     def _advance_to_next_challenge(self, session: ActiveLivenessSession) -> None:
         session.current_challenge_index += 1
-        session.current_challenge_started_at = time.time()
         session.blink_detected = False
         session.baseline_ear = None
         session.baseline_mar = None
 
-        if session.current_challenge_index >= len(session.challenges):
+        next_challenge = self.get_current_challenge(session)
+        if next_challenge is None:
             self._complete_session(session)
+            return
+        self._prepare_challenge(session, next_challenge)
+
+    def _prepare_challenge(
+        self,
+        session: ActiveLivenessSession,
+        challenge: Challenge,
+        created_at: Optional[float] = None,
+    ) -> None:
+        session.current_challenge_started_at = created_at or time.time()
+        challenge.status = ChallengeStatus.IN_PROGRESS
+        challenge.metadata = (
+            self._light_challenge_service.generate_challenge()
+            if challenge.type == ChallengeType.LIGHT
+            else {}
+        )
+        if challenge.type == ChallengeType.LIGHT:
+            session.light_baseline_captured = False
 
     def _complete_session(self, session: ActiveLivenessSession) -> None:
         completed = sum(1 for challenge in session.challenges if challenge.status == ChallengeStatus.COMPLETED)
@@ -203,6 +241,8 @@ class ActiveLivenessManager:
         session: ActiveLivenessSession,
         image: np.ndarray,
         challenge_type: ChallengeType,
+        challenge: Optional[Challenge] = None,
+        frame_timestamp: Optional[float] = None,
     ) -> ChallengeResult:
         import mediapipe as mp
 
@@ -221,11 +261,15 @@ class ActiveLivenessManager:
         face_landmarks = results.face_landmarks[0]
         h, w = image.shape[:2]
         points = [(int(lm.x * w), int(lm.y * h)) for lm in face_landmarks]
+        if challenge_type != ChallengeType.LIGHT:
+            session.last_face_mean_bgr = image.mean(axis=(0, 1)).astype(float).tolist()
         blendshapes = {}
         if results.face_blendshapes:
             for bs in results.face_blendshapes[0]:
                 blendshapes[bs.category_name] = bs.score
 
+        if challenge_type == ChallengeType.LIGHT:
+            return self._detect_light_challenge(session, image, challenge, frame_timestamp)
         if challenge_type == ChallengeType.BLINK:
             return self._detect_blink(session, points, face_landmarks, blendshapes)
         if challenge_type == ChallengeType.SMILE:
@@ -243,6 +287,61 @@ class ActiveLivenessManager:
             detected=False,
             confidence=0.0,
             details={"error": f"Unknown challenge: {challenge_type}"},
+        )
+
+    def _detect_light_challenge(
+        self,
+        session: ActiveLivenessSession,
+        image: np.ndarray,
+        challenge: Optional[Challenge],
+        frame_timestamp: Optional[float],
+    ) -> ChallengeResult:
+        metadata = challenge.metadata if challenge is not None else {}
+        if not session.light_baseline_captured:
+            session.last_face_mean_bgr = image.mean(axis=(0, 1)).astype(float).tolist()
+            session.light_baseline_captured = True
+            refreshed_metadata = self._light_challenge_service.generate_challenge()
+            refreshed_metadata["ready_for_flash"] = True
+            metadata.update(refreshed_metadata)
+            if challenge is not None:
+                challenge.metadata = metadata
+            return ChallengeResult(
+                challenge_type=ChallengeType.LIGHT,
+                detected=False,
+                confidence=0.0,
+                details={
+                    "baseline_captured": True,
+                    "expected_color": metadata.get("color"),
+                    "issued_at": metadata.get("issued_at"),
+                    "expires_at": metadata.get("expires_at"),
+                },
+            )
+
+        verification = self._light_challenge_service.verify_response(
+            frame=image,
+            expected_color=metadata.get("color", "white"),
+            flash_timestamp=metadata.get("issued_at", session.current_challenge_started_at),
+            frame_timestamp=frame_timestamp,
+            baseline_bgr=session.last_face_mean_bgr,
+        )
+
+        face_mean_bgr = verification.get("face_mean_bgr")
+        if isinstance(face_mean_bgr, list) and len(face_mean_bgr) == 3:
+            session.last_face_mean_bgr = [float(value) for value in face_mean_bgr]
+
+        if verification["passed"]:
+            return ChallengeResult(
+                challenge_type=ChallengeType.LIGHT,
+                detected=True,
+                confidence=min(1.0, float(verification.get("color_shift", 0.0)) * 8.0),
+                details=verification,
+            )
+
+        return ChallengeResult(
+            challenge_type=ChallengeType.LIGHT,
+            detected=False,
+            confidence=0.0,
+            details=verification,
         )
 
     def _calculate_ear(self, points: List[Tuple[int, int]], eye_indices: List[int]) -> float:
@@ -447,6 +546,12 @@ class ActiveLivenessManager:
             return "Good, now open your eyes!" if details.get("blink_started") else "Blink your eyes slowly"
         if challenge_type == ChallengeType.SMILE:
             return "Almost there, smile wider!" if details.get("ratio", 0) > 1.1 else "Give a natural smile"
+        if challenge_type == ChallengeType.LIGHT:
+            if details.get("reason") == "timing_mismatch":
+                return "Capture the frame right after the flash appears"
+            if details.get("baseline_captured"):
+                return "Baseline captured. Show the flash now and send the next frame immediately"
+            return "Keep looking at the camera while the screen flashes"
         if challenge_type in (ChallengeType.TURN_LEFT, ChallengeType.TURN_RIGHT):
             direction = "left" if challenge_type == ChallengeType.TURN_LEFT else "right"
             return f"Keep turning {direction}..." if abs(details.get("deviation", 0)) > 0.05 else f"Turn your head to the {direction}"
@@ -484,6 +589,11 @@ class ActiveLivenessManager:
         if session.is_complete:
             progress = 1.0
 
+        if session.is_complete and session.passed and not session.verification_token:
+            token, token_expires_at = self._token_service.create_token(session.session_id)
+            session.verification_token = token
+            session.verification_token_expires_at = token_expires_at
+
         return ActiveLivenessResponse(
             session_id=session.session_id,
             current_challenge=current_challenge,
@@ -498,4 +608,6 @@ class ActiveLivenessManager:
             overall_score=session.overall_score,
             instruction=instruction,
             feedback=feedback,
+            verification_token=session.verification_token,
+            verification_token_expires_at=session.verification_token_expires_at,
         )

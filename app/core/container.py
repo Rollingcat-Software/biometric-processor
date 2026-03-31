@@ -303,6 +303,19 @@ def get_liveness_detector() -> ILivenessDetector:
 
 
 @lru_cache()
+def get_puzzle_spot_check_liveness_detector() -> ILivenessDetector:
+    """Get the server-side spot-check detector for puzzle verification.
+
+    Puzzle spot-checks are intentionally pinned to UniFace so the server-side
+    replay gate is stable regardless of the main runtime liveness backend.
+    """
+    logger.info("Creating puzzle spot-check liveness detector (UniFace MiniFASNet)")
+    return UniFaceLivenessDetector(
+        liveness_threshold=settings.LIVENESS_THRESHOLD,
+    )
+
+
+@lru_cache()
 def get_card_type_detector() -> ICardTypeDetector:
     """Get card type detector instance (singleton).
 
@@ -971,7 +984,7 @@ def get_generate_puzzle_use_case() -> GeneratePuzzleUseCase:
 def get_verify_puzzle_use_case() -> VerifyPuzzleUseCase:
     return VerifyPuzzleUseCase(
         puzzle_repository=get_puzzle_repository(),
-        liveness_detector=get_liveness_detector(),
+        spot_check_detector=get_puzzle_spot_check_liveness_detector(),
     )
 
 def clear_cache() -> None:
@@ -997,6 +1010,7 @@ def clear_cache() -> None:
     get_event_router.cache_clear()
     get_event_publisher.cache_clear()
     get_puzzle_repository.cache_clear()
+    get_puzzle_spot_check_liveness_detector.cache_clear()
     get_speaker_embedder.cache_clear()
     get_voice_repository.cache_clear()
     get_fingerprint_embedder.cache_clear()

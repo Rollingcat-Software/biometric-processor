@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 from pathlib import Path
 from statistics import mean
 from typing import Iterable
@@ -118,10 +119,20 @@ def print_report(results: Iterable[dict]) -> None:
     print(f"uniface_success_count={len(uniface_scores)}")
 
 
+def save_report(results: Iterable[dict], output_path: str) -> None:
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(list(results), indent=2), encoding="utf-8")
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=10, help="Max number of fixture images to test")
     parser.add_argument("--images", nargs="*", help="Explicit image paths to test")
+    parser.add_argument(
+        "--output",
+        help="Optional JSON file to store per-image comparison results for audit/benchmark tracking",
+    )
     args = parser.parse_args()
 
     images = collect_images(args.images, args.limit)
@@ -133,6 +144,8 @@ async def main() -> None:
         results.append(await compare_one(image_path))
 
     print_report(results)
+    if args.output:
+        save_report(results, args.output)
 
 
 if __name__ == "__main__":

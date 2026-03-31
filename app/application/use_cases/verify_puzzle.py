@@ -45,10 +45,10 @@ class VerifyPuzzleUseCase:
     def __init__(
             self,
             puzzle_repository: IPuzzleRepository,
-            liveness_detector: Optional[ILivenessDetector] = None,
+            spot_check_detector: Optional[ILivenessDetector] = None,
     ):
         self._repository = puzzle_repository
-        self._liveness_detector = liveness_detector
+        self._spot_check_detector = spot_check_detector
         logger.info("VerifyPuzzleUseCase initialized")
 
     def _validate_timestamps(
@@ -163,7 +163,7 @@ class VerifyPuzzleUseCase:
         Returns:
             Tuple of (passed, reason_code)
         """
-        if not self._liveness_detector or not spot_frames:
+        if not self._spot_check_detector or not spot_frames:
             return True, ""
 
         failed_count = 0
@@ -178,7 +178,7 @@ class VerifyPuzzleUseCase:
                     logger.warning(f"Spot-check frame {i} could not be decoded")
                     continue
 
-                result = await self._liveness_detector.check_liveness(frame)
+                result = await self._spot_check_detector.check_liveness(frame)
 
                 if not result.is_live:
                     failed_count += 1

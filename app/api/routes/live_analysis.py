@@ -33,6 +33,7 @@ from app.core.container import (
     get_face_detector,
     get_quality_assessor,
     get_liveness_detector,
+    get_landmark_detector,
     get_embedding_extractor,
     get_embedding_repository,
     get_similarity_calculator,
@@ -40,9 +41,12 @@ from app.core.container import (
 from app.domain.interfaces.face_detector import IFaceDetector
 from app.domain.interfaces.quality_assessor import IQualityAssessor
 from app.domain.interfaces.liveness_detector import ILivenessDetector
+from app.domain.interfaces.landmark_detector import ILandmarkDetector
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
 from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
+from app.infrastructure.ml.liveness.rppg_analyzer import RPPGAnalyzer
+from app.infrastructure.ml.liveness.temporal_consistency_analyzer import TemporalConsistencyAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +62,7 @@ class LiveAnalysisSession:
         detector: IFaceDetector,
         quality_assessor: IQualityAssessor,
         liveness_detector: ILivenessDetector,
+        landmark_detector: ILandmarkDetector,
         embedding_extractor: Optional[IEmbeddingExtractor] = None,
         embedding_repository: Optional[IEmbeddingRepository] = None,
         similarity_calculator: Optional[ISimilarityCalculator] = None,
@@ -66,6 +71,7 @@ class LiveAnalysisSession:
         self.detector = detector
         self.quality_assessor = quality_assessor
         self.liveness_detector = liveness_detector
+        self.landmark_detector = landmark_detector
         self.embedding_extractor = embedding_extractor
         self.embedding_repository = embedding_repository
         self.similarity_calculator = similarity_calculator
@@ -98,6 +104,9 @@ class LiveAnalysisSession:
             detector=self.detector,
             quality_assessor=self.quality_assessor,
             liveness_detector=self.liveness_detector,
+            landmark_detector=self.landmark_detector,
+            temporal_consistency_analyzer=TemporalConsistencyAnalyzer(window_size=10),
+            rppg_analyzer=RPPGAnalyzer(fps=30.0, window_seconds=5.0),
             embedding_extractor=self.embedding_extractor,
             embedding_repository=self.embedding_repository,
             similarity_calculator=self.similarity_calculator,
@@ -193,6 +202,7 @@ async def live_analysis_websocket(
     detector: IFaceDetector = Depends(get_face_detector),
     quality_assessor: IQualityAssessor = Depends(get_quality_assessor),
     liveness_detector: ILivenessDetector = Depends(get_liveness_detector),
+    landmark_detector: ILandmarkDetector = Depends(get_landmark_detector),
     embedding_extractor: IEmbeddingExtractor = Depends(get_embedding_extractor),
     embedding_repository: IEmbeddingRepository = Depends(get_embedding_repository),
     similarity_calculator: ISimilarityCalculator = Depends(get_similarity_calculator),
@@ -254,6 +264,7 @@ async def live_analysis_websocket(
         detector=detector,
         quality_assessor=quality_assessor,
         liveness_detector=liveness_detector,
+        landmark_detector=landmark_detector,
         embedding_extractor=embedding_extractor,
         embedding_repository=embedding_repository,
         similarity_calculator=similarity_calculator,
