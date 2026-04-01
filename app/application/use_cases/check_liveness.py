@@ -167,11 +167,27 @@ class CheckLivenessUseCase:
                 "blink": liveness_result.details.get("blink"),
                 "smile": liveness_result.details.get("smile"),
                 "passive_score": liveness_result.details.get("passive_score"),
+                "passive_reliability": liveness_result.details.get("passive_reliability"),
                 "active_score": liveness_result.details.get("active_score"),
                 "antispoof": liveness_result.details.get("antispoof_score"),
             },
             "face_roi_source": liveness_result.details.get("face_roi_source"),
             "blur_score": liveness_result.details.get("blur_score"),
+            "skin_coverage": liveness_result.details.get("skin_coverage"),
+            "quality_score": liveness_result.details.get("quality_score"),
+            "evidence_sufficiency": liveness_result.details.get("evidence_sufficiency"),
+            "passive_weight": liveness_result.details.get("passive_weight"),
+            "active_weight": liveness_result.details.get("active_weight"),
+            "signal_reliability": {
+                "texture": liveness_result.details.get("texture_reliability"),
+                "lbp": liveness_result.details.get("lbp_reliability"),
+                "color": liveness_result.details.get("color_reliability"),
+            },
+            "effective_weights": {
+                "texture": liveness_result.details.get("effective_texture_weight"),
+                "lbp": liveness_result.details.get("effective_lbp_weight"),
+                "color": liveness_result.details.get("effective_color_weight"),
+            },
         })
 
         calibration_logger.info(
