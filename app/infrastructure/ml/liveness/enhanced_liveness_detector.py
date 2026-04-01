@@ -49,6 +49,9 @@ class EnhancedLivenessDetector(ILivenessDetector):
     # Thresholds
     EAR_BLINK_THRESHOLD = 0.21  # Below this = eye closed
     MIN_EYE_AREA_RATIO = 0.02   # Minimum eye area as ratio of face area
+    TEXTURE_RECOVERY_THRESHOLD = 40.0
+    PASSIVE_SUPPORT_LBP_THRESHOLD = 80.0
+    PASSIVE_SUPPORT_COLOR_THRESHOLD = 70.0
 
     # Optimization B: LBP downscale target (long edge) — shared across all instances
     _LBP_MAX_EDGE = 400
@@ -191,6 +194,12 @@ class EnhancedLivenessDetector(ILivenessDetector):
             color_score = self._calculate_color_score(image)
             logger.debug(f"Color score: {color_score:.2f}")
 
+            texture_score = self._stabilize_texture_score(
+                texture_score=texture_score,
+                lbp_score=lbp_score,
+                color_score=color_score,
+            )
+
             # Detect face using Haar cascade — reuse the single gray conversion
             faces = self._face_cascade.detectMultiScale(
                 gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
@@ -246,7 +255,7 @@ class EnhancedLivenessDetector(ILivenessDetector):
 
             # Normalize to 0-100
             liveness_score = min(100.0, max(0.0, liveness_score))
-            confidence, signal_consistency, face_quality = self._calculate_confidence(
+            confidence, signal_consistency, face_quality, decision_strength = self._calculate_confidence(
                 component_scores={
                     "texture": texture_score,
                     "lbp": lbp_score,
@@ -254,6 +263,8 @@ class EnhancedLivenessDetector(ILivenessDetector):
                     "blink": blink_score if self._enable_blink else None,
                     "smile": smile_score if self._enable_smile else None,
                 },
+                liveness_score=liveness_score,
+                threshold=self._liveness_threshold,
                 face_rect=face,
                 frame_shape=image.shape,
                 face_roi_source=face_roi_source,
@@ -285,6 +296,7 @@ class EnhancedLivenessDetector(ILivenessDetector):
                     "smile": smile_score,
                     "signal_consistency": signal_consistency,
                     "face_quality": face_quality,
+                    "decision_strength": decision_strength,
                     "face_roi_source": face_roi_source,
                 },
             )
@@ -326,21 +338,30 @@ class EnhancedLivenessDetector(ILivenessDetector):
     def _calculate_confidence(
         self,
         component_scores: dict[str, Optional[float]],
+        liveness_score: float,
+        threshold: float,
         face_rect: Tuple[int, int, int, int],
         frame_shape: tuple[int, ...],
         face_roi_source: str,
-    ) -> tuple[float, float, float]:
-        """Estimate confidence from signal consistency and face quality."""
+    ) -> tuple[float, float, float, float]:
+        """Estimate decision confidence from score strength, signal consistency and face quality."""
         normalized_scores = [
             max(0.0, min(1.0, score / 100.0))
             for score in component_scores.values()
             if score is not None
         ]
         if not normalized_scores:
-            return 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0
 
         signal_std = float(np.std(normalized_scores))
         signal_consistency = max(0.0, 1.0 - min(1.0, signal_std * 2.5))
+
+        passive_scores = [
+            max(0.0, min(1.0, score / 100.0))
+            for name, score in component_scores.items()
+            if name in {"texture", "lbp", "color"} and score is not None
+        ]
+        passive_support = float(np.mean(passive_scores)) if passive_scores else 0.0
 
         frame_area = max(1, frame_shape[0] * frame_shape[1])
         face_area_ratio = (face_rect[2] * face_rect[3]) / frame_area
@@ -349,8 +370,62 @@ class EnhancedLivenessDetector(ILivenessDetector):
         roi_quality = 1.0 if face_roi_source == "detected_face" else 0.65
         face_quality = max(0.0, min(1.0, 0.7 * size_quality + 0.3 * roi_quality))
 
-        confidence = max(0.0, min(1.0, 0.65 * signal_consistency + 0.35 * face_quality))
-        return confidence, signal_consistency, face_quality
+        score_strength = max(0.0, min(1.0, liveness_score / 100.0))
+        threshold = max(1.0, min(99.0, threshold))
+        threshold_ratio = threshold / 100.0
+        if liveness_score >= threshold:
+            margin_strength = (liveness_score - threshold) / max(1.0, 100.0 - threshold)
+            threshold_alignment = min(1.0, 0.6 + 0.4 * margin_strength)
+        else:
+            threshold_alignment = max(0.0, score_strength / max(0.01, threshold_ratio))
+
+        decision_strength = max(
+            0.0,
+            min(
+                1.0,
+                0.55 * score_strength
+                + 0.25 * passive_support
+                + 0.20 * threshold_alignment,
+            ),
+        )
+
+        confidence = max(
+            0.0,
+            min(
+                1.0,
+                0.70 * decision_strength
+                + 0.20 * signal_consistency
+                + 0.10 * face_quality,
+            ),
+        )
+        return confidence, signal_consistency, face_quality, decision_strength
+
+    def _stabilize_texture_score(
+        self,
+        *,
+        texture_score: float,
+        lbp_score: float,
+        color_score: float,
+    ) -> float:
+        """Recover texture score for slightly soft but otherwise high-quality live crops.
+
+        Laplacian variance is sensitive to mild blur and distance. When the passive
+        texture score drops but the texture-independent passive signals stay strong,
+        lift the texture contribution modestly instead of letting a single weak
+        signal dominate the live decision.
+        """
+        if texture_score >= self.TEXTURE_RECOVERY_THRESHOLD:
+            return texture_score
+
+        if (
+            lbp_score < self.PASSIVE_SUPPORT_LBP_THRESHOLD
+            or color_score < self.PASSIVE_SUPPORT_COLOR_THRESHOLD
+        ):
+            return texture_score
+
+        passive_support = 0.6 * lbp_score + 0.4 * color_score
+        recovered_texture = passive_support * 0.45
+        return max(texture_score, min(self.TEXTURE_RECOVERY_THRESHOLD + 5.0, recovered_texture))
 
     def _detect_blink(self, face_roi: np.ndarray, face_rect: Tuple) -> Tuple[float, bool]:
         """Detect eye blink using Haar cascade eye detection.
@@ -451,7 +526,8 @@ class EnhancedLivenessDetector(ILivenessDetector):
 
                 smile_score = min(100.0, 70.0 + smile_ratio * 300.0)
             else:
-                smile_score = 30.0
+                # A missing smile in a single frame is weak evidence, not a strong spoof cue.
+                smile_score = 45.0
 
             return smile_score, smile_detected
 
