@@ -3,6 +3,7 @@
 import json
 import logging
 from dataclasses import replace
+from typing import Any
 
 import cv2
 
@@ -16,6 +17,25 @@ calibration_logger = logging.getLogger("liveness_calibration")
 settings = get_settings()
 DEEPFACE_VETO_CONFIDENCE_THRESHOLD = 0.85
 FACE_CROP_BLUR_THRESHOLD = 50.0
+
+
+def _to_json_safe(value: Any) -> Any:
+    """Convert numpy/scalar-rich payloads into JSON-serializable primitives."""
+    if isinstance(value, dict):
+        return {key: _to_json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_json_safe(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    item = getattr(value, "item", None)
+    if callable(item):
+        try:
+            return _to_json_safe(item())
+        except Exception:
+            pass
+
+    return str(value)
 
 
 class CheckLivenessUseCase:
@@ -132,7 +152,7 @@ class CheckLivenessUseCase:
                 },
             )
 
-        calibration_payload = {
+        calibration_payload = _to_json_safe({
             "event": "liveness_calibration",
             "score": liveness_result.score,
             "is_live": liveness_result.is_live,
@@ -152,7 +172,7 @@ class CheckLivenessUseCase:
             },
             "face_roi_source": liveness_result.details.get("face_roi_source"),
             "blur_score": liveness_result.details.get("blur_score"),
-        }
+        })
 
         calibration_logger.info(
             "liveness_calibration",

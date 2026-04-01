@@ -42,7 +42,7 @@ export default function LivenessPage() {
         onSuccess: (result) => {
           if (result.is_live) {
             toast.success(t('liveness.result.live'), {
-              description: `Liveness score: ${formatPercent(result.confidence)}`,
+              description: `Liveness score: ${formatPercent(result.score)} • Confidence: ${formatPercent(result.confidence)}`,
             });
           } else {
             toast.warning(t('liveness.result.spoof'), {
@@ -232,17 +232,38 @@ export default function LivenessPage() {
                   </div>
 
                   {/* Liveness Score */}
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span>Liveness Score</span>
-                      <span className="font-semibold">
-                        {formatPercent(displayData.confidence)}
-                      </span>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2 rounded-lg border p-4">
+                      <div className="flex items-center justify-between text-sm">
+                        <span>Liveness Score</span>
+                        <span className="font-semibold">
+                          {formatPercent(displayData.score)}
+                        </span>
+                      </div>
+                      <Progress
+                        value={toPercent(displayData.score)}
+                        className={displayData.is_live ? 'bg-green-200' : 'bg-red-200'}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Subjectin ne kadar canlı göründüğünü gösteren ana karar skoru.
+                      </p>
                     </div>
-                    <Progress
-                      value={toPercent(displayData.confidence)}
-                      className={displayData.is_live ? 'bg-green-200' : 'bg-red-200'}
-                    />
+
+                    <div className="space-y-2 rounded-lg border p-4">
+                      <div className="flex items-center justify-between text-sm">
+                        <span>Decision Confidence</span>
+                        <span className="font-semibold">
+                          {formatPercent(displayData.confidence)}
+                        </span>
+                      </div>
+                      <Progress
+                        value={toPercent(displayData.confidence)}
+                        className="bg-blue-200"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Bu liveness kararının sinyal kalitesi ve tutarlılığına duyulan güven.
+                      </p>
+                    </div>
                   </div>
 
                   {/* Recommendation */}
