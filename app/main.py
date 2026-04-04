@@ -223,6 +223,22 @@ static_file_service = create_static_file_service(STATIC_DIR)
 
 
 # ============================================================================
+# Lightweight Health Probe (no dependency checks -- sub-5ms response)
+# ============================================================================
+
+
+@app.get("/ping", include_in_schema=False)
+async def ping():
+    """Instant health probe for load balancers and uptime monitors.
+
+    Unlike /api/v1/health (which checks DB, Redis, ML models), this returns
+    immediately with no dependency checks.  Use this for Docker HEALTHCHECK,
+    Traefik health probes, and external uptime monitoring.
+    """
+    return {"status": "ok"}
+
+
+# ============================================================================
 # Root Endpoint
 # ============================================================================
 
