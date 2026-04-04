@@ -1,5 +1,5 @@
 # Dockerfile for FIVUCSAS Biometric Processor (FastAPI)
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -56,8 +56,9 @@ RUN python -c "import cv2; print('OpenCV version:', cv2.__version__)" && \
 # Copy application code
 COPY . .
 
-# Create non-root user for security
+# Create non-root user for security and ensure uploads dir is writable
 RUN addgroup --system app && adduser --system --ingroup app app \
+    && mkdir -p /app/uploads \
     && chown -R app:app /app
 
 # Expose port
