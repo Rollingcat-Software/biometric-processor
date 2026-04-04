@@ -17,8 +17,6 @@
     "test:coverage": "vitest --coverage",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "storybook": "storybook dev -p 6006",
-    "build-storybook": "storybook build",
     "analyze": "ANALYZE=true next build",
     "prepare": "husky install"
   },
@@ -87,8 +85,6 @@
     "@testing-library/react": "^16.1.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@playwright/test": "^1.49.1",
-    "@storybook/react": "^8.4.7",
-    "@storybook/nextjs": "^8.4.7",
     "husky": "^9.1.7",
     "lint-staged": "^15.2.11",
     "@next/bundle-analyzer": "^16.2.1",
