@@ -183,7 +183,7 @@ class YOLOCardTypeDetector(ICardTypeDetector):
         confusable_partner: Optional[str] = None
         for pair in _CONFUSABLE_PAIRS:
             if yolo_class in pair:
-                confusable_partner = (pair - {yolo_class}).pop()
+                confusable_partner = next(iter(pair - frozenset({yolo_class})))
                 break
 
         if confusable_partner is None:
