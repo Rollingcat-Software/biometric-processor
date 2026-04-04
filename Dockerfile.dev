@@ -30,16 +30,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 
 # Create constraint file
-RUN echo "numpy>=1.26.0,<2.0" > /tmp/constraints.txt && \
-    echo "keras<3.0" >> /tmp/constraints.txt
+RUN echo "keras<3.0" > /tmp/constraints.txt
 
 # Install dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -c /tmp/constraints.txt "numpy>=1.26.0,<2.0" && \
+    pip install --no-cache-dir -c /tmp/constraints.txt "numpy>=2.2.5" && \
     pip install --no-cache-dir -c /tmp/constraints.txt opencv-python-headless>=4.8.0 && \
-    pip install --no-cache-dir -c /tmp/constraints.txt tensorflow-cpu==2.15.0 && \
-    pip install --no-cache-dir --no-deps deepface>=0.0.79 && \
-    pip install --no-cache-dir -c /tmp/constraints.txt lightphe && \
+    pip install --no-cache-dir -c /tmp/constraints.txt tensorflow-cpu==2.21.0 && \
+    pip install --no-cache-dir --no-deps deepface==0.0.98 && \
+    pip install --no-cache-dir -c /tmp/constraints.txt lightphe lightdsa && \
     pip install --no-cache-dir -c /tmp/constraints.txt -r requirements.txt && \
     pip uninstall -y opencv-python opencv-contrib-python 2>/dev/null || true && \
     pip install --no-cache-dir -c /tmp/constraints.txt --force-reinstall opencv-python-headless>=4.8.0

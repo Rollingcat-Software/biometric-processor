@@ -1011,35 +1011,26 @@ pip install pre-commit
 pre-commit install
 ```
 
-## Current Limitations
-
-- **In-Memory Storage**: Face embeddings are stored in memory and lost on restart
-- **No Database**: PostgreSQL integration planned for Sprint 4
-- **No Redis**: Caching/queue integration planned for Sprint 5
-- **No Docker**: Containerization planned for Sprint 5
-
 ## Biometric Modality Support Status
 
 | Modality | Enroll | Verify | Delete | Status | Notes |
 |---|---|---|---|---|---|
 | Face | POST /enroll | POST /verify | N/A | Working | Full DeepFace implementation |
-| Fingerprint | POST /fingerprint/enroll | POST /fingerprint/verify | DELETE /fingerprint/{id} | **Stub** | Always returns failure |
-| Voice | POST /voice/enroll | POST /voice/verify | DELETE /voice/{id} | **Stub** | Always returns failure |
-| Iris | N/A | N/A | N/A | **Not implemented** | No endpoints |
-
-The fingerprint and voice stubs cause identity-core-api's corresponding auth handlers to always fail at runtime.
-See [TODO.md](./TODO.md) for integration audit and [ROADMAP.md](./ROADMAP.md) for expansion plan.
+| Voice | POST /voice/enroll | POST /voice/verify | DELETE /voice/{id} | Working | Resemblyzer 256-dim embeddings |
+| Fingerprint | POST /fingerprint/enroll | POST /fingerprint/verify | DELETE /fingerprint/{id} | Working | SHA-256 hash-based embeddings |
+| Iris | N/A | N/A | N/A | Not implemented | No endpoints |
 
 ## Roadmap
 
 | Sprint | Feature | Status |
 |--------|---------|--------|
-| Sprint 1-2 | Core API & Face Operations | ✅ Complete |
-| Sprint 3 | Liveness & Batch Processing | ✅ Complete |
-| Sprint 4 | PostgreSQL + pgvector | ✅ Complete |
-| Sprint 5 | Docker, Redis, CI/CD | ✅ Complete |
-| Sprint 6 | Fix fingerprint/voice stubs | 🔜 Planned |
-| Sprint 7 | Voice biometric processing | 🔜 Planned |
+| Sprint 1-2 | Core API & Face Operations | Complete |
+| Sprint 3 | Liveness & Batch Processing | Complete |
+| Sprint 4 | PostgreSQL + pgvector | Complete |
+| Sprint 5 | Docker, Redis, CI/CD | Complete |
+| Sprint 6 | Fingerprint biometric processing | Complete |
+| Sprint 7 | Voice biometric processing (Resemblyzer) | Complete |
+| Sprint 8 | Verification pipeline (document scan, MRZ, OCR) | Complete |
 
 ## License
 

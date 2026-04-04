@@ -1,32 +1,32 @@
 # Base requirements - CPU-only ML dependencies
 # Note: opencv-python-headless and deepface are installed
 # separately in Dockerfile to avoid dependency conflicts
-# Updated: 2026-03-28 - Security vulnerability fixes (Dependabot)
+# Updated: 2026-04-04 - Security vulnerability fixes (Dependabot, 69 vulns)
 
 # ===========================================
 # Core API Framework
 # ===========================================
-fastapi>=0.115.0,<1.0.0
-uvicorn[standard]>=0.34.0,<1.0.0
-python-multipart>=0.0.18
-pydantic>=2.10.0
-pydantic-settings>=2.7.0
-python-dotenv>=1.0.0
-httpx>=0.28.0
+fastapi>=0.115.12,<1.0.0
+uvicorn[standard]>=0.34.2,<1.0.0
+python-multipart>=0.0.20
+pydantic>=2.11.3
+pydantic-settings>=2.9.1
+python-dotenv>=1.1.0
+httpx>=0.28.1
 aiofiles>=24.1.0
-structlog>=25.0.0
+structlog>=25.4.0
 
 # ===========================================
 # Image Processing
 # ===========================================
-pillow>=11.0.0
-numpy>=1.26.0
-scikit-image>=0.24.0
+pillow>=11.2.1
+numpy>=2.2.5
+scikit-image>=0.25.2
 
 # ===========================================
 # OCR - Document Text Extraction
 # ===========================================
-pytesseract>=0.3.10
+pytesseract>=0.3.13
 
 # ===========================================
 # Machine Learning - TensorFlow CPU Only
@@ -38,11 +38,11 @@ mediapipe>=0.10.30
 
 # DeepFace dependencies (deepface itself installed via --no-deps)
 # DeepFace 0.0.98+: built-in anti-spoofing, YOLOv11/v12, GhostFaceNet, CenterFace
-tqdm>=4.67.0
+tqdm>=4.67.1
 gdown>=5.2.0
-pandas>=2.2.0
-flask>=3.1.0
-flask-cors>=4.0.1
+pandas>=2.2.3
+flask>=3.1.1
+flask-cors>=5.0.1
 fire>=0.4.0
 tf-keras>=2.21.0
 mtcnn>=0.1.0
@@ -59,12 +59,12 @@ cloud-sql-python-connector[asyncpg]>=1.0.0
 # ===========================================
 # Caching - Redis
 # ===========================================
-redis>=5.2.0
+redis>=5.3.0
 
 # ===========================================
 # Monitoring
 # ===========================================
-prometheus_client>=0.21.0
+prometheus_client>=0.21.1
 
 # ===========================================
 # Anti-Spoofing - UniFace MiniFASNet (ONNX)
@@ -77,26 +77,31 @@ uniface>=3.0.0
 # ===========================================
 resemblyzer>=0.1.3
 pydub>=0.25.1
-scipy>=1.14.0
+scipy>=1.15.2
 
 # ===========================================
 # Authentication - JWT
 # ===========================================
-PyJWT>=2.10.0
+PyJWT>=2.10.1
 
 # ===========================================
 # Utilities
 # ===========================================
-psutil>=6.0.0
+psutil>=6.1.1
 gunicorn>=23.0.0
-ultralytics>=8.3.0
+ultralytics>=8.3.63
 
 # ===========================================
 # Transitive security fixes (pin minimums)
 # ===========================================
-certifi>=2024.7.4
-urllib3>=2.3.0
-requests>=2.32.0
-werkzeug>=3.1.0
-jinja2>=3.1.5
-cryptography>=44.0.0
+certifi>=2025.4.26
+urllib3>=2.4.0
+requests>=2.32.3
+werkzeug>=3.1.3
+jinja2>=3.1.6
+cryptography>=45.0.3
+setuptools>=80.9.0
+idna>=3.10
+tornado>=6.5.1
+aiohttp>=3.11.18
+starlette>=0.46.2
