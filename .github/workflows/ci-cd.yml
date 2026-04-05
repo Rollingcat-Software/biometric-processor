@@ -41,7 +41,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
           cache: 'pip'
 
 
@@ -83,13 +83,16 @@ jobs:
         with:
           context: .
           push: false
+          load: true
           tags: ${{ env.SERVICE_NAME }}:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Test container starts
         run: |
-          docker run -d --name test-container -p 8080:8080 \
+          # Use a random high port to avoid conflicts with production services
+          TEST_PORT=$((9000 + RANDOM % 1000))
+          docker run -d --name test-container-${{ github.run_id }} -p ${TEST_PORT}:8080 \
             -e DATABASE_URL="postgresql://test:test@localhost/test" \
             -e REDIS_URL="redis://localhost:6379" \
             -e SECRET_KEY="test-secret" \
@@ -97,9 +100,10 @@ jobs:
 
           # Wait for container to start
           for i in {1..30}; do
-            if curl -s http://localhost:8080/api/v1/health > /dev/null 2>&1; then
+            if curl -s http://localhost:${TEST_PORT}/api/v1/health > /dev/null 2>&1; then
               echo "Container is healthy!"
-              curl -s http://localhost:8080/api/v1/health
+              curl -s http://localhost:${TEST_PORT}/api/v1/health
+              docker rm -f test-container-${{ github.run_id }} || true
               exit 0
             fi
             echo "Waiting for container... ($i/30)"
@@ -107,7 +111,8 @@ jobs:
           done
 
           echo "Container failed to start!"
-          docker logs test-container
+          docker logs test-container-${{ github.run_id }}
+          docker rm -f test-container-${{ github.run_id }} || true
           exit 1
 
   # ===========================================
