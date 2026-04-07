@@ -42,7 +42,7 @@ services:
       EMBEDDING_CACHE_MAX_SIZE: 500
 
       # Security
-      CORS_ORIGINS: '["https://ica-fivucsas.rollingcatsoftware.com","https://fivucsas.rollingcatsoftware.com","https://auth.rollingcatsoftware.com"]'
+      CORS_ORIGINS: '["https://app.fivucsas.com","https://fivucsas.com","https://api.fivucsas.com"]'
       API_KEY_ENABLED: "true"
       REQUIRE_HTTPS: "true"
       JWT_ENABLED: "true"
@@ -71,7 +71,7 @@ services:
       - biometric_models:/tmp/.deepface
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.biometric.rule=Host(`bpa-fivucsas.rollingcatsoftware.com`)"
+      - "traefik.http.routers.biometric.rule=Host(`bio.fivucsas.com`)"
       - "traefik.http.routers.biometric.entrypoints=websecure"
       - "traefik.http.routers.biometric.tls.certresolver=letsencrypt"
       - "traefik.http.routers.biometric.middlewares=secure-headers@file,rate-limit@file"

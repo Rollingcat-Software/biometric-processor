@@ -1,9 +1,9 @@
 # Quick Test Guide for Deployed API
 
-> **Note:** The GCP Cloud Run deployment (`biometric-api-902542798396.europe-west1.run.app`) is no longer active. The biometric-processor now runs locally via WSL2 and is exposed via Cloudflare Tunnel at `https://bpa-fivucsas.rollingcatsoftware.com`. Replace all URLs below with the Cloudflare Tunnel URL when the tunnel is running, or `http://localhost:8001` for local testing.
+> **Note:** The GCP Cloud Run deployment (`biometric-api-902542798396.europe-west1.run.app`) is no longer active. The biometric-processor now runs locally via WSL2 and is exposed via Cloudflare Tunnel at `https://bio.fivucsas.com`. Replace all URLs below with the Cloudflare Tunnel URL when the tunnel is running, or `http://localhost:8001` for local testing.
 
 Since you have access to the deployed API at:
-**https://bpa-fivucsas.rollingcatsoftware.com** (or `http://localhost:8001` locally)
+**https://bio.fivucsas.com** (or `http://localhost:8001` locally)
 
 Here are quick tests you can run from your browser or terminal.
 

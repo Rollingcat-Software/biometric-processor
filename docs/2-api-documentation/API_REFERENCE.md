@@ -13,7 +13,7 @@
 | Metric | Status | Details |
 |--------|--------|---------|
 | **Project Completion** | 100% | All MVP features implemented |
-| **Production Deployment** | ⏳ PENDING | Cloudflare Tunnel (bpa-fivucsas.rollingcatsoftware.com) |
+| **Production Deployment** | ⏳ PENDING | Cloudflare Tunnel (bio.fivucsas.com) |
 | **Recent Testing** | ⚠️ PARTIAL | Local testing completed, deployment inaccessible from this environment |
 | **Critical Bugs Fixed** | ✅ 6/6 | All December 27 bugs resolved |
 | **Infrastructure** | ✅ COMPLETE | CI/CD, monitoring, database setup |
@@ -38,7 +38,7 @@ The biometric processor API is **fully functional** based on local testing compl
 
 | Resource | Details |
 |----------|---------|
-| **Service URL** | https://bpa-fivucsas.rollingcatsoftware.com (Cloudflare Tunnel) |
+| **Service URL** | https://bio.fivucsas.com (Cloudflare Tunnel) |
 | **Local URL** | http://localhost:8001 |
 | **Status** | ⏳ Pending (tunnel setup required) |
 | **Resources** | Local GPU (NVIDIA GTX 1650, 4GB VRAM) |

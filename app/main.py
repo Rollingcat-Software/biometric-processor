@@ -292,7 +292,7 @@ if STATIC_DIR.exists():
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse(
             "User-agent: *\nAllow: /\n\n"
-            "Sitemap: https://bpa-fivucsas.rollingcatsoftware.com/sitemap.xml\n"
+            "Sitemap: https://bio.fivucsas.com/sitemap.xml\n"
         )
 
     # Catch-all handler for SPA routing - MUST be last
