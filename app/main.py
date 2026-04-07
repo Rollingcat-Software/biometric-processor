@@ -286,6 +286,15 @@ if STATIC_DIR.exists():
         """Serve icon.svg using StaticFileService."""
         return await static_file_service.serve_specific_file("icon.svg")
 
+    @app.get("/robots.txt", include_in_schema=False)
+    async def serve_robots():
+        """Serve robots.txt for search engine crawlers."""
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(
+            "User-agent: *\nAllow: /\n\n"
+            "Sitemap: https://bpa-fivucsas.rollingcatsoftware.com/sitemap.xml\n"
+        )
+
     # Catch-all handler for SPA routing - MUST be last
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_frontend(full_path: str):
