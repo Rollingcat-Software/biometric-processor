@@ -1,38 +1,36 @@
-"""Simple API key authentication middleware.
+"""Simple API key authentication middleware (pure ASGI).
 
 Validates requests against a single shared API key.
 Used in production to restrict biometric API access to
 identity-core-api and other authorized services.
 """
 
+import json
 import logging
-from typing import Callable, List, Optional
+from typing import List, Optional
 
-from fastapi import Request, Response, status
-from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 logger = logging.getLogger(__name__)
 
 
-class SimpleAPIKeyMiddleware(BaseHTTPMiddleware):
-    """Simple shared-secret API key middleware.
+class SimpleAPIKeyMiddleware:
+    """Pure ASGI middleware for API key validation.
 
     Requires X-API-Key header matching the configured secret
-    for all /api/v1/* routes (except excluded paths).
-    Static files (/, /_next/*) and health endpoints are always allowed.
+    for all /api/* routes (except excluded paths).
     """
 
     def __init__(
         self,
-        app,
+        app: ASGIApp,
         api_key: str,
         header_name: str = "X-API-Key",
         exclude_paths: Optional[List[str]] = None,
     ):
-        super().__init__(app)
+        self.app = app
         self._api_key = api_key
-        self._header_name = header_name
+        self._header_name = header_name.lower().encode()
         self._exclude_paths = exclude_paths or []
 
         if not api_key:
@@ -40,44 +38,58 @@ class SimpleAPIKeyMiddleware(BaseHTTPMiddleware):
                 "SimpleAPIKeyMiddleware: API_KEY_SECRET is empty! "
                 "All API requests will be rejected."
             )
+        logger.info("SimpleAPIKeyMiddleware initialized")
 
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        path = request.url.path
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-        # Skip excluded paths (health, docs, static files)
-        if any(path.startswith(excluded) for excluded in self._exclude_paths):
-            return await call_next(request)
+        path = scope.get("path", "")
 
-        # Only enforce on /api/* routes
-        if not path.startswith("/api/"):
-            return await call_next(request)
+        # Skip non-API routes and excluded paths
+        if not path.startswith("/api/") or any(
+            path.startswith(excluded) for excluded in self._exclude_paths
+        ):
+            await self.app(scope, receive, send)
+            return
 
-        # Validate API key
-        provided_key = request.headers.get(self._header_name)
+        # Extract API key from headers
+        headers = dict(scope.get("headers", []))
+        provided_key = headers.get(self._header_name, b"").decode()
 
         if not provided_key:
-            logger.warning(f"Missing API key for {request.method} {path}")
-            return JSONResponse(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                content={
-                    "error_code": "UNAUTHORIZED",
-                    "message": "API key required. Provide X-API-Key header.",
-                },
-                headers={"WWW-Authenticate": "ApiKey"},
-            )
+            logger.warning(f"Missing API key for {scope.get('method', '?')} {path}")
+            await self._send_401(send, "API key required. Provide X-API-Key header.")
+            return
 
         if provided_key != self._api_key:
             logger.warning(
-                f"Invalid API key for {request.method} {path} "
+                f"Invalid API key for {scope.get('method', '?')} {path} "
                 f"(prefix: {provided_key[:8]}...)"
             )
-            return JSONResponse(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                content={
-                    "error_code": "UNAUTHORIZED",
-                    "message": "Invalid API key.",
-                },
-                headers={"WWW-Authenticate": "ApiKey"},
-            )
+            await self._send_401(send, "Invalid API key.")
+            return
 
-        return await call_next(request)
+        # Valid key — proceed
+        await self.app(scope, receive, send)
+
+    async def _send_401(self, send: Send, message: str) -> None:
+        body = json.dumps({
+            "error_code": "UNAUTHORIZED",
+            "message": message,
+        }).encode()
+
+        await send({
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [
+                [b"content-type", b"application/json"],
+                [b"www-authenticate", b"ApiKey"],
+                [b"content-length", str(len(body)).encode()],
+            ],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": body,
+        })

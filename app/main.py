@@ -150,27 +150,8 @@ if settings.RATE_LIMIT_ENABLED:
     )
     logger.info(f"Rate limiting enabled: {settings.RATE_LIMIT_PER_MINUTE} requests/minute")
 
-# API Key Authentication (protects all /api/v1/* routes in production)
-if settings.API_KEY_ENABLED and settings.API_KEY_REQUIRE_AUTH:
-    from app.infrastructure.auth.simple_api_key_middleware import SimpleAPIKeyMiddleware
-    app.add_middleware(
-        SimpleAPIKeyMiddleware,
-        api_key=settings.API_KEY_SECRET,
-        header_name=settings.API_KEY_HEADER,
-        exclude_paths=[
-            "/health",
-            "/api/v1/health",
-            "/metrics",
-            "/docs",
-            "/redoc",
-            "/openapi.json",
-            "/",
-            "/_next",
-            "/icon.svg",
-            "/favicon.ico",
-        ],
-    )
-    logger.info("API key authentication enabled (require_auth=True)")
+# API Key Authentication is applied via @app.middleware("http") below
+# (add_middleware ordering issues with FastAPI — using decorator instead)
 
 # Request Size Limiting (prevents DoS via large payloads)
 app.add_middleware(
@@ -187,6 +168,31 @@ app.add_middleware(
     check_path_traversal=True,
 )
 logger.info("Input sanitization middleware enabled")
+
+# ============================================================================
+# API Key Authentication (http middleware decorator — reliable execution order)
+# ============================================================================
+
+if settings.API_KEY_ENABLED and settings.API_KEY_REQUIRE_AUTH:
+    _API_KEY_SECRET = settings.API_KEY_SECRET
+    _API_KEY_HEADER = settings.API_KEY_HEADER
+    _EXCLUDED_PATHS = {"/health", "/api/v1/health", "/metrics"}
+
+    @app.middleware("http")
+    async def api_key_auth(request, call_next):
+        path = request.url.path
+        if path.startswith("/api/") and path not in _EXCLUDED_PATHS:
+            key = request.headers.get(_API_KEY_HEADER)
+            if not key or key != _API_KEY_SECRET:
+                from fastapi.responses import JSONResponse as JR
+                return JR(
+                    status_code=401,
+                    content={"error_code": "UNAUTHORIZED", "message": "Valid API key required."},
+                    headers={"WWW-Authenticate": "ApiKey"},
+                )
+        return await call_next(request)
+
+    logger.info("API key authentication enabled via @app.middleware")
 
 # ============================================================================
 # API Routes
