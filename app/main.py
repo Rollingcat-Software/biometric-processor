@@ -19,6 +19,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.middleware.api_key_auth import APIKeyAuthMiddleware
 from app.api.middleware.error_handler import setup_exception_handlers
 from app.api.middleware.rate_limit import RateLimitMiddleware
 from app.api.middleware.security import InputSanitizationMiddleware, RequestSizeLimitMiddleware
@@ -149,6 +150,28 @@ if settings.RATE_LIMIT_ENABLED:
     )
     logger.info(f"Rate limiting enabled: {settings.RATE_LIMIT_PER_MINUTE} requests/minute")
 
+# API Key Authentication (protects all /api/v1/* routes in production)
+if settings.API_KEY_ENABLED and settings.API_KEY_REQUIRE_AUTH:
+    from app.infrastructure.auth.simple_api_key_middleware import SimpleAPIKeyMiddleware
+    app.add_middleware(
+        SimpleAPIKeyMiddleware,
+        api_key=settings.API_KEY_SECRET,
+        header_name=settings.API_KEY_HEADER,
+        exclude_paths=[
+            "/health",
+            "/api/v1/health",
+            "/metrics",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
+            "/",
+            "/_next",
+            "/icon.svg",
+            "/favicon.ico",
+        ],
+    )
+    logger.info("API key authentication enabled (require_auth=True)")
+
 # Request Size Limiting (prevents DoS via large payloads)
 app.add_middleware(
     RequestSizeLimitMiddleware,
@@ -245,34 +268,28 @@ async def ping():
 
 @app.get("/", include_in_schema=False)
 async def root():
-    """Root endpoint - serves frontend if available, otherwise API info.
+    """Root endpoint - serves frontend if available and enabled, otherwise API info."""
+    if settings.DEMO_UI_ENABLED:
+        try:
+            return await static_file_service.serve_file("index.html")
+        except Exception as e:
+            logger.debug(f"Frontend not available: {e}")
 
-    Uses StaticFileService for secure file serving.
-    """
-    # Try to serve frontend via static file service
-    try:
-        return await static_file_service.serve_file("index.html")
-    except Exception as e:
-        # If frontend not available, return API service information
-        logger.debug(f"Frontend not available: {e}")
-        return JSONResponse(
-            content={
-                "service": settings.APP_NAME,
-                "version": settings.VERSION,
-                "environment": settings.ENVIRONMENT,
-                "status": "running",
-                "docs_url": "/docs" if settings.is_development() else None,
-                "frontend": "not_built" if not STATIC_DIR.exists() else "error"
-            }
-        )
+    return JSONResponse(
+        content={
+            "service": settings.APP_NAME,
+            "version": settings.VERSION,
+            "status": "running",
+        }
+    )
 
 
 # ============================================================================
 # Static Files (Next.js Frontend)
 # ============================================================================
 
-# Only serve static files if the directory exists
-if STATIC_DIR.exists():
+# Only serve static files if the directory exists AND demo UI is enabled
+if STATIC_DIR.exists() and settings.DEMO_UI_ENABLED:
     # Mount static assets (CSS, JS, images) with caching
     app.mount(
         "/_next",

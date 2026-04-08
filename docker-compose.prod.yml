@@ -44,6 +44,8 @@ services:
       # Security
       CORS_ORIGINS: '["https://app.fivucsas.com","https://fivucsas.com","https://api.fivucsas.com"]'
       API_KEY_ENABLED: "true"
+      API_KEY_REQUIRE_AUTH: "true"
+      API_KEY_SECRET: ${API_KEY_SECRET}
       REQUIRE_HTTPS: "true"
       JWT_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET}
@@ -63,6 +65,9 @@ services:
       BLUR_THRESHOLD: 15.0
       MIN_FACE_SIZE: 60
 
+      # Demo UI disabled in production (security)
+      DEMO_UI_ENABLED: "false"
+
       # TensorFlow
       TF_CPP_MIN_LOG_LEVEL: "2"
       DEEPFACE_HOME: /tmp/.deepface
@@ -70,14 +75,10 @@ services:
       - biometric_uploads:/app/uploads
       - biometric_models:/tmp/.deepface
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.biometric.rule=Host(`bio.fivucsas.com`)"
-      - "traefik.http.routers.biometric.entrypoints=websecure"
-      - "traefik.http.routers.biometric.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.biometric.middlewares=secure-headers@file,rate-limit@file"
-      - "traefik.http.services.biometric.loadbalancer.server.port=8001"
+      # SECURITY: No public Traefik route — biometric API is internal only.
+      # Only identity-core-api can reach it via Docker network (biometric-api:8001).
+      - "traefik.enable=false"
     networks:
-      - proxy
       - backend
     deploy:
       resources:
@@ -90,8 +91,6 @@ services:
           memory: 2.5G
 
 networks:
-  proxy:
-    external: true
   backend:
     external: true
 

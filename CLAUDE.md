@@ -14,7 +14,15 @@ pip install -r requirements.txt
 python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
-Runs on port 8001. API docs at `/docs`. Demo UI served at root `/`.
+Runs on port 8001. API docs at `/docs`. Demo UI served at root `/` (disabled in production).
+
+## Security (Production)
+
+- **Internal only**: No public Traefik route. bio.fivucsas.com is NOT publicly accessible.
+- **API key required**: `SimpleAPIKeyMiddleware` enforces `X-API-Key` header on all `/api/*` routes.
+- **Demo UI disabled**: `DEMO_UI_ENABLED=false` in production `.env.prod`.
+- **Network access**: Only reachable via Docker `proxy`/`backend` networks by identity-core-api.
+- **Caller**: identity-core-api passes API key via `BiometricProcessorClient` using `BIOMETRIC_SERVICE_API_KEY` env var.
 
 ## Run Tests
 
@@ -61,7 +69,7 @@ pytest tests/unit/ -v           # Unit tests only
 1. Only 5 of 20+ endpoint groups are consumed by other services
 
 ### Integration points:
-- Called by **identity-core-api** (Java/Spring on port 8080) via BiometricServiceAdapter
-- Called directly by **web-app** (React on port 3000) via BiometricService.ts for face operations
+- Called by **identity-core-api** (Java/Spring on port 8080) via BiometricProcessorClient (API key auth)
+- NOT publicly accessible — all external face operations must go through identity-core-api proxy endpoints
 
 See TODO.md for full integration audit (18+ items).

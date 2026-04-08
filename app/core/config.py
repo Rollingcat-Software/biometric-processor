@@ -375,6 +375,16 @@ class Settings(BaseSettings):
     API_KEY_ENABLED: bool = Field(default=False)
     API_KEY_REQUIRE_AUTH: bool = Field(default=False)
     API_KEY_HEADER: str = Field(default="X-API-Key")
+    API_KEY_SECRET: str = Field(
+        default="",
+        description="Shared API key secret for service-to-service auth (REQUIRED when API_KEY_REQUIRE_AUTH=True)"
+    )
+
+    # Demo UI (disabled in production for security)
+    DEMO_UI_ENABLED: bool = Field(
+        default=True,
+        description="Enable the demo UI at root /. Disabled in production."
+    )
 
     # JWT Configuration (must match Identity Core API)
     JWT_SECRET: str = Field(
