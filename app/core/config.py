@@ -178,8 +178,8 @@ class Settings(BaseSettings):
     LIVENESS_UNIFACE_DEFAULT_ENABLED: bool = Field(
         default=False,
         description=(
-            "Feature flag for using UniFace as the default backend for combined "
-            "liveness mode when no explicit LIVENESS_BACKEND override is set."
+            "Feature flag for rolling out UniFace as the default backend for "
+            "combined liveness mode when no explicit LIVENESS_BACKEND override is set."
         ),
     )
     LIVENESS_CALIBRATION_LOG_PATH: str = Field(
@@ -501,6 +501,120 @@ class Settings(BaseSettings):
     LIVENESS_ENABLE_OPTIMIZED: bool = Field(default=True)
     LIVENESS_FFT_DOWNSAMPLE_SIZE: int = Field(default=192, ge=64, le=512)
 
+    # Card Detection
+    CARD_DETECTION_THRESHOLD: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        description="YOLO card detection confidence threshold (lowered from 0.5 for better recall on non-passport cards)",
+    )
+
+    # Development-only live liveness preview
+    DEV_LIVENESS_PREVIEW: bool = Field(
+        default=False,
+        description="Open the developer-only live liveness webcam preview on startup.",
+    )
+    DEV_LIVENESS_PREVIEW_CAMERA_INDEX: int = Field(
+        default=0,
+        ge=0,
+        le=8,
+        description="OpenCV camera index for the live liveness preview.",
+    )
+    DEV_LIVENESS_PREVIEW_WINDOW_SECONDS: float = Field(
+        default=2.0,
+        ge=1.0,
+        le=3.0,
+        description="Time-based rolling window for live liveness temporal aggregation.",
+    )
+    DEV_LIVENESS_PREVIEW_BASELINE_SECONDS: float = Field(
+        default=0.75,
+        ge=0.5,
+        le=1.0,
+        description="Neutral baseline calibration duration for background active reaction detection.",
+    )
+    DEV_LIVENESS_PREVIEW_BUFFER_SIZE: int = Field(
+        default=45,
+        ge=5,
+        le=300,
+        description="Maximum retained frame entries inside the rolling time window.",
+    )
+    DEV_LIVENESS_PREVIEW_EMA_ALPHA: float = Field(
+        default=0.25,
+        gt=0.0,
+        le=1.0,
+        description="EMA smoothing factor for live liveness preview metrics.",
+    )
+    DEV_LIVENESS_PREVIEW_SHOW_DEBUG: bool = Field(
+        default=True,
+        description="Show extended per-frame debug metrics in the live liveness preview overlay.",
+    )
+    DEV_LIVENESS_PREVIEW_LOG_EVERY_N_FRAMES: int = Field(
+        default=0,
+        ge=0,
+        le=600,
+        description="Optional console logging cadence for preview metrics. 0 disables logging.",
+    )
+    DEV_LIVENESS_PREVIEW_INFERENCE_MAX_SIDE: int = Field(
+        default=960,
+        ge=0,
+        le=2160,
+        description="Resize preview frames so the largest inference side does not exceed this value. 0 disables resizing.",
+    )
+    DEV_LIVENESS_PREVIEW_DETECT_EVERY_N_FRAMES: int = Field(
+        default=2,
+        ge=1,
+        le=30,
+        description="Run full face detection every N preview frames and reuse the last face box in between.",
+    )
+    DEV_LIVENESS_PREVIEW_LANDMARK_EVERY_N_FRAMES: int = Field(
+        default=2,
+        ge=1,
+        le=30,
+        description="Run landmark extraction every N preview frames and reuse the last landmark metrics in between.",
+    )
+    DEV_LIVENESS_PREVIEW_LIVENESS_EVERY_N_FRAMES: int = Field(
+        default=2,
+        ge=1,
+        le=30,
+        description="Run full liveness inference every N preview frames and reuse the last liveness result in between.",
+    )
+    DEV_LIVENESS_PREVIEW_HOLD_LAST_SUCCESS_FRAMES: int = Field(
+        default=8,
+        ge=0,
+        le=60,
+        description="Hold the last successful face/liveness result for a few preview frames when detection fails temporarily.",
+    )
+    DEV_LIVENESS_PREVIEW_NO_FACE_CONSECUTIVE_THRESHOLD: int = Field(
+        default=4,
+        ge=1,
+        le=30,
+        description="Number of consecutive no-face frames required before the preview enters NO_FACE state.",
+    )
+    DEV_LIVENESS_PREVIEW_FACE_RETURN_GRACE_SECONDS: float = Field(
+        default=1.0,
+        ge=0.2,
+        le=5.0,
+        description="Warm-recovery grace period that retains recent valid temporal context after a brief face loss.",
+    )
+    DEV_LIVENESS_PREVIEW_FACE_LOSS_RESET_SECONDS: float = Field(
+        default=3.0,
+        ge=0.5,
+        le=10.0,
+        description="If face is lost longer than this, preview baseline and active temporal state may fully reset.",
+    )
+    DEV_LIVENESS_PREVIEW_ACTIVE_DECAY_SECONDS: float = Field(
+        default=1.25,
+        ge=0.2,
+        le=5.0,
+        description="Decay time constant for persisted background active evidence after an event occurs.",
+    )
+    DEV_LIVENESS_PREVIEW_MIN_TRUSTED_FACE_SIZE_RATIO: float = Field(
+        default=0.08,
+        ge=0.01,
+        le=0.5,
+        description="Minimum face area ratio before active landmark evidence is trusted strongly.",
+    )
+
     # Batch Processing
     BATCH_MAX_CONCURRENT: int = Field(default=5, ge=1, le=20)
     BATCH_ADAPTIVE_CONCURRENCY: bool = Field(default=False)
@@ -510,7 +624,13 @@ class Settings(BaseSettings):
     def validate_jwt_secret(cls, v, info):
         """Ensure JWT_SECRET is set when JWT is enabled."""
         jwt_enabled = info.data.get("JWT_ENABLED", True)
+        environment = info.data.get("ENVIRONMENT", "development")
         if jwt_enabled and not v:
+            if environment == "production":
+                raise ValueError(
+                    "SECURITY ERROR: JWT_SECRET must be set when JWT_ENABLED=True in production. "
+                    "Set JWT_SECRET environment variable with a secure 256-bit key."
+                )
             import warnings
             warnings.warn(
                 "JWT_SECRET is empty while JWT_ENABLED=True. "
@@ -548,6 +668,10 @@ class Settings(BaseSettings):
     def is_development(self) -> bool:
         """Check if running in development."""
         return self.ENVIRONMENT == "development"
+
+    def should_run_dev_liveness_preview(self) -> bool:
+        """Return whether the dev-only live liveness preview may run."""
+        return self.is_development() and self.DEV_LIVENESS_PREVIEW
 
     def get_cors_config(self) -> dict:
         """Get CORS configuration.

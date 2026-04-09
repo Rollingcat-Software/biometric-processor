@@ -6,10 +6,12 @@ from typing import Optional
 import cv2
 
 from app.domain.entities.verification_result import VerificationResult
+from app.domain.exceptions.face_errors import PoorImageQualityError
 from app.domain.exceptions.verification_errors import EmbeddingNotFoundError
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
 from app.domain.interfaces.face_detector import IFaceDetector
+from app.domain.interfaces.quality_assessor import IQualityAssessor
 from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
 
 logger = logging.getLogger(__name__)
@@ -30,12 +32,15 @@ class VerifyFaceUseCase:
     Dependencies are injected for testability (Dependency Inversion Principle).
     """
 
+    VERIFICATION_QUALITY_THRESHOLD = 50.0
+
     def __init__(
         self,
         detector: IFaceDetector,
         extractor: IEmbeddingExtractor,
         similarity_calculator: ISimilarityCalculator,
         repository: IEmbeddingRepository,
+        quality_assessor: IQualityAssessor | None = None,
     ) -> None:
         """Initialize verification use case.
 
@@ -44,11 +49,13 @@ class VerifyFaceUseCase:
             extractor: Embedding extractor implementation
             similarity_calculator: Similarity calculator implementation
             repository: Embedding repository implementation
+            quality_assessor: Optional quality assessor for pre-verification gating
         """
         self._detector = detector
         self._extractor = extractor
         self._similarity_calculator = similarity_calculator
         self._repository = repository
+        self._quality_assessor = quality_assessor
 
         logger.info("VerifyFaceUseCase initialized")
 
@@ -90,12 +97,33 @@ class VerifyFaceUseCase:
         logger.debug("Step 2/5: Extracting face region...")
         face_region = detection.get_face_region(image)
 
+        if self._quality_assessor is not None:
+            logger.debug("Step 3/6: Assessing image quality...")
+            quality = await self._quality_assessor.assess(face_region)
+            if quality.score < self.VERIFICATION_QUALITY_THRESHOLD:
+                issues = quality.get_issues(
+                    blur_threshold=self._quality_assessor._blur_threshold,
+                    min_face_size=self._quality_assessor._min_face_size,
+                )
+                logger.warning(
+                    "Verification quality gate failed: score=%.1f, threshold=%.1f, issues=%s",
+                    quality.score,
+                    self.VERIFICATION_QUALITY_THRESHOLD,
+                    issues,
+                )
+                raise PoorImageQualityError(
+                    quality_score=quality.score,
+                    min_threshold=self.VERIFICATION_QUALITY_THRESHOLD,
+                    issues=issues,
+                )
+            logger.info("Verification quality check passed: score=%.1f", quality.score)
+
         # Step 4: Extract embedding from new image
-        logger.debug("Step 3/5: Extracting embedding...")
+        logger.debug("Step 4/6: Extracting embedding...")
         new_embedding = await self._extractor.extract(face_region)
 
         # Step 5: Retrieve stored embedding
-        logger.debug("Step 4/5: Retrieving stored embedding...")
+        logger.debug("Step 5/6: Retrieving stored embedding...")
         stored_embedding = await self._repository.find_by_user_id(user_id, tenant_id)
 
         if stored_embedding is None:
@@ -103,7 +131,7 @@ class VerifyFaceUseCase:
             raise EmbeddingNotFoundError(user_id)
 
         # Step 6: Calculate similarity
-        logger.debug("Step 5/5: Calculating similarity...")
+        logger.debug("Step 6/6: Calculating similarity...")
         distance = self._similarity_calculator.calculate(new_embedding, stored_embedding)
 
         # Step 7: Verify against threshold

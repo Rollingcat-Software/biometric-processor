@@ -67,6 +67,8 @@ from app.infrastructure.storage.local_file_storage import LocalFileStorage
 from app.infrastructure.async_execution.thread_pool_manager import ThreadPoolManager
 from app.infrastructure.ml.voice.speaker_embedder import SpeakerEmbedder
 from app.infrastructure.persistence.repositories.pgvector_voice_repository import PgVectorVoiceRepository
+# Fingerprint infrastructure is retained for potential future use but
+# endpoints return 501 (WebAuthn is the production path).
 from app.infrastructure.ml.fingerprint.hash_embedder import FingerprintHashEmbedder
 from app.infrastructure.persistence.repositories.pgvector_fingerprint_repository import PgVectorFingerprintRepository
 
@@ -330,7 +332,7 @@ def get_card_type_detector() -> ICardTypeDetector:
         - Ogrenci Karti (Student ID)
     """
     logger.info("Creating card type detector (YOLO-based)")
-    return YOLOCardTypeDetector(confidence_threshold=0.5)
+    return YOLOCardTypeDetector(confidence_threshold=settings.CARD_DETECTION_THRESHOLD)
 
 
 @lru_cache()
@@ -520,6 +522,7 @@ def get_verify_face_use_case() -> VerifyFaceUseCase:
         extractor=get_embedding_extractor(),
         similarity_calculator=get_similarity_calculator(),
         repository=get_embedding_repository(),
+        quality_assessor=get_quality_assessor(),
     )
 
 
@@ -532,6 +535,7 @@ def get_check_liveness_use_case() -> CheckLivenessUseCase:
     return CheckLivenessUseCase(
         detector=get_face_detector(),
         liveness_detector=get_liveness_detector(),
+        landmark_detector=get_landmark_detector(),
     )
 
 

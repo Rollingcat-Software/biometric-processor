@@ -25,6 +25,7 @@ from app.api.middleware.security import InputSanitizationMiddleware, RequestSize
 from app.api.middleware.security_headers import SecurityHeadersMiddleware
 from app.api.routes import batch, enrollment, health, liveness, search, verification, card_type_router
 from app.api.routes import quality, multi_face, demographics, landmarks, comparison, similarity_matrix, embeddings_io, webhooks
+from app.api.routes import verification_pipeline
 from app.api.routes import proctor
 from app.api.routes import proctor_ws
 from app.api.routes import admin
@@ -32,7 +33,13 @@ from app.api.routes import live_analysis
 from app.api.routes import fingerprint, voice
 from app.api.routes import puzzle
 from app.core.config import settings
-from app.core.container import initialize_dependencies, shutdown_dependencies
+from app.core.container import (
+    get_face_detector,
+    get_landmark_detector,
+    get_liveness_detector,
+    initialize_dependencies,
+    shutdown_dependencies,
+)
 from app.core.gpu import configure_gpu
 from app.infrastructure.rate_limit.storage_factory import RateLimitStorageFactory
 from app.infrastructure.web.static_file_service import create_static_file_service
@@ -57,7 +64,29 @@ else:
         level=getattr(logging, settings.LOG_LEVEL),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
-    logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
+
+
+def _start_dev_liveness_preview_if_enabled():
+    """Create and start the dev-only live liveness preview when allowed."""
+    if not settings.should_run_dev_liveness_preview():
+        return None
+
+    try:
+        from app.tools.live_liveness_preview import create_dev_liveness_preview
+
+        preview = create_dev_liveness_preview(
+            settings=settings,
+            face_detector=get_face_detector(),
+            liveness_detector=get_liveness_detector(),
+            landmark_detector=get_landmark_detector(),
+        )
+        preview.start()
+        logger.info("Dev liveness preview started")
+        return preview
+    except Exception:
+        logger.exception("Failed to start dev liveness preview")
+        return None
 
 
 @asynccontextmanager
@@ -82,10 +111,16 @@ async def lifespan(app: FastAPI):
     initialize_dependencies()
     logger.info("Dependencies initialized")
 
+    preview = _start_dev_liveness_preview_if_enabled()
+
     yield
 
     # Shutdown
     logger.info("Shutting down application...")
+
+    if preview is not None:
+        logger.info("Stopping dev liveness preview...")
+        preview.stop()
 
     # CRITICAL: Shutdown all dependencies gracefully (thread pool, database, event bus, etc.)
     logger.info("Shutting down dependencies...")
@@ -179,6 +214,7 @@ app.include_router(puzzle.router, prefix=API_PREFIX)
 app.include_router(search.router, prefix=API_PREFIX)
 app.include_router(batch.router, prefix=API_PREFIX)
 app.include_router(card_type_router.router, prefix=API_PREFIX)
+app.include_router(verification_pipeline.router, prefix=API_PREFIX)
 
 # New feature routes
 app.include_router(quality.router, prefix=API_PREFIX)
@@ -202,7 +238,7 @@ app.include_router(live_analysis.router, prefix=API_PREFIX)
 # Admin routes
 app.include_router(admin.router, prefix=API_PREFIX)
 
-# Biometric stub routes (fingerprint, voice)
+# Fingerprint routes (501 Not Implemented -- use WebAuthn) and Voice routes (Resemblyzer)
 app.include_router(fingerprint.router, prefix=API_PREFIX)
 app.include_router(voice.router, prefix=API_PREFIX)
 
@@ -216,6 +252,12 @@ STATIC_DIR = BASE_DIR / "demo-ui" / "out"
 
 # Create static file service (uses Strategy, DIP, SRP patterns)
 static_file_service = create_static_file_service(STATIC_DIR)
+
+
+@app.get("/ping", include_in_schema=False)
+async def ping():
+    """Instant health probe for load balancers and uptime monitors."""
+    return {"status": "ok"}
 
 
 # ============================================================================
@@ -265,6 +307,16 @@ if STATIC_DIR.exists():
     async def serve_icon():
         """Serve icon.svg using StaticFileService."""
         return await static_file_service.serve_specific_file("icon.svg")
+
+    @app.get("/robots.txt", include_in_schema=False)
+    async def serve_robots():
+        """Serve robots.txt for search engine crawlers."""
+        from fastapi.responses import PlainTextResponse
+
+        return PlainTextResponse(
+            "User-agent: *\nAllow: /\n\n"
+            "Sitemap: https://bpa-fivucsas.rollingcatsoftware.com/sitemap.xml\n"
+        )
 
     # Catch-all handler for SPA routing - MUST be last
     @app.get("/{full_path:path}", include_in_schema=False)
