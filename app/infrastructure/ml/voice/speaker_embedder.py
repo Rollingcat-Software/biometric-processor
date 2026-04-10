@@ -194,8 +194,11 @@ class SpeakerEmbedder:
         """Run the Resemblyzer encoder on preprocessed samples."""
         from resemblyzer import preprocess_wav
 
-        # Try with VAD first, fall back to raw audio if VAD strips too much
-        processed = preprocess_wav(wav_samples, source_sr=TARGET_SAMPLE_RATE)
+        # Do NOT pass source_sr — audio from _decode_to_wav_samples is already 16kHz.
+        # preprocess_wav(wav, source_sr=X) calls librosa.resample even when X==16kHz,
+        # which triggers a numba dispatcher bug ('function' has no get_call_template).
+        # Without source_sr, resemblyzer skips the resample and only applies VAD + normalization.
+        processed = preprocess_wav(wav_samples)
 
         if len(processed) < int(TARGET_SAMPLE_RATE * MIN_AUDIO_DURATION_SECS):
             logger.warning("VAD stripped too much audio, using raw samples as fallback")
