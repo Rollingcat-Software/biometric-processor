@@ -180,6 +180,9 @@ if settings.API_KEY_ENABLED and settings.API_KEY_REQUIRE_AUTH:
 
     @app.middleware("http")
     async def api_key_auth(request, call_next):
+        # Always pass OPTIONS through so CORS preflight can be handled by CORSMiddleware
+        if request.method == "OPTIONS":
+            return await call_next(request)
         path = request.url.path
         if path.startswith("/api/") and path not in _EXCLUDED_PATHS:
             key = request.headers.get(_API_KEY_HEADER)
