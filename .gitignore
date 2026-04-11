@@ -221,6 +221,8 @@ demo-ui/node_modules/
 
 # Biometric database
 face_db.pkl
+yolov8n.pt
+render-cli.zip
 
 # Demo local data
 face_landmarker.task
