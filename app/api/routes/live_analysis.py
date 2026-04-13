@@ -36,7 +36,9 @@ from app.core.container import (
     get_embedding_extractor,
     get_embedding_repository,
     get_similarity_calculator,
+    get_demographics_analyzer,
 )
+from app.domain.interfaces.demographics_analyzer import IDemographicsAnalyzer
 from app.domain.interfaces.face_detector import IFaceDetector
 from app.domain.interfaces.quality_assessor import IQualityAssessor
 from app.domain.interfaces.liveness_detector import ILivenessDetector
@@ -61,6 +63,7 @@ class LiveAnalysisSession:
         embedding_extractor: Optional[IEmbeddingExtractor] = None,
         embedding_repository: Optional[IEmbeddingRepository] = None,
         similarity_calculator: Optional[ISimilarityCalculator] = None,
+        demographics_analyzer: Optional[IDemographicsAnalyzer] = None,
     ):
         self.websocket = websocket
         self.detector = detector
@@ -69,6 +72,7 @@ class LiveAnalysisSession:
         self.embedding_extractor = embedding_extractor
         self.embedding_repository = embedding_repository
         self.similarity_calculator = similarity_calculator
+        self.demographics_analyzer = demographics_analyzer
 
         # Session state
         self.mode: AnalysisMode = AnalysisMode.QUALITY_ONLY
@@ -93,6 +97,12 @@ class LiveAnalysisSession:
         self.user_id = config.user_id
         self.tenant_id = config.tenant_id
 
+        # Enable demographics only when explicitly requested (CPU-heavy)
+        enable_demographics = config.mode in (
+            AnalysisMode.DEMOGRAPHICS,
+            AnalysisMode.FULL_ANALYSIS,
+        )
+
         # Create use case with all dependencies
         self.use_case = LiveCameraAnalysisUseCase(
             detector=self.detector,
@@ -101,6 +111,8 @@ class LiveAnalysisSession:
             embedding_extractor=self.embedding_extractor,
             embedding_repository=self.embedding_repository,
             similarity_calculator=self.similarity_calculator,
+            demographics_analyzer=self.demographics_analyzer,
+            enable_demographics=enable_demographics,
         )
 
         logger.info(
@@ -196,6 +208,7 @@ async def live_analysis_websocket(
     embedding_extractor: IEmbeddingExtractor = Depends(get_embedding_extractor),
     embedding_repository: IEmbeddingRepository = Depends(get_embedding_repository),
     similarity_calculator: ISimilarityCalculator = Depends(get_similarity_calculator),
+    demographics_analyzer: IDemographicsAnalyzer = Depends(get_demographics_analyzer),
 ):
     """WebSocket endpoint for live camera analysis.
 
@@ -257,6 +270,7 @@ async def live_analysis_websocket(
         embedding_extractor=embedding_extractor,
         embedding_repository=embedding_repository,
         similarity_calculator=similarity_calculator,
+        demographics_analyzer=demographics_analyzer,
     )
 
     try:

@@ -1,5 +1,6 @@
 """Live camera analysis use case for real-time frame processing."""
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -19,6 +20,7 @@ from app.api.schemas.live_analysis import (
 )
 from app.domain.exceptions.face_errors import FaceNotDetectedError, MultipleFacesError
 from app.domain.exceptions.verification_errors import EmbeddingNotFoundError
+from app.domain.interfaces.demographics_analyzer import IDemographicsAnalyzer
 from app.domain.interfaces.face_detector import IFaceDetector
 from app.domain.interfaces.liveness_detector import ILivenessDetector
 from app.domain.interfaces.quality_assessor import IQualityAssessor
@@ -51,6 +53,8 @@ class LiveCameraAnalysisUseCase:
         embedding_extractor: Optional[IEmbeddingExtractor] = None,
         embedding_repository: Optional[IEmbeddingRepository] = None,
         similarity_calculator: Optional[ISimilarityCalculator] = None,
+        demographics_analyzer: Optional[IDemographicsAnalyzer] = None,
+        enable_demographics: bool = False,
     ):
         self._detector = detector
         self._quality_assessor = quality_assessor
@@ -58,8 +62,14 @@ class LiveCameraAnalysisUseCase:
         self._extractor = embedding_extractor
         self._repository = embedding_repository
         self._similarity = similarity_calculator
+        self._demographics_analyzer = demographics_analyzer
+        self._enable_demographics = enable_demographics
 
-        logger.info("LiveCameraAnalysisUseCase initialized")
+        logger.info(
+            "LiveCameraAnalysisUseCase initialized "
+            "(demographics=%s)",
+            "enabled" if enable_demographics and demographics_analyzer else "disabled",
+        )
 
     async def analyze_frame(
         self,
@@ -303,18 +313,56 @@ class LiveCameraAnalysisUseCase:
     async def _analyze_demographics(self, face_image: np.ndarray) -> DemographicsResult:
         """Analyze demographics from face image.
 
-        Note: This is a placeholder. Integrate with DeepFace or similar.
+        Calls the real DemographicsAnalyzer when enabled and available.
+        The analyzer is CPU-heavy (DeepFace), so it runs in a thread pool
+        via asyncio.to_thread to avoid blocking the async event loop.
+
+        When demographics are disabled (enable_demographics=False) or no
+        analyzer is injected, returns an empty DemographicsResult immediately.
         """
-        # TODO: Integrate with actual demographics analyzer
-        # For now, return placeholder data
-        return DemographicsResult(
-            age=None,
-            age_range=None,
-            gender=None,
-            gender_confidence=None,
-            emotion=None,
-            emotion_scores=None,
-        )
+        if not self._enable_demographics or self._demographics_analyzer is None:
+            return DemographicsResult(
+                age=None,
+                age_range=None,
+                gender=None,
+                gender_confidence=None,
+                emotion=None,
+                emotion_scores=None,
+            )
+
+        try:
+            # Run synchronous (CPU-bound) DeepFace call off the event loop
+            result = await asyncio.to_thread(
+                self._demographics_analyzer.analyze, face_image
+            )
+
+            age_range = (
+                f"{result.age.range[0]}-{result.age.range[1]}"
+                if result.age and result.age.range
+                else None
+            )
+            emotion = result.emotion.dominant if result.emotion else None
+            emotion_scores = result.emotion.all_probabilities if result.emotion else None
+
+            return DemographicsResult(
+                age=result.age.value if result.age else None,
+                age_range=age_range,
+                gender=result.gender.value if result.gender else None,
+                gender_confidence=result.gender.confidence if result.gender else None,
+                emotion=emotion,
+                emotion_scores=emotion_scores,
+            )
+
+        except Exception as exc:
+            logger.warning("Demographics analysis failed: %s", exc)
+            return DemographicsResult(
+                age=None,
+                age_range=None,
+                gender=None,
+                gender_confidence=None,
+                emotion=None,
+                emotion_scores=None,
+            )
 
     async def _analyze_liveness(self, face_image: np.ndarray) -> LivenessResult:
         """Analyze liveness from image.
