@@ -55,16 +55,23 @@ _CONFUSABLE_PAIRS: set[frozenset[str]] = {
     frozenset({"tc_kimlik", "ehliyet"}),
 }
 
-# Default model path relative to this file
-DEFAULT_MODEL_PATH = Path(__file__).parent.parent.parent.parent / "core" / "card_type_model" / "best.pt"
+# Default model path relative to this file.
+# best.onnx (FP32 ONNX) is used instead of best.pt because Ultralytics+ONNX Runtime
+# is ~2.7x faster on CPU (avg 1,775ms vs 4,781ms) with identical class names and accuracy.
+DEFAULT_MODEL_PATH = Path(__file__).parent.parent.parent.parent / "core" / "card_type_model" / "best.onnx"
 
 
 @lru_cache(maxsize=1)
 def _get_yolo_model(model_path: str):
-    """Load YOLO model with caching."""
+    """Load YOLO model with caching.
+
+    Passes task='detect' explicitly so Ultralytics doesn't need to infer it from
+    the file extension — required when loading .onnx exports.
+    """
     from ultralytics import YOLO
     logger.info(f"Loading YOLO model from: {model_path}")
-    return YOLO(model_path)
+    # task='detect' is required for .onnx; harmless for .pt
+    return YOLO(model_path, task="detect")
 
 
 class YOLOCardTypeDetector(ICardTypeDetector):
