@@ -1,7 +1,7 @@
 """Tests for the developer live liveness preview utility."""
 
 from dataclasses import replace
-from unittest.mock import Mock
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -17,6 +17,23 @@ from app.tools.live_liveness_preview import (
     FrameMetrics,
     TemporalLivenessAggregator,
 )
+
+
+def _device_spoof(
+    *,
+    moire_risk: float = 0.0,
+    reflection_risk: float = 0.0,
+    flicker_risk: float = 0.0,
+    screen_frame_risk: float = 0.0,
+    device_replay_risk: float = 0.0,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        moire_risk=moire_risk,
+        reflection_risk=reflection_risk,
+        flicker_risk=flicker_risk,
+        screen_frame_risk=screen_frame_risk,
+        device_replay_risk=device_replay_risk,
+    )
 
 
 def _frame_metrics(*, raw_score: float, confidence: float, is_live: bool = True, timestamp: float = 1.0) -> FrameMetrics:
@@ -170,11 +187,11 @@ def test_temporal_liveness_aggregator_ignores_device_spoof_values_for_scores():
     result_without_spoof = aggregator_without_spoof.add(_frame_metrics(raw_score=84.0, confidence=0.82, timestamp=1.0))
     spoofed_frame = replace(
         _frame_metrics(raw_score=84.0, confidence=0.82, timestamp=1.0),
-        device_spoof=Mock(
-        moire_risk=0.95,
-        reflection_risk=0.90,
-        flicker_risk=0.85,
-        device_replay_risk=0.92,
+        device_spoof=_device_spoof(
+            moire_risk=0.95,
+            reflection_risk=0.90,
+            flicker_risk=0.85,
+            device_replay_risk=0.92,
         ),
     )
     result_with_spoof = aggregator_with_spoof.add(spoofed_frame)
@@ -200,10 +217,11 @@ def test_temporal_liveness_aggregator_replay_veto_changes_only_decision_state():
         veto_result = veto.add(
             replace(
                 base_frame,
-                device_spoof=Mock(
+                device_spoof=_device_spoof(
                     moire_risk=0.62,
                     reflection_risk=0.79,
                     flicker_risk=0.66,
+                    screen_frame_risk=0.78,
                     device_replay_risk=0.86,
                 ),
             )
@@ -233,7 +251,7 @@ def test_temporal_liveness_aggregator_does_not_veto_live_for_uncorroborated_repl
         candidate_result = candidate.add(
             replace(
                 base_frame,
-                device_spoof=Mock(
+                device_spoof=_device_spoof(
                     moire_risk=0.18,
                     reflection_risk=0.34,
                     flicker_risk=0.22,
@@ -256,12 +274,19 @@ def test_temporal_liveness_aggregator_replay_veto_overrides_insufficient_evidenc
     result = aggregator.add(
         replace(
             _frame_metrics(raw_score=77.3, confidence=0.81, timestamp=1.0),
-            device_spoof=Mock(
+            device_spoof=_device_spoof(
                 moire_risk=1.00,
                 reflection_risk=0.79,
                 flicker_risk=0.96,
+                screen_frame_risk=0.80,
                 device_replay_risk=0.93,
             ),
+            details={
+                "moire_fft_risk": 0.72,
+                "screen_frame_risk": 0.80,
+                "screen_frame_face_center_inside": 0.66,
+                "flicker_risk": 0.96,
+            },
         )
     )
 
@@ -276,12 +301,19 @@ def test_temporal_liveness_aggregator_replay_veto_accepts_high_flicker_low_refle
     result = aggregator.add(
         replace(
             _frame_metrics(raw_score=84.8, confidence=0.84, timestamp=1.0),
-            device_spoof=Mock(
+            device_spoof=_device_spoof(
                 moire_risk=1.00,
                 reflection_risk=0.35,
                 flicker_risk=0.93,
+                screen_frame_risk=0.44,
                 device_replay_risk=0.79,
             ),
+            details={
+                "moire_fft_risk": 0.75,
+                "screen_frame_risk": 0.44,
+                "screen_frame_face_center_inside": 0.51,
+                "flicker_risk": 0.93,
+            },
         )
     )
 
@@ -296,12 +328,16 @@ def test_temporal_liveness_aggregator_replay_veto_accepts_glossy_static_screen_p
     result = aggregator.add(
         replace(
             _frame_metrics(raw_score=90.5, confidence=0.82, timestamp=1.0),
-            device_spoof=Mock(
+            device_spoof=_device_spoof(
                 moire_risk=1.00,
                 reflection_risk=0.97,
                 flicker_risk=0.29,
                 device_replay_risk=0.81,
             ),
+            details={
+                "moire_fft_risk": 0.76,
+                "reflection_compact_highlight_score": 0.54,
+            },
         )
     )
 
@@ -310,12 +346,16 @@ def test_temporal_liveness_aggregator_replay_veto_accepts_glossy_static_screen_p
     result = aggregator.add(
         replace(
             _frame_metrics(raw_score=90.5, confidence=0.82, timestamp=2.0),
-            device_spoof=Mock(
+            device_spoof=_device_spoof(
                 moire_risk=1.00,
                 reflection_risk=0.97,
                 flicker_risk=0.29,
                 device_replay_risk=0.89,
             ),
+            details={
+                "moire_fft_risk": 0.76,
+                "reflection_compact_highlight_score": 0.54,
+            },
         )
     )
 
@@ -333,11 +373,18 @@ def test_temporal_liveness_aggregator_replay_veto_overrides_low_quality_when_scr
                 face_size_ratio=0.06,
                 blur_score=193.98,
                 brightness=147.7,
-                details={"smile": 45.0},
-                device_spoof=Mock(
+                details={
+                    "smile": 45.0,
+                    "moire_fft_risk": 0.70,
+                    "screen_frame_risk": 0.79,
+                    "screen_frame_face_center_inside": 0.71,
+                    "flicker_risk": 0.78,
+                },
+                device_spoof=_device_spoof(
                     moire_risk=1.00,
                     reflection_risk=0.74,
                     flicker_risk=0.78,
+                    screen_frame_risk=0.79,
                     device_replay_risk=0.87,
                 ),
             )
@@ -346,6 +393,49 @@ def test_temporal_liveness_aggregator_replay_veto_overrides_low_quality_when_scr
     assert result is not None
     assert result.smoothed_score > 80.0
     assert result.decision_state == "LIKELY_SPOOF"
+
+
+def test_temporal_liveness_aggregator_keeps_live_for_reflection_only_head_motion():
+    aggregator = TemporalLivenessAggregator(window_seconds=2.0, baseline_seconds=0.5, max_entries=20, ema_alpha=0.3)
+
+    result = None
+    for index in range(7):
+        result = aggregator.add(
+            replace(
+                _frame_metrics(raw_score=89.5, confidence=0.61, timestamp=1.0 + index * 0.12),
+                active_score=60.4,
+                active_evidence=0.36,
+                face_size_ratio=0.10,
+                blur_score=372.04,
+                brightness=115.2,
+                yaw_current=4.4,
+                pitch_current=-1.4,
+                roll_current=-0.6,
+                details={
+                    "smile": 45.0,
+                    "reflection_risk": 0.88,
+                    "screen_frame_risk": 0.41,
+                    "reflection_clipped_ratio": 0.17,
+                    "reflection_compact_highlight_score": 0.84,
+                    "reflection_glossy_patch_ratio": 0.08,
+                    "flicker_risk": 0.80,
+                    "moire_fft_risk": 0.05,
+                    "moire_orientation_selectivity": 0.34,
+                    "screen_frame_face_center_inside": 0.41,
+                },
+                device_spoof=_device_spoof(
+                    moire_risk=0.52,
+                    reflection_risk=0.88,
+                    flicker_risk=0.80,
+                    screen_frame_risk=0.41,
+                    device_replay_risk=0.62,
+                ),
+            )
+        )
+
+    assert result is not None
+    assert result.smoothed_score > 80.0
+    assert result.decision_state == "LIKELY_LIVE"
 
 
 def test_temporal_liveness_aggregator_evicts_entries_outside_time_window():
@@ -490,6 +580,78 @@ def test_background_active_score_can_rise_above_80_with_strong_events():
     assert result.combined_active_score > 80.0
 
 
+def test_background_active_fusion_boosts_blink_over_mouth_open_when_similar():
+    evaluator = BackgroundActiveReactionEvaluator()
+    frames = [
+        ReactionSignalFrame(
+            timestamp=1.0,
+            face_detected=True,
+            active_score=0.0,
+            active_evidence=0.0,
+            ear_current=0.34,
+            mar_current=0.30,
+            yaw_current=0.0,
+            face_quality=0.9,
+            face_size_ratio=0.18,
+            ear_baseline=0.34,
+            mar_baseline=0.30,
+            yaw_baseline=0.0,
+        ),
+        ReactionSignalFrame(
+            timestamp=1.12,
+            face_detected=True,
+            active_score=0.0,
+            active_evidence=0.0,
+            ear_current=0.22,
+            mar_current=0.42,
+            yaw_current=0.0,
+            face_quality=0.9,
+            face_size_ratio=0.18,
+            ear_baseline=0.34,
+            mar_baseline=0.30,
+            yaw_baseline=0.0,
+        ),
+        ReactionSignalFrame(
+            timestamp=1.24,
+            face_detected=True,
+            active_score=0.0,
+            active_evidence=0.0,
+            ear_current=0.31,
+            mar_current=0.39,
+            yaw_current=0.0,
+            face_quality=0.9,
+            face_size_ratio=0.18,
+            ear_baseline=0.34,
+            mar_baseline=0.30,
+            yaw_baseline=0.0,
+        ),
+        ReactionSignalFrame(
+            timestamp=1.36,
+            face_detected=True,
+            active_score=0.0,
+            active_evidence=0.0,
+            ear_current=0.34,
+            mar_current=0.31,
+            yaw_current=0.0,
+            face_quality=0.9,
+            face_size_ratio=0.18,
+            ear_baseline=0.34,
+            mar_baseline=0.30,
+            yaw_baseline=0.0,
+        ),
+    ]
+
+    result = evaluator.evaluate(frames, passive_window_score=88.0)
+
+    assert result.blink_evidence is not None
+    assert result.mouth_open_evidence is not None
+    assert result.blink_evidence >= 0.45
+    assert result.mouth_open_evidence >= 0.35
+    assert result.primary_event == pytest.approx(
+        min(1.0, result.blink_evidence * BackgroundActiveReactionEvaluator.BLINK_EVENT_WEIGHT)
+    )
+
+
 def test_background_active_fusion_prioritizes_strongest_recent_events():
     evaluator = BackgroundActiveReactionEvaluator()
     frames = [
@@ -534,7 +696,8 @@ def test_background_active_fusion_prioritizes_strongest_recent_events():
         0.75 * result.persisted_primary + 0.25 * result.persisted_secondary
     )
     assert result.combined_active_evidence == pytest.approx(
-        0.45 * result.trusted_reaction_evidence + 0.55 * result.persisted_reaction_evidence
+        BackgroundActiveReactionEvaluator.CURRENT_REACTION_BLEND_WEIGHT * result.trusted_reaction_evidence
+        + BackgroundActiveReactionEvaluator.PERSISTED_REACTION_BLEND_WEIGHT * result.persisted_reaction_evidence
     )
     assert result.combined_active_score == pytest.approx(
         100.0 * (result.combined_active_evidence ** 0.5)
@@ -580,6 +743,36 @@ def test_background_active_evidence_decays_not_drops_immediately():
     assert strong_result.combined_active_evidence > 0.4
     assert no_face_result.combined_active_evidence > 0.0
     assert no_face_result.combined_active_evidence < strong_result.combined_active_evidence
+
+
+def test_background_active_trust_penalty_detects_unrealistic_blink_frequency():
+    evaluator = BackgroundActiveReactionEvaluator()
+    strong_blink_frames = [
+        ReactionSignalFrame(
+            timestamp=1.00 + index * 0.04,
+            face_detected=True,
+            active_score=0.0,
+            active_evidence=0.0,
+            ear_current=ear,
+            mar_current=0.30,
+            yaw_current=0.0,
+            pitch_current=0.0,
+            roll_current=0.0,
+            face_quality=0.9,
+            face_size_ratio=0.18,
+            ear_baseline=0.34,
+            mar_baseline=0.30,
+            yaw_baseline=0.0,
+        )
+        for index, ear in enumerate([0.34, 0.18, 0.33, 0.17, 0.34, 0.18, 0.34])
+    ]
+    first = evaluator.evaluate(strong_blink_frames[:4], passive_window_score=88.0)
+    second = evaluator.evaluate(strong_blink_frames, passive_window_score=88.0)
+
+    assert first.blink_evidence is not None and first.blink_evidence > 0.4
+    assert second.blink_anomaly_score > 0.0
+    assert second.trust_penalty > 0.0
+    assert second.effective_trust < second.base_active_trust + 0.35
 
 
 def test_temporal_liveness_aggregator_respects_max_entries_within_time_window():

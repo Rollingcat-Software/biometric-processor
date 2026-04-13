@@ -25,6 +25,7 @@ from app.domain.entities.liveness_result import LivenessResult
 from app.domain.exceptions.face_errors import FaceNotDetectedError
 from app.domain.exceptions.liveness_errors import LivenessCheckError
 from app.domain.interfaces.liveness_detector import ILivenessDetector
+from app.infrastructure.ml.liveness.screen_replay_anti_spoof import ScreenReplayAntiSpoof
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,9 @@ class EnhancedLivenessDetector(ILivenessDetector):
         self._blink_counter = 0
         self._eyes_closed_frames = 0
         self._previous_eye_count = 2
+        self._screen_replay_anti_spoof = ScreenReplayAntiSpoof()
+        self._screen_replay_veto_streak = 0
+        self._screen_replay_veto_streak_threshold = 3
 
         logger.info(
             f"EnhancedLivenessDetector initialized: "
@@ -155,6 +159,38 @@ class EnhancedLivenessDetector(ILivenessDetector):
             # Validate input
             if image is None or image.size == 0:
                 raise LivenessCheckError("Invalid input image")
+
+            screen_replay_assessment = self._screen_replay_anti_spoof.check_spoofing(image)
+            if screen_replay_assessment.hard_veto and screen_replay_assessment.spoof_score < 35.0:
+                self._screen_replay_veto_streak += 1
+            else:
+                self._screen_replay_veto_streak = 0
+
+            if self._screen_replay_veto_streak >= self._screen_replay_veto_streak_threshold:
+                logger.info(
+                    "Screen replay hard veto triggered: spoof_score=%.2f low_signal_count=%s streak=%s fft=%.2f gabor=%.2f laplacian=%.2f skin=%.2f specular=%.2f",
+                    screen_replay_assessment.spoof_score,
+                    screen_replay_assessment.low_signal_count,
+                    self._screen_replay_veto_streak,
+                    screen_replay_assessment.signal_scores.get("fft", 0.0),
+                    screen_replay_assessment.signal_scores.get("gabor", 0.0),
+                    screen_replay_assessment.signal_scores.get("laplacian", 0.0),
+                    screen_replay_assessment.signal_scores.get("skin", 0.0),
+                    screen_replay_assessment.signal_scores.get("specular", 0.0),
+                )
+                return LivenessResult(
+                    is_live=False,
+                    score=screen_replay_assessment.spoof_score,
+                    challenge="screen_replay_anti_spoof",
+                    challenge_completed=False,
+                    confidence=max(0.0, min(1.0, screen_replay_assessment.spoof_score / 100.0)),
+                    details={
+                        **screen_replay_assessment.details,
+                        "screen_replay_confident": screen_replay_assessment.confident,
+                        "screen_replay_hard_veto": True,
+                        "screen_replay_veto_streak": float(self._screen_replay_veto_streak),
+                    },
+                )
 
             skin_mask, skin_coverage = self._create_skin_mask(image)
 
@@ -259,6 +295,7 @@ class EnhancedLivenessDetector(ILivenessDetector):
 
             # Normalize to 0-100
             liveness_score = min(100.0, max(0.0, liveness_score))
+            spoof_score = screen_replay_assessment.spoof_score
             confidence, signal_consistency, directional_agreement, face_quality, decision_strength, evidence_sufficiency = self._calculate_confidence(
                 component_scores={
                     "texture": texture_score,
@@ -266,6 +303,7 @@ class EnhancedLivenessDetector(ILivenessDetector):
                     "color": color_score,
                     "blink": blink_score if self._enable_blink else None,
                     "smile": smile_score if self._enable_smile else None,
+                    "screen_replay": spoof_score,
                 },
                 liveness_score=liveness_score,
                 threshold=self._liveness_threshold,
@@ -276,6 +314,10 @@ class EnhancedLivenessDetector(ILivenessDetector):
                 quality_score=quality_score,
             )
 
+            confidence = min(
+                confidence,
+                max(0.0, min(1.0, (spoof_score + 35.0) / 100.0)),
+            )
             is_live = liveness_score >= self._liveness_threshold
 
             logger.info(
@@ -297,6 +339,11 @@ class EnhancedLivenessDetector(ILivenessDetector):
                     "blink": blink_score,
                     "smile": smile_score,
                     "passive_score": passive_score,
+                    "base_liveness_score": liveness_score,
+                    "screen_replay_spoof_score": spoof_score,
+                    "screen_replay_confident": screen_replay_assessment.confident,
+                    "screen_replay_hard_veto": False,
+                    "screen_replay_veto_streak": float(self._screen_replay_veto_streak),
                     "passive_reliability": passive_reliability,
                     "active_score": active_score,
                     "active_evidence": active_evidence,
@@ -316,6 +363,7 @@ class EnhancedLivenessDetector(ILivenessDetector):
                     "decision_strength": decision_strength,
                     "evidence_sufficiency": evidence_sufficiency,
                     "face_roi_source": face_roi_source,
+                    **screen_replay_assessment.details,
                 },
             )
 

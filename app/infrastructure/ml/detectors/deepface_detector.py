@@ -76,11 +76,14 @@ class DeepFaceDetector:
             if len(face_objs) > 1:
                 # Pick the largest face (most likely the intended subject)
                 # Client-side MediaPipe already confirmed a single face — extra detections are false positives
+                face_objs = self._filter_implausible_multi_face_candidates(face_objs, image.shape)
                 logger.info(f"Multiple faces detected ({len(face_objs)}), selecting largest face")
                 face_objs.sort(
                     key=lambda f: f.get('facial_area', {}).get('w', 0) * f.get('facial_area', {}).get('h', 0),
                     reverse=True
                 )
+
+            candidate_bounding_boxes = self._extract_bounding_boxes(face_objs)
 
             # Get the largest/primary detected face
             face_obj = face_objs[0]
@@ -108,6 +111,9 @@ class DeepFaceDetector:
             h = facial_area.get("h", 0)
 
             bounding_box: Optional[Tuple[int, int, int, int]] = (x, y, w, h)
+            additional_bounding_boxes = tuple(
+                candidate_bbox for candidate_bbox in candidate_bounding_boxes if candidate_bbox != bounding_box
+            )
 
             # Extract confidence
             confidence = float(face_obj.get("confidence", 0.99))
@@ -126,6 +132,7 @@ class DeepFaceDetector:
                 confidence=confidence,
                 antispoof_score=antispoof_score,
                 antispoof_label=antispoof_label,
+                additional_bounding_boxes=additional_bounding_boxes,
             )
 
         except ValueError as e:
@@ -231,3 +238,52 @@ class DeepFaceDetector:
             antispoof_score=1.0,
             antispoof_label="spoof",
         )
+
+    @staticmethod
+    def _extract_bounding_boxes(face_objs: list[dict]) -> list[Tuple[int, int, int, int]]:
+        bounding_boxes: list[Tuple[int, int, int, int]] = []
+        for face_obj in face_objs:
+            facial_area = face_obj.get("facial_area", {})
+            x = int(facial_area.get("x", 0))
+            y = int(facial_area.get("y", 0))
+            w = int(facial_area.get("w", 0))
+            h = int(facial_area.get("h", 0))
+            if w > 0 and h > 0:
+                bounding_boxes.append((x, y, w, h))
+        return bounding_boxes
+
+    @staticmethod
+    def _filter_implausible_multi_face_candidates(
+        face_objs: list[dict],
+        image_shape: tuple[int, ...],
+    ) -> list[dict]:
+        frame_height, frame_width = image_shape[:2]
+        frame_area = max(frame_width * frame_height, 1)
+        plausible: list[dict] = []
+
+        for face_obj in face_objs:
+            facial_area = face_obj.get("facial_area", {})
+            x = int(facial_area.get("x", 0))
+            y = int(facial_area.get("y", 0))
+            w = int(facial_area.get("w", 0))
+            h = int(facial_area.get("h", 0))
+            if w <= 0 or h <= 0:
+                continue
+
+            area_ratio = (w * h) / frame_area
+            touches_left = x <= max(4, int(frame_width * 0.01))
+            touches_top = y <= max(4, int(frame_height * 0.01))
+            touches_right = (x + w) >= min(frame_width - 4, int(frame_width * 0.99))
+            touches_bottom = (y + h) >= min(frame_height - 4, int(frame_height * 0.99))
+            edge_touch_count = sum((touches_left, touches_top, touches_right, touches_bottom))
+
+            if area_ratio >= 0.30 and edge_touch_count >= 2:
+                continue
+            plausible.append(face_obj)
+
+        if plausible and len(plausible) != len(face_objs):
+            logger.info(
+                "Filtered %d implausible multi-face candidate(s) before primary-face selection",
+                len(face_objs) - len(plausible),
+            )
+        return plausible or face_objs

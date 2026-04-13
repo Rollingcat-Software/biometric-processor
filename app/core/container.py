@@ -48,6 +48,7 @@ from app.infrastructure.ml.factories.detector_factory import FaceDetectorFactory
 from app.infrastructure.ml.factories.extractor_factory import EmbeddingExtractorFactory
 from app.infrastructure.ml.factories.similarity_factory import SimilarityCalculatorFactory
 from app.infrastructure.ml.liveness.enhanced_liveness_detector import EnhancedLivenessDetector
+from app.infrastructure.ml.liveness.hybrid_liveness_detector import HybridLivenessDetector
 from app.infrastructure.ml.liveness.texture_liveness_detector import TextureLivenessDetector
 from app.infrastructure.ml.liveness.uniface_liveness_detector import UniFaceLivenessDetector
 from app.infrastructure.ml.quality.quality_assessor import QualityAssessor
@@ -263,6 +264,7 @@ def get_liveness_detector() -> ILivenessDetector:
           color distribution, frequency domain, and moire pattern analysis.
         - 'uniface': UniFace MiniFASNet ONNX model for deep learning based
           anti-spoofing (print, replay, mask attack detection).
+        - 'hybrid': Enhanced heuristics gated by UniFace as a second opinion.
 
     Configuration:
         LIVENESS_MODE is the canonical configuration source.
@@ -285,6 +287,11 @@ def get_liveness_detector() -> ILivenessDetector:
     if backend == "uniface":
         logger.info("Creating liveness detector (UniFace MiniFASNet)")
         return UniFaceLivenessDetector(
+            liveness_threshold=settings.LIVENESS_THRESHOLD,
+        )
+    elif backend == "hybrid":
+        logger.info("Creating liveness detector (hybrid enhanced + UniFace)")
+        return HybridLivenessDetector(
             liveness_threshold=settings.LIVENESS_THRESHOLD,
         )
     elif backend == "texture":

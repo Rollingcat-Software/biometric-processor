@@ -117,7 +117,7 @@ class Settings(BaseSettings):
             return min(cpu_count, 8)
         return self.ML_THREAD_POOL_SIZE
 
-    def get_liveness_backend(self) -> Literal["enhanced", "texture", "uniface"]:
+    def get_liveness_backend(self) -> Literal["enhanced", "texture", "uniface", "hybrid"]:
         """Get the effective liveness backend.
 
         LIVENESS_MODE is the canonical configuration source. LIVENESS_BACKEND is
@@ -129,7 +129,7 @@ class Settings(BaseSettings):
         mode_to_backend = {
             "passive": "texture",
             "active": "enhanced",
-            "combined": "uniface" if self.LIVENESS_UNIFACE_DEFAULT_ENABLED else "enhanced",
+            "combined": "hybrid",
         }
         return mode_to_backend[self.LIVENESS_MODE]
 
@@ -167,7 +167,7 @@ class Settings(BaseSettings):
     )
 
     # Liveness Detection Backend
-    LIVENESS_BACKEND: Optional[Literal["enhanced", "texture", "uniface"]] = Field(
+    LIVENESS_BACKEND: Optional[Literal["enhanced", "texture", "uniface", "hybrid"]] = Field(
         default=None,
         description=(
             "Deprecated compatibility alias for backend selection. "
@@ -609,10 +609,28 @@ class Settings(BaseSettings):
         description="Decay time constant for persisted background active evidence after an event occurs.",
     )
     DEV_LIVENESS_PREVIEW_MIN_TRUSTED_FACE_SIZE_RATIO: float = Field(
-        default=0.08,
+        default=0.06,
         ge=0.01,
         le=0.5,
         description="Minimum face area ratio before active landmark evidence is trusted strongly.",
+    )
+    DEV_LIVENESS_PREVIEW_FACE_BOX_SIDE_PADDING_RATIO: float = Field(
+        default=0.07,
+        ge=0.0,
+        le=0.6,
+        description="Extra horizontal padding ratio added to preview face boxes on each side.",
+    )
+    DEV_LIVENESS_PREVIEW_FACE_BOX_TOP_PADDING_RATIO: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=0.6,
+        description="Extra top padding ratio added to preview face boxes.",
+    )
+    DEV_LIVENESS_PREVIEW_FACE_BOX_BOTTOM_PADDING_RATIO: float = Field(
+        default=0.12,
+        ge=0.0,
+        le=0.8,
+        description="Extra bottom padding ratio added to preview face boxes to avoid chin clipping.",
     )
 
     # Batch Processing

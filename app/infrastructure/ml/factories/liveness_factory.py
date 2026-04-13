@@ -18,6 +18,7 @@ from typing import Literal, Optional
 from app.core.config import settings
 from app.domain.interfaces.liveness_detector import ILivenessDetector
 from app.infrastructure.ml.liveness.enhanced_liveness_detector import EnhancedLivenessDetector
+from app.infrastructure.ml.liveness.hybrid_liveness_detector import HybridLivenessDetector
 from app.infrastructure.ml.liveness.stub_liveness_detector import StubLivenessDetector
 from app.infrastructure.ml.liveness.texture_liveness_detector import TextureLivenessDetector
 from app.infrastructure.ml.liveness.uniface_liveness_detector import UniFaceLivenessDetector
@@ -25,7 +26,7 @@ from app.infrastructure.ml.liveness.uniface_liveness_detector import UniFaceLive
 logger = logging.getLogger(__name__)
 
 LivenessMode = Literal["passive", "active", "combined", "stub"]
-LivenessBackend = Literal["enhanced", "texture", "uniface"]
+LivenessBackend = Literal["enhanced", "texture", "uniface", "hybrid"]
 SupportedLivenessSelection = Literal[
     "passive",
     "active",
@@ -34,6 +35,7 @@ SupportedLivenessSelection = Literal[
     "enhanced",
     "texture",
     "uniface",
+    "hybrid",
 ]
 
 
@@ -80,6 +82,11 @@ class LivenessDetectorFactory:
                 liveness_threshold=threshold,
             )
 
+        if backend == "hybrid":
+            return HybridLivenessDetector(
+                liveness_threshold=threshold,
+            )
+
         if backend == "texture":
             return TextureLivenessDetector(
                 texture_threshold=kwargs.get("texture_threshold", 100.0),
@@ -99,7 +106,7 @@ class LivenessDetectorFactory:
     @staticmethod
     def _resolve_backend(selection: str) -> LivenessBackend:
         """Resolve legacy mode/backend names to an effective backend."""
-        if selection in ("enhanced", "texture", "uniface"):
+        if selection in ("enhanced", "texture", "uniface", "hybrid"):
             return selection
 
         legacy_mode_to_backend: dict[str, LivenessBackend] = {
@@ -145,7 +152,7 @@ class LivenessDetectorFactory:
     @staticmethod
     def get_available_modes() -> list[str]:
         """Get supported legacy and current selection values."""
-        modes = ["passive", "active", "combined", "enhanced", "texture", "uniface"]
+        modes = ["passive", "active", "combined", "enhanced", "texture", "uniface", "hybrid"]
         env = os.getenv("APP_ENV", "production").lower()
         if env in ("development", "test", "testing", "ci"):
             modes.append("stub")

@@ -8,6 +8,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from app.application.services.device_boundary_detector import DeviceBoundaryDetector
 from app.infrastructure.ml.liveness.moire_pattern_analysis import analyze_moire_pattern
 
 
@@ -18,6 +19,7 @@ class DeviceSpoofRiskAssessment:
     moire_risk: float
     reflection_risk: float
     flicker_risk: float
+    screen_frame_risk: float
     device_replay_risk: float
     details: dict[str, float] = field(default_factory=dict)
 
@@ -27,6 +29,7 @@ class DeviceSpoofRiskAssessment:
             "moire_risk": self.moire_risk,
             "reflection_risk": self.reflection_risk,
             "flicker_risk": self.flicker_risk,
+            "screen_frame_risk": self.screen_frame_risk,
             "device_replay_risk": self.device_replay_risk,
         }
 
@@ -34,18 +37,21 @@ class DeviceSpoofRiskAssessment:
 class DeviceSpoofRiskEvaluator:
     """Estimate device replay risk without modifying core liveness scoring."""
 
-    DEVICE_REPLAY_MOIRE_WEIGHT = 0.45
-    DEVICE_REPLAY_REFLECTION_WEIGHT = 0.30
-    DEVICE_REPLAY_FLICKER_WEIGHT = 0.25
+    DEVICE_REPLAY_MOIRE_WEIGHT = 0.35
+    DEVICE_REPLAY_REFLECTION_WEIGHT = 0.25
+    DEVICE_REPLAY_FLICKER_WEIGHT = 0.15
+    DEVICE_REPLAY_SCREEN_FRAME_WEIGHT = 0.25
 
     def __init__(self, *, history_size: int = 12) -> None:
         self._max_history_samples = max(4, history_size)
+        self._device_boundary_detector = DeviceBoundaryDetector(history_size=5)
 
     def evaluate(
         self,
         *,
         frame_bgr: np.ndarray,
         face_region_bgr: Optional[np.ndarray] = None,
+        face_bounding_box: Optional[tuple[int, int, int, int]] = None,
     ) -> DeviceSpoofRiskAssessment:
         """Return normalized replay/device risk signals for the current frame."""
         analysis_region = face_region_bgr if face_region_bgr is not None and face_region_bgr.size else frame_bgr
@@ -54,26 +60,32 @@ class DeviceSpoofRiskEvaluator:
                 moire_risk=0.0,
                 reflection_risk=0.0,
                 flicker_risk=0.0,
+                screen_frame_risk=0.0,
                 device_replay_risk=0.0,
                 details={},
             )
 
         gray = cv2.cvtColor(analysis_region, cv2.COLOR_BGR2GRAY)
         hsv = cv2.cvtColor(analysis_region, cv2.COLOR_BGR2HSV)
-
         moire_risk, moire_details = self._compute_moire_risk(gray)
         reflection_risk, reflection_details = self._compute_reflection_risk(hsv)
+        screen_frame_risk, screen_frame_details = self._compute_screen_frame_risk(
+            frame_bgr=frame_bgr,
+            face_bounding_box=face_bounding_box,
+        )
         flicker_details = self._compute_flicker_signal_sample(gray)
         flicker_risk = 0.0
         device_replay_risk = self._combine_risks(
             moire_risk=moire_risk,
             reflection_risk=reflection_risk,
             flicker_risk=flicker_risk,
+            screen_frame_risk=screen_frame_risk,
         )
 
         details = {
             **moire_details,
             **reflection_details,
+            **screen_frame_details,
             **flicker_details,
             "device_replay_risk": device_replay_risk,
         }
@@ -81,6 +93,7 @@ class DeviceSpoofRiskEvaluator:
             moire_risk=moire_risk,
             reflection_risk=reflection_risk,
             flicker_risk=flicker_risk,
+            screen_frame_risk=screen_frame_risk,
             device_replay_risk=device_replay_risk,
             details=details,
         )
@@ -97,6 +110,7 @@ class DeviceSpoofRiskEvaluator:
             moire_risk=assessment.moire_risk,
             reflection_risk=assessment.reflection_risk,
             flicker_risk=flicker_risk,
+            screen_frame_risk=assessment.screen_frame_risk,
         )
         details = {
             **assessment.details,
@@ -107,6 +121,7 @@ class DeviceSpoofRiskEvaluator:
             moire_risk=assessment.moire_risk,
             reflection_risk=assessment.reflection_risk,
             flicker_risk=flicker_risk,
+            screen_frame_risk=assessment.screen_frame_risk,
             device_replay_risk=device_replay_risk,
             details=details,
         )
@@ -136,6 +151,16 @@ class DeviceSpoofRiskEvaluator:
             "moire_response_fraction": float(analysis["moire_response_fraction"]),
             "moire_response_std_mean": float(analysis["moire_response_std_mean"]),
             "moire_response_std_max": float(analysis["moire_response_std_max"]),
+            "moire_response_std_min": float(analysis["moire_response_std_min"]),
+            "moire_response_std_range": float(analysis["moire_response_std_range"]),
+            "moire_response_std_std": float(analysis["moire_response_std_std"]),
+            "moire_gabor_strength": float(analysis["moire_gabor_strength"]),
+            "moire_orientation_selectivity": float(analysis["moire_orientation_selectivity"]),
+            "moire_periodic_gabor_risk": float(analysis["moire_periodic_gabor_risk"]),
+            "moire_center_focus_ratio": float(analysis["moire_center_focus_ratio"]),
+            "moire_fft_mid_low_ratio": float(analysis["moire_fft_mid_low_ratio"]),
+            "moire_fft_peak_ratio": float(analysis["moire_fft_peak_ratio"]),
+            "moire_fft_risk": float(analysis["moire_fft_risk"]),
         }
 
     def _compute_reflection_risk(self, hsv: np.ndarray) -> tuple[float, dict[str, float]]:
@@ -167,6 +192,44 @@ class DeviceSpoofRiskEvaluator:
             "reflection_max_cluster_fill": max_cluster_fill,
             "reflection_max_cluster_area_ratio": max_cluster_area_ratio,
         }
+
+    def _compute_screen_frame_risk(
+        self,
+        *,
+        frame_bgr: np.ndarray,
+        face_bounding_box: Optional[tuple[int, int, int, int]],
+    ) -> tuple[float, dict[str, float]]:
+        if frame_bgr is None or frame_bgr.size == 0 or face_bounding_box is None:
+            return 0.0, {
+                "screen_frame_area_ratio": 0.0,
+                "screen_frame_rectangularity": 0.0,
+                "screen_frame_border_darkness": 0.0,
+                "screen_frame_inner_brightness": 0.0,
+                "screen_frame_border_contrast": 0.0,
+                "screen_frame_face_center_inside": 0.0,
+                "screen_frame_source": 0.0,
+            }
+        detection = self._device_boundary_detector.analyze(
+            frame_bgr=frame_bgr,
+            face_bbox=face_bounding_box,
+        )
+        details = {
+            "screen_frame_area_ratio": float(detection.details.get("boundary_candidate_area_ratio") or 0.0),
+            "screen_frame_rectangularity": float(detection.details.get("boundary_rectangularity") or 0.0),
+            "screen_frame_border_darkness": 0.0,
+            "screen_frame_inner_brightness": 0.0,
+            "screen_frame_border_contrast": 0.0,
+            "screen_frame_face_center_inside": float(detection.details.get("boundary_face_coverage_score") or 0.0),
+            "screen_frame_source": float(detection.is_spoof_confirmed),
+            "screen_frame_line_score": float(detection.details.get("boundary_line_score") or 0.0),
+            "screen_frame_parallel_score": float(detection.details.get("boundary_parallel_score") or 0.0),
+            "screen_frame_orthogonal_score": float(detection.details.get("boundary_orthogonal_score") or 0.0),
+            "screen_frame_aspect_score": float(detection.details.get("boundary_aspect_score") or 0.0),
+            "screen_frame_temporal_sync_score": float(detection.details.get("boundary_temporal_sync_score") or 0.0),
+            "screen_frame_motion_sync_ratio": float(detection.details.get("boundary_motion_sync_ratio") or 0.0),
+            "screen_frame_candidate_score": detection.boundary_score,
+        }
+        return detection.boundary_score, details
 
     def _analyze_highlight_clusters(self, bright_mask: np.ndarray) -> dict[str, float]:
         if bright_mask.size == 0:
@@ -267,11 +330,18 @@ class DeviceSpoofRiskEvaluator:
         }
 
     @staticmethod
-    def _combine_risks(*, moire_risk: float, reflection_risk: float, flicker_risk: float) -> float:
+    def _combine_risks(
+        *,
+        moire_risk: float,
+        reflection_risk: float,
+        flicker_risk: float,
+        screen_frame_risk: float,
+    ) -> float:
         return _clamp01(
             DeviceSpoofRiskEvaluator.DEVICE_REPLAY_MOIRE_WEIGHT * moire_risk
             + DeviceSpoofRiskEvaluator.DEVICE_REPLAY_REFLECTION_WEIGHT * reflection_risk
             + DeviceSpoofRiskEvaluator.DEVICE_REPLAY_FLICKER_WEIGHT * flicker_risk
+            + DeviceSpoofRiskEvaluator.DEVICE_REPLAY_SCREEN_FRAME_WEIGHT * screen_frame_risk
         )
 
 

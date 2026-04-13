@@ -142,6 +142,12 @@ class AggregatedMetrics:
     raw_reaction_evidence: float
     effective_trust: float
     trusted_reaction_evidence: float
+    base_active_trust: float
+    trust_penalty: float
+    blink_anomaly_score: float
+    motion_anomaly_score: float
+    signal_inconsistency_score: float
+    spoof_support_score: float
     persisted_primary: float
     persisted_secondary: float
     persisted_reaction_evidence: float
@@ -292,6 +298,7 @@ class TemporalLivenessAggregator:
             warm_recovery=warm_recovery,
             low_quality=low_quality,
             sufficient_evidence=sufficient_evidence,
+            baseline_sample_count=session_baseline.sample_count if session_baseline else 0,
             smoothed_score=smoothed_score,
             decision_confidence=window_confidence,
             no_face_consecutive_threshold=self._no_face_consecutive_threshold,
@@ -379,6 +386,7 @@ class LivenessPreviewFrameProcessor:
         self._landmark_detector = landmark_detector
         self._frame_index = 0
         self._cached_bounding_box: Optional[tuple[int, int, int, int]] = None
+        self._cached_additional_bounding_boxes: tuple[tuple[int, int, int, int], ...] = ()
         self._cached_face_signal_metrics: Any = None
         self._cached_liveness_result: Optional[LivenessResult] = None
         self._last_successful_metrics: Optional[FrameMetrics] = None
@@ -397,6 +405,7 @@ class LivenessPreviewFrameProcessor:
 
         detection_started = time.perf_counter()
         bounding_box: Optional[tuple[int, int, int, int]]
+        additional_bounding_boxes: tuple[tuple[int, int, int, int], ...] = ()
         should_detect = (
             self._cached_bounding_box is None
             or self._frame_index == 1
@@ -406,26 +415,45 @@ class LivenessPreviewFrameProcessor:
             if should_detect:
                 detection = asyncio.run(self._face_detector.detect(inference_frame))
                 if not detection.found or detection.bounding_box is None:
-                    self._cached_bounding_box = None
-                    self._cached_face_signal_metrics = None
-                    self._cached_liveness_result = None
-                    profiling["face_detection_ms"] = (time.perf_counter() - detection_started) * 1000.0
-                    return self._error_metrics(
-                        brightness=brightness,
-                        blur_score=None,
-                        face_detected=False,
-                        error="No face detected",
-                        profiling=profiling,
-                        inference_scale=inference_scale,
+                    if self._should_reuse_cached_box_on_miss():
+                        reused_face_detection = True
+                        bounding_box = self._cached_bounding_box
+                        additional_bounding_boxes = self._cached_additional_bounding_boxes
+                    else:
+                        self._cached_bounding_box = None
+                        self._cached_additional_bounding_boxes = ()
+                        self._cached_face_signal_metrics = None
+                        self._cached_liveness_result = None
+                        profiling["face_detection_ms"] = (time.perf_counter() - detection_started) * 1000.0
+                        return self._error_metrics(
+                            brightness=brightness,
+                            blur_score=None,
+                            face_detected=False,
+                            error="No face detected",
+                            profiling=profiling,
+                            inference_scale=inference_scale,
+                        )
+                else:
+                    bounding_box = self._expand_bounding_box(
+                        self._scale_bounding_box(detection.bounding_box, inference_scale, frame.shape),
+                        frame.shape,
                     )
-
-                bounding_box = self._scale_bounding_box(detection.bounding_box, inference_scale, frame.shape)
-                self._cached_bounding_box = bounding_box
+                    additional_bounding_boxes = tuple(
+                        self._expand_bounding_box(
+                            self._scale_bounding_box(candidate_bbox, inference_scale, frame.shape),
+                            frame.shape,
+                        )
+                        for candidate_bbox in detection.additional_bounding_boxes
+                    )
+                    self._cached_bounding_box = bounding_box
+                    self._cached_additional_bounding_boxes = additional_bounding_boxes
             else:
                 reused_face_detection = True
                 bounding_box = self._cached_bounding_box
+                additional_bounding_boxes = self._cached_additional_bounding_boxes
         except Exception as exc:
             self._cached_bounding_box = None
+            self._cached_additional_bounding_boxes = ()
             self._cached_face_signal_metrics = None
             self._cached_liveness_result = None
             profiling["face_detection_ms"] = (time.perf_counter() - detection_started) * 1000.0
@@ -454,6 +482,7 @@ class LivenessPreviewFrameProcessor:
         face_region = self._crop_face_region(frame, bounding_box)
         if face_region.size == 0:
             self._cached_bounding_box = None
+            self._cached_additional_bounding_boxes = ()
             self._cached_face_signal_metrics = None
             self._cached_liveness_result = None
             return self._error_metrics(
@@ -507,6 +536,7 @@ class LivenessPreviewFrameProcessor:
                 liveness_result = self._cached_liveness_result
         except FaceNotDetectedError:
             self._cached_bounding_box = None
+            self._cached_additional_bounding_boxes = ()
             self._cached_face_signal_metrics = None
             self._cached_liveness_result = None
             profiling["liveness_ms"] = (time.perf_counter() - liveness_started) * 1000.0
@@ -545,6 +575,8 @@ class LivenessPreviewFrameProcessor:
         metrics = self._build_metrics(
             frame=frame,
             face_region=face_region,
+            bounding_box=bounding_box,
+            additional_bounding_boxes=additional_bounding_boxes,
             result=liveness_result,
             brightness=face_region_brightness,
             blur_score=blur_score,
@@ -559,6 +591,15 @@ class LivenessPreviewFrameProcessor:
         self._last_successful_metrics = metrics
         self._last_successful_frame_index = self._frame_index
         return metrics
+
+    def _should_reuse_cached_box_on_miss(self) -> bool:
+        if self._cached_bounding_box is None or self._last_successful_metrics is None:
+            return False
+        hold_frames = self._settings.DEV_LIVENESS_PREVIEW_HOLD_LAST_SUCCESS_FRAMES
+        if hold_frames <= 0:
+            return False
+        frames_since_success = self._frame_index - self._last_successful_frame_index
+        return frames_since_success <= max(2, hold_frames * 2)
 
     def enrich_device_spoof_with_history(
         self,
@@ -582,6 +623,20 @@ class LivenessPreviewFrameProcessor:
         updated_details = dict(metrics.details)
         updated_details.update(updated_device_spoof.details)
         updated_details.update(updated_device_spoof.to_dict())
+        depth_temporal_flat_risk = _compute_depth_temporal_flat_risk([*recent_entries, metrics])
+        updated_details["preview_depth_temporal_flat_risk"] = depth_temporal_flat_risk
+        updated_details["preview_depth_flat_combined_risk"] = max(
+            _maybe_float(updated_details.get("depth_flat_risk")) or 0.0,
+            depth_temporal_flat_risk,
+        )
+        updated_details["preview_spoof_support_count"] = _spoof_support_count_from_details(updated_details)
+        updated_details["preview_spoof_support_streak"] = _spoof_support_streak(
+            [*recent_entries, replace(metrics, details=updated_details, device_spoof=updated_device_spoof)]
+        )
+        updated_details["preview_support_based_spoof_candidate"] = _is_support_based_spoof_candidate_from_details(
+            updated_details,
+            updated_device_spoof,
+        )
         return replace(
             metrics,
             details=updated_details,
@@ -629,6 +684,23 @@ class LivenessPreviewFrameProcessor:
         width = max(1, min(width, frame_width - x))
         height = max(1, min(height, frame_height - y))
         return (x, y, width, height)
+
+    def _expand_bounding_box(
+        self,
+        bounding_box: tuple[int, int, int, int],
+        frame_shape: tuple[int, ...],
+    ) -> tuple[int, int, int, int]:
+        x, y, width, height = bounding_box
+        side_padding = int(round(width * self._settings.DEV_LIVENESS_PREVIEW_FACE_BOX_SIDE_PADDING_RATIO))
+        top_padding = int(round(height * self._settings.DEV_LIVENESS_PREVIEW_FACE_BOX_TOP_PADDING_RATIO))
+        bottom_padding = int(round(height * self._settings.DEV_LIVENESS_PREVIEW_FACE_BOX_BOTTOM_PADDING_RATIO))
+        expanded = (
+            x - side_padding,
+            y - top_padding,
+            width + (2 * side_padding),
+            height + top_padding + bottom_padding,
+        )
+        return self._clamp_bounding_box(expanded, frame_shape)
 
     @staticmethod
     def _crop_face_region(frame: np.ndarray, bounding_box: tuple[int, int, int, int]) -> np.ndarray:
@@ -747,6 +819,8 @@ class LivenessPreviewFrameProcessor:
         *,
         frame: np.ndarray,
         face_region: np.ndarray,
+        bounding_box: tuple[int, int, int, int],
+        additional_bounding_boxes: tuple[tuple[int, int, int, int], ...],
         result: LivenessResult,
         brightness: float,
         blur_score: float,
@@ -759,6 +833,7 @@ class LivenessPreviewFrameProcessor:
         inference_scale: float = 1.0,
     ) -> FrameMetrics:
         details = dict(result.details)
+        details.update(face_signal_metrics.to_dict())
         face_quality = _coalesce_float(_maybe_float(details.get("face_quality")), face_signal_metrics.face_quality)
         ear_current = _coalesce_float(_maybe_float(details.get("ear_current")), face_signal_metrics.ear_current)
         mar_current = _coalesce_float(_maybe_float(details.get("mar_current")), face_signal_metrics.mar_current)
@@ -780,9 +855,18 @@ class LivenessPreviewFrameProcessor:
         details["detector_active_evidence"] = detector_active_evidence
         details["preview_frame_active_score"] = frame_active_score
         details["preview_frame_active_evidence"] = frame_active_evidence
+        details["preview_bbox_x"] = float(bounding_box[0])
+        details["preview_bbox_y"] = float(bounding_box[1])
+        details["preview_bbox_w"] = float(bounding_box[2])
+        details["preview_bbox_h"] = float(bounding_box[3])
+        details["preview_additional_bboxes"] = [
+            [float(x), float(y), float(width), float(height)]
+            for x, y, width, height in additional_bounding_boxes
+        ]
         device_spoof = self._device_spoof_risk_evaluator.evaluate(
             frame_bgr=frame,
             face_region_bgr=face_region,
+            face_bounding_box=bounding_box,
         )
         details.update(device_spoof.to_dict())
         return FrameMetrics(
@@ -1035,9 +1119,28 @@ class LiveLivenessPreview:
                     f"bg_active_raw={_format_optional(aggregate.raw_active_evidence)}",
                     f"bg_active_temp={_format_optional(aggregate.combined_active_evidence)}",
                     f"moire={_format_optional(_device_spoof_value(frame_metrics, 'moire_risk'))}",
+                    f"moire_sel={_format_optional(_maybe_float(frame_metrics.details.get('moire_orientation_selectivity')))}",
+                    f"moire_fft={_format_optional(_maybe_float(frame_metrics.details.get('moire_fft_risk')))}",
+                    f"depth_flat={_format_optional(_maybe_float(frame_metrics.details.get('preview_depth_flat_combined_risk')))}",
                     f"reflection={_format_optional(_device_spoof_value(frame_metrics, 'reflection_risk'))}",
+                    f"screen_frame={_format_optional(_device_spoof_value(frame_metrics, 'screen_frame_risk'))}",
+                    f"screen_conf={int(_is_confirmed_screen_device(frame_metrics))}",
+                    f"reflect_clip={_format_optional(_maybe_float(frame_metrics.details.get('reflection_clipped_ratio')))}",
+                    f"reflect_compact={_format_optional(_maybe_float(frame_metrics.details.get('reflection_compact_highlight_score')))}",
+                    f"reflect_glossy={_format_optional(_maybe_float(frame_metrics.details.get('reflection_glossy_patch_ratio')))}",
                     f"flicker={_format_optional(_device_spoof_value(frame_metrics, 'flicker_risk'))}",
                     f"device_replay={_format_optional(_device_spoof_value(frame_metrics, 'device_replay_risk'))}",
+                    f"sf_hi={int(_is_screen_frame_high(frame_metrics))}",
+                    f"moire_hi={int(_is_moire_high(frame_metrics))}",
+                    f"depth_hi={int(_is_depth_flat(frame_metrics))}",
+                    f"reflect_hi={int(_is_reflection_high(frame_metrics))}",
+                    f"flicker_hi={int(_is_flicker_high(frame_metrics))}",
+                    f"uniface_neg={int(_is_uniface_negative(frame_metrics))}",
+                    f"spoof_support={_spoof_support_count(frame_metrics)}",
+                    f"spoof_streak={int(_maybe_float(frame_metrics.details.get('preview_spoof_support_streak')) or 0.0)}",
+                    f"spoof_gate={int(_is_device_replay_spoof_detected(frame_metrics))}",
+                    f"bbox={_format_bbox(frame_metrics)}",
+                    f"bbox_reuse={int(frame_metrics.reused_face_detection)}",
                     f"face={int(frame_metrics.face_detected)}",
                     f"face_quality={_format_optional(frame_metrics.face_quality)}",
                     f"face_size={_format_optional(frame_metrics.face_size_ratio)}",
@@ -1064,8 +1167,14 @@ class LiveLivenessPreview:
                     f"primary={aggregate.primary_event:.2f}",
                     f"secondary={aggregate.secondary_event:.2f}",
                     f"raw_react={aggregate.raw_reaction_evidence:.2f}",
+                    f"base_trust={aggregate.base_active_trust:.2f}",
+                    f"trust_pen={aggregate.trust_penalty:.2f}",
                     f"trust={aggregate.effective_trust:.2f}",
                     f"trusted_react={aggregate.trusted_reaction_evidence:.2f}",
+                    f"blink_anom={aggregate.blink_anomaly_score:.2f}",
+                    f"motion_anom={aggregate.motion_anomaly_score:.2f}",
+                    f"signal_incons={aggregate.signal_inconsistency_score:.2f}",
+                    f"active_spoof_sup={aggregate.spoof_support_score:.2f}",
                     f"persist1={aggregate.persisted_primary:.2f}",
                     f"persist2={aggregate.persisted_secondary:.2f}",
                     f"persist_react={aggregate.persisted_reaction_evidence:.2f}",
@@ -1086,6 +1195,8 @@ class LiveLivenessPreview:
                     f"recovery={'warm' if aggregate.warm_recovery else 'normal'}",
                     f"evidence={'sufficient' if aggregate.sufficient_evidence else 'pending'}",
                     f"quality_state={'low' if aggregate.low_quality else 'ok'}",
+                    f"quality_blocked={int(_is_quality_blocked(frame_metrics, aggregate))}",
+                    f"quality_reason={_quality_block_reason(frame_metrics)}",
                     f"bg_mode={frame_metrics.background_active_mode}",
                     f"bg_detect={int(frame_metrics.background_active_detected)}",
                     f"error={frame_metrics.error or '-'}",
@@ -1134,9 +1245,28 @@ class LiveLivenessPreview:
             lines.extend(
                 [
                     ("Moire risk", _format_optional(_device_spoof_value(frame_metrics, "moire_risk"))),
+                    ("Moire select.", _format_optional(_maybe_float(frame_metrics.details.get("moire_orientation_selectivity")))),
+                    ("Moire FFT", _format_optional(_maybe_float(frame_metrics.details.get("moire_fft_risk")))),
+                    ("Moire std mean", _format_optional(_maybe_float(frame_metrics.details.get("moire_response_std_mean")))),
+                    ("Depth flat", _format_optional(_maybe_float(frame_metrics.details.get("preview_depth_flat_combined_risk")))),
+                    ("Depth range", _format_optional(_maybe_float(frame_metrics.details.get("depth_range")))),
+                    ("Nose-cheek dz", _format_optional(_maybe_float(frame_metrics.details.get("nose_cheek_depth_delta")))),
                     ("Reflection risk", _format_optional(_device_spoof_value(frame_metrics, "reflection_risk"))),
+                    ("Screen frame", _format_optional(_device_spoof_value(frame_metrics, "screen_frame_risk"))),
+                    ("Screen confirmed", str(int(_is_confirmed_screen_device(frame_metrics)))),
                     ("Flicker risk", _format_optional(_device_spoof_value(frame_metrics, "flicker_risk"))),
                     ("Device replay", _format_optional(_device_spoof_value(frame_metrics, "device_replay_risk"))),
+                    ("Screen hi", str(int(_is_screen_frame_high(frame_metrics)))),
+                    ("Moire hi", str(int(_is_moire_high(frame_metrics)))),
+                    ("Depth hi", str(int(_is_depth_flat(frame_metrics)))),
+                    ("Reflect hi", str(int(_is_reflection_high(frame_metrics)))),
+                    ("Flicker hi", str(int(_is_flicker_high(frame_metrics)))),
+                    ("UniFace neg", str(int(_is_uniface_negative(frame_metrics)))),
+                    ("Spoof support", str(_spoof_support_count(frame_metrics))),
+                    ("Spoof streak", str(int(_maybe_float(frame_metrics.details.get("preview_spoof_support_streak")) or 0.0))),
+                    ("Spoof gate", str(int(_is_device_replay_spoof_detected(frame_metrics)))),
+                    ("BBox", _format_bbox(frame_metrics)),
+                    ("BBox reuse", str(int(frame_metrics.reused_face_detection))),
                     ("--- Liveness Debug ---", ""),
                     ("Frame active ev.", _format_optional(frame_metrics.active_evidence)),
                     ("Detector active", _format_optional(_maybe_float(frame_metrics.details.get("detector_active_score")))),
@@ -1168,8 +1298,14 @@ class LiveLivenessPreview:
                     ("Turn L/R ev.", f"{_format_optional(aggregate.head_turn_left_evidence)} / {_format_optional(aggregate.head_turn_right_evidence)}"),
                     ("Primary/2nd", f"{aggregate.primary_event:0.2f} / {aggregate.secondary_event:0.2f}"),
                     ("Raw react", f"{aggregate.raw_reaction_evidence:0.2f}"),
+                    ("Base trust", f"{aggregate.base_active_trust:0.2f}"),
+                    ("Trust penalty", f"{aggregate.trust_penalty:0.2f}"),
                     ("Eff trust", f"{aggregate.effective_trust:0.2f}"),
                     ("Trusted react", f"{aggregate.trusted_reaction_evidence:0.2f}"),
+                    ("Blink anom.", f"{aggregate.blink_anomaly_score:0.2f}"),
+                    ("Motion anom.", f"{aggregate.motion_anomaly_score:0.2f}"),
+                    ("Signal incons.", f"{aggregate.signal_inconsistency_score:0.2f}"),
+                    ("Active spoof sup.", f"{aggregate.spoof_support_score:0.2f}"),
                     ("Persist 1/2", f"{aggregate.persisted_primary:0.2f} / {aggregate.persisted_secondary:0.2f}"),
                     ("Persist react", f"{aggregate.persisted_reaction_evidence:0.2f}"),
                     ("Variance", f"{aggregate.score_variance:0.2f}"),
@@ -1235,9 +1371,75 @@ class LiveLivenessPreview:
                 cv2.LINE_AA,
             )
 
+        self._draw_face_bbox(overlay, frame_metrics, status_color)
         border_color = status_color
         cv2.rectangle(overlay, (0, 0), (overlay.shape[1] - 1, overlay.shape[0] - 1), border_color, 4)
         return overlay
+
+    def _draw_face_bbox(
+        self,
+        overlay: np.ndarray,
+        frame_metrics: FrameMetrics,
+        color: tuple[int, int, int],
+    ) -> None:
+        bbox = _extract_bbox(frame_metrics)
+        if bbox is None:
+            return
+
+        for index, extra_bbox in enumerate(_extract_additional_bboxes(frame_metrics), start=2):
+            extra_x, extra_y, extra_width, extra_height = extra_bbox
+            cv2.rectangle(
+                overlay,
+                (extra_x, extra_y),
+                (extra_x + extra_width, extra_y + extra_height),
+                (255, 255, 255),
+                2,
+            )
+            cv2.rectangle(
+                overlay,
+                (extra_x, extra_y),
+                (extra_x + extra_width, extra_y + extra_height),
+                (0, 215, 255),
+                1,
+            )
+            cv2.putText(
+                overlay,
+                f"face {index}",
+                (extra_x, max(24, extra_y - 10)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (0, 215, 255),
+                1,
+                cv2.LINE_AA,
+            )
+
+        x, y, width, height = bbox
+        cv2.rectangle(overlay, (x, y), (x + width, y + height), (255, 255, 255), 3)
+        cv2.rectangle(overlay, (x, y), (x + width, y + height), color, 2)
+        label = f"face 1 {x},{y} {width}x{height}"
+        if frame_metrics.reused_face_detection:
+            label += " reuse"
+        label_y = max(24, y - 10)
+        cv2.putText(
+            overlay,
+            label,
+            (x, label_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            overlay,
+            label,
+            (x, label_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            color,
+            1,
+            cv2.LINE_AA,
+        )
 
 
 def create_dev_liveness_preview(
@@ -1287,6 +1489,41 @@ def _status_text(frame_metrics: FrameMetrics, aggregate: AggregatedMetrics) -> s
     return aggregate.decision_state
 
 
+def _extract_bbox(frame_metrics: FrameMetrics) -> Optional[tuple[int, int, int, int]]:
+    x = _maybe_float(frame_metrics.details.get("preview_bbox_x"))
+    y = _maybe_float(frame_metrics.details.get("preview_bbox_y"))
+    width = _maybe_float(frame_metrics.details.get("preview_bbox_w"))
+    height = _maybe_float(frame_metrics.details.get("preview_bbox_h"))
+    if None in (x, y, width, height):
+        return None
+    return (int(x), int(y), int(width), int(height))
+
+
+def _extract_additional_bboxes(frame_metrics: FrameMetrics) -> list[tuple[int, int, int, int]]:
+    raw_bboxes = frame_metrics.details.get("preview_additional_bboxes")
+    if not isinstance(raw_bboxes, list):
+        return []
+
+    parsed: list[tuple[int, int, int, int]] = []
+    for item in raw_bboxes:
+        if not isinstance(item, (list, tuple)) or len(item) != 4:
+            continue
+        x, y, width, height = (_maybe_float(value) for value in item)
+        if None in (x, y, width, height):
+            continue
+        parsed.append((int(x), int(y), int(width), int(height)))
+    return parsed
+
+
+def _format_bbox(frame_metrics: FrameMetrics) -> str:
+    bbox = _extract_bbox(frame_metrics)
+    if bbox is None:
+        return "-"
+    x, y, width, height = bbox
+    extra_count = len(_extract_additional_bboxes(frame_metrics))
+    return f"{x},{y},{width},{height}" + (f" (+{extra_count})" if extra_count else "")
+
+
 def _format_optional(value: Optional[float]) -> str:
     return "-" if value is None else f"{value:0.2f}"
 
@@ -1299,23 +1536,281 @@ def _device_spoof_value(frame_metrics: FrameMetrics, field_name: str) -> Optiona
 
 
 def _is_device_replay_spoof_detected(frame_metrics: FrameMetrics) -> bool:
-    device_replay_risk = _device_spoof_value(frame_metrics, "device_replay_risk")
-    reflection_risk = _device_spoof_value(frame_metrics, "reflection_risk") or 0.0
-    flicker_risk = _device_spoof_value(frame_metrics, "flicker_risk") or 0.0
-
-    if device_replay_risk is None:
+    if frame_metrics.device_spoof is None:
         return False
 
-    reflective_screen_replay = (
-        device_replay_risk >= 0.78 and reflection_risk >= 0.55 and flicker_risk >= 0.60
+    device_replay_risk = getattr(frame_metrics.device_spoof, "device_replay_risk", None) or 0.0
+    reflection_risk = getattr(frame_metrics.device_spoof, "reflection_risk", None) or 0.0
+    screen_frame_risk = getattr(frame_metrics.device_spoof, "screen_frame_risk", None) or 0.0
+    reflect_compact = float(
+        frame_metrics.details.get("reflection_compact_highlight_score") or 0.0
     )
-    flickering_screen_replay = (
-        device_replay_risk >= 0.78 and reflection_risk >= 0.30 and flicker_risk >= 0.90
+    face_center_inside = float(frame_metrics.details.get("screen_frame_face_center_inside") or 0.0)
+    support_count = _spoof_support_count(frame_metrics)
+    support_streak = int(_maybe_float(frame_metrics.details.get("preview_spoof_support_streak")) or 0.0)
+    uniface_negative = _is_uniface_negative(frame_metrics)
+    depth_flat = _is_depth_flat(frame_metrics)
+    confirmed_screen = _is_confirmed_screen_device(frame_metrics)
+
+    hard_reflection_rule = (
+        reflect_compact >= 0.50
+        and reflection_risk >= 0.60
+        and device_replay_risk >= 0.75
     )
-    glossy_static_screen_replay = (
-        device_replay_risk >= 0.80 and reflection_risk >= 0.94
+    hard_confirmed_screen_rule = confirmed_screen and face_center_inside >= 0.55
+    hard_screen_rule = (
+        screen_frame_risk >= 0.72
+        and device_replay_risk >= 0.68
+        and face_center_inside >= 0.5
     )
-    return reflective_screen_replay or flickering_screen_replay or glossy_static_screen_replay
+    live_motion_override = _has_strong_live_override(frame_metrics)
+    strong_spoof_corroboration = _has_strong_spoof_corroboration(frame_metrics)
+    support_based_rule = (
+        device_replay_risk >= 0.48
+        and support_count >= 2
+        and support_streak >= 4
+        and strong_spoof_corroboration
+        and not (live_motion_override and not hard_reflection_rule and not hard_screen_rule)
+    )
+
+    return (
+        hard_reflection_rule
+        or hard_confirmed_screen_rule
+        or hard_screen_rule
+        or support_based_rule
+    )
+
+
+def _is_screen_frame_high(frame_metrics: FrameMetrics) -> bool:
+    return (_device_spoof_value(frame_metrics, "screen_frame_risk") or 0.0) >= 0.72
+
+
+def _is_confirmed_screen_device(frame_metrics: FrameMetrics) -> bool:
+    screen_source = _maybe_float(frame_metrics.details.get("screen_frame_source")) or 0.0
+    screen_frame_risk = _device_spoof_value(frame_metrics, "screen_frame_risk") or 0.0
+    candidate_found = _maybe_float(frame_metrics.details.get("boundary_candidate_found")) or 0.0
+    partial_candidate_found = _maybe_float(frame_metrics.details.get("boundary_partial_candidate_found")) or 0.0
+    candidate_score = _maybe_float(frame_metrics.details.get("screen_frame_candidate_score")) or 0.0
+    contour_score = _maybe_float(frame_metrics.details.get("boundary_contour_score")) or 0.0
+    partial_score = _maybe_float(frame_metrics.details.get("boundary_partial_score")) or 0.0
+    aspect_score = _maybe_float(frame_metrics.details.get("screen_frame_aspect_score")) or 0.0
+    face_center_inside = _maybe_float(frame_metrics.details.get("screen_frame_face_center_inside")) or 0.0
+    contour_area_ratio = _maybe_float(frame_metrics.details.get("screen_frame_area_ratio")) or 0.0
+    partial_area_ratio = _maybe_float(frame_metrics.details.get("boundary_partial_candidate_area_ratio")) or 0.0
+    candidate_area_ratio = max(contour_area_ratio, partial_area_ratio)
+    any_candidate_found = candidate_found >= 0.5 or partial_candidate_found >= 0.5
+    strong_geometry = contour_score >= 0.58 or partial_score >= 0.68
+    centered_candidate = face_center_inside >= 0.48
+    large_enough_candidate = candidate_area_ratio >= 0.14
+    plausible_device_shape = aspect_score >= 0.22
+    detector_confirmed = (
+        screen_source >= 0.5
+        and any_candidate_found
+        and centered_candidate
+        and large_enough_candidate
+    )
+    geometric_confirmed = (
+        any_candidate_found
+        and centered_candidate
+        and large_enough_candidate
+        and plausible_device_shape
+        and screen_frame_risk >= 0.62
+        and candidate_score >= 0.58
+        and strong_geometry
+    )
+
+    return bool(detector_confirmed or geometric_confirmed)
+
+
+def _is_screen_frame_supportive(frame_metrics: FrameMetrics) -> bool:
+    screen_frame_risk = _device_spoof_value(frame_metrics, "screen_frame_risk") or 0.0
+    face_center_inside = _maybe_float(frame_metrics.details.get("screen_frame_face_center_inside")) or 0.0
+    return screen_frame_risk >= 0.25 or face_center_inside >= 0.45
+
+
+def _is_moire_high(frame_metrics: FrameMetrics) -> bool:
+    moire_risk = _device_spoof_value(frame_metrics, "moire_risk") or 0.0
+    moire_fft = _maybe_float(frame_metrics.details.get("moire_fft_risk")) or 0.0
+    moire_selectivity = _maybe_float(frame_metrics.details.get("moire_orientation_selectivity")) or 0.0
+    return moire_risk >= 0.70 and (moire_fft >= 0.55 or moire_selectivity >= 0.35)
+
+
+def _is_reflection_high(frame_metrics: FrameMetrics) -> bool:
+    reflection_risk = _device_spoof_value(frame_metrics, "reflection_risk") or 0.0
+    reflect_compact = _maybe_float(frame_metrics.details.get("reflection_compact_highlight_score")) or 0.0
+    return reflection_risk >= 0.60 or reflect_compact >= 0.50
+
+
+def _has_strong_live_override(frame_metrics: FrameMetrics) -> bool:
+    active_evidence = frame_metrics.active_evidence or 0.0
+    active_score = frame_metrics.active_score or 0.0
+    return bool(
+        frame_metrics.face_detected
+        and frame_metrics.is_live
+        and frame_metrics.raw_score >= 80.0
+        and frame_metrics.frame_confidence >= 0.58
+        and (active_evidence >= 0.35 or active_score >= 65.0)
+    )
+
+
+def _has_strong_spoof_corroboration(frame_metrics: FrameMetrics) -> bool:
+    return _has_strong_spoof_corroboration_from_details(frame_metrics.details)
+
+
+def _is_flicker_high(frame_metrics: FrameMetrics) -> bool:
+    return (_device_spoof_value(frame_metrics, "flicker_risk") or 0.0) >= 0.70
+
+
+def _is_depth_flat(frame_metrics: FrameMetrics) -> bool:
+    return (_maybe_float(frame_metrics.details.get("preview_depth_flat_combined_risk")) or 0.0) >= 0.72
+
+
+def _is_uniface_negative(frame_metrics: FrameMetrics) -> bool:
+    uniface_score = _maybe_float(frame_metrics.details.get("uniface_score"))
+    uniface_is_live = frame_metrics.details.get("uniface_is_live")
+    if uniface_score is None and uniface_is_live is None:
+        return False
+    return bool(
+        (uniface_is_live is False and (uniface_score is None or uniface_score < 65.0))
+        or (uniface_score is not None and uniface_score < 55.0)
+    )
+
+
+def _spoof_support_count(frame_metrics: FrameMetrics) -> int:
+    return _spoof_support_count_from_details(frame_metrics.details)
+
+
+def _spoof_support_count_from_details(details: dict[str, Any]) -> int:
+    support_flags = (
+        _is_detail_screen_frame_supportive(details),
+        _is_detail_moire_high(details),
+        _is_detail_reflection_high(details),
+        _is_detail_flicker_high(details),
+        _is_detail_uniface_negative(details),
+        _is_detail_depth_flat(details),
+    )
+    return int(sum(1 for flag in support_flags if flag))
+
+
+def _spoof_support_streak(entries: list[FrameMetrics]) -> int:
+    streak = 0
+    for entry in reversed(entries):
+        if not _is_support_based_spoof_candidate(entry):
+            break
+        streak += 1
+    return streak
+
+
+def _is_support_based_spoof_candidate(frame_metrics: FrameMetrics) -> bool:
+    if frame_metrics.device_spoof is None:
+        return False
+    return _is_support_based_spoof_candidate_from_details(frame_metrics.details, frame_metrics.device_spoof)
+
+
+def _is_support_based_spoof_candidate_from_details(
+    details: dict[str, Any],
+    device_spoof: DeviceSpoofRiskAssessment,
+) -> bool:
+    device_replay_risk = float(device_spoof.device_replay_risk or 0.0)
+    support_count = _spoof_support_count_from_details(details)
+    return (
+        device_replay_risk >= 0.48
+        and support_count >= 2
+        and _has_strong_spoof_corroboration_from_details(details)
+    )
+
+
+def _compute_depth_temporal_flat_risk(entries: list[FrameMetrics]) -> float:
+    yaw_values = [
+        float(entry.yaw_current)
+        for entry in entries
+        if entry.face_detected and entry.yaw_current is not None
+    ]
+    asymmetry_values = [
+        _maybe_float(entry.details.get("cheek_depth_asymmetry"))
+        for entry in entries
+        if entry.face_detected
+    ]
+    asymmetry_values = [value for value in asymmetry_values if value is not None]
+    nose_cheek_values = [
+        _maybe_float(entry.details.get("nose_cheek_depth_delta"))
+        for entry in entries
+        if entry.face_detected
+    ]
+    nose_cheek_values = [value for value in nose_cheek_values if value is not None]
+
+    if len(yaw_values) < 3 or not asymmetry_values or not nose_cheek_values:
+        return 0.0
+
+    yaw_span = max(yaw_values) - min(yaw_values)
+    if yaw_span < 8.0:
+        return 0.0
+
+    asymmetry_mean = float(np.mean(asymmetry_values))
+    asymmetry_span = max(asymmetry_values) - min(asymmetry_values)
+    nose_cheek_mean = float(np.mean(nose_cheek_values))
+    nose_cheek_span = max(nose_cheek_values) - min(nose_cheek_values)
+
+    yaw_factor = _normalize(yaw_span, 8.0, 24.0)
+    flatness = (
+        0.35 * _inverse_normalize(asymmetry_mean, 0.010, 0.050)
+        + 0.25 * _inverse_normalize(asymmetry_span, 0.008, 0.035)
+        + 0.25 * _inverse_normalize(nose_cheek_mean, 0.015, 0.075)
+        + 0.15 * _inverse_normalize(nose_cheek_span, 0.006, 0.030)
+    )
+    return max(0.0, min(1.0, yaw_factor * flatness))
+
+
+def _is_detail_moire_high(details: dict[str, Any]) -> bool:
+    moire_risk = _maybe_float(details.get("moire_risk")) or 0.0
+    moire_fft = _maybe_float(details.get("moire_fft_risk")) or 0.0
+    moire_selectivity = _maybe_float(details.get("moire_orientation_selectivity")) or 0.0
+    return moire_risk >= 0.70 and (moire_fft >= 0.55 or moire_selectivity >= 0.35)
+
+
+def _is_detail_reflection_high(details: dict[str, Any]) -> bool:
+    reflection_risk = _maybe_float(details.get("reflection_risk")) or 0.0
+    reflect_compact = _maybe_float(details.get("reflection_compact_highlight_score")) or 0.0
+    return reflection_risk >= 0.60 or reflect_compact >= 0.50
+
+
+def _is_detail_flicker_high(details: dict[str, Any]) -> bool:
+    return (_maybe_float(details.get("flicker_risk")) or 0.0) >= 0.70
+
+
+def _has_strong_spoof_corroboration_from_details(details: dict[str, Any]) -> bool:
+    return bool(
+        _is_detail_moire_high(details)
+        or _is_detail_depth_flat(details)
+        or _is_detail_uniface_negative(details)
+        or _is_detail_screen_frame_high(details)
+        or (_is_detail_screen_frame_supportive(details) and _is_detail_flicker_high(details))
+    )
+
+
+def _is_detail_screen_frame_supportive(details: dict[str, Any]) -> bool:
+    screen_frame_risk = _maybe_float(details.get("screen_frame_risk")) or 0.0
+    face_center_inside = _maybe_float(details.get("screen_frame_face_center_inside")) or 0.0
+    return screen_frame_risk >= 0.25 or face_center_inside >= 0.45
+
+
+def _is_detail_screen_frame_high(details: dict[str, Any]) -> bool:
+    return (_maybe_float(details.get("screen_frame_risk")) or 0.0) >= 0.72
+
+
+def _is_detail_uniface_negative(details: dict[str, Any]) -> bool:
+    uniface_score = _maybe_float(details.get("uniface_score"))
+    uniface_is_live = details.get("uniface_is_live")
+    if uniface_score is None and uniface_is_live is None:
+        return False
+    return bool(
+        (uniface_is_live is False and (uniface_score is None or uniface_score < 65.0))
+        or (uniface_score is not None and uniface_score < 55.0)
+    )
+
+
+def _is_detail_depth_flat(details: dict[str, Any]) -> bool:
+    return (_maybe_float(details.get("preview_depth_flat_combined_risk")) or 0.0) >= 0.72
 
 
 def _maybe_float(value: Any) -> Optional[float]:
@@ -1329,6 +1824,16 @@ def _maybe_float(value: Any) -> Optional[float]:
 
 def _coalesce_float(primary: Optional[float], fallback: Optional[float]) -> Optional[float]:
     return primary if primary is not None else fallback
+
+
+def _normalize(value: float, low: float, high: float) -> float:
+    if high <= low:
+        return 0.0
+    return max(0.0, min(1.0, (float(value) - low) / (high - low)))
+
+
+def _inverse_normalize(value: float, low: float, high: float) -> float:
+    return 1.0 - _normalize(value, low, high)
 
 
 def _compute_temporal_signal_summary(
@@ -1464,6 +1969,12 @@ def _compute_temporal_signal_summary(
         "raw_reaction_evidence": raw_reaction_evidence,
         "effective_trust": effective_trust,
         "trusted_reaction_evidence": trusted_reaction_evidence,
+        "base_active_trust": reaction_summary.base_active_trust if reaction_summary else effective_trust,
+        "trust_penalty": reaction_summary.trust_penalty if reaction_summary else 0.0,
+        "blink_anomaly_score": reaction_summary.blink_anomaly_score if reaction_summary else 0.0,
+        "motion_anomaly_score": reaction_summary.motion_anomaly_score if reaction_summary else 0.0,
+        "signal_inconsistency_score": reaction_summary.signal_inconsistency_score if reaction_summary else 0.0,
+        "spoof_support_score": reaction_summary.spoof_support_score if reaction_summary else 0.0,
         "persisted_primary": persisted_primary,
         "persisted_secondary": persisted_secondary,
         "persisted_reaction_evidence": persisted_reaction_evidence,
@@ -1557,6 +2068,26 @@ def _is_low_quality(frame_metrics: FrameMetrics) -> bool:
     return False
 
 
+def _quality_block_reason(frame_metrics: FrameMetrics) -> str:
+    if not frame_metrics.face_detected:
+        return "-"
+    if frame_metrics.face_size_ratio is not None and frame_metrics.face_size_ratio < 0.08:
+        return "face_too_small"
+    if frame_metrics.face_quality is not None and frame_metrics.face_quality < 0.45:
+        return "face_quality_low"
+    if frame_metrics.blur_score is not None and frame_metrics.blur_score < 25.0:
+        return "blur_low"
+    if frame_metrics.brightness < 45.0:
+        return "brightness_low"
+    if frame_metrics.brightness > 215.0:
+        return "brightness_high"
+    return "-"
+
+
+def _is_quality_blocked(frame_metrics: FrameMetrics, aggregate: AggregatedMetrics) -> bool:
+    return aggregate.decision_state == "INSUFFICIENT_EVIDENCE" and _quality_block_reason(frame_metrics) != "-"
+
+
 def _is_warm_recovery_candidate(
     *,
     recent_entries: list[FrameMetrics],
@@ -1611,7 +2142,8 @@ def _has_sufficient_evidence(
     min_face_ratio = 0.35 if warm_recovery else 0.6
     min_confidence = 0.45 if warm_recovery else 0.60
     return face_present_ratio >= min_face_ratio and (
-        combined_active_evidence >= 0.12 or current_frame.confidence >= min_confidence
+        combined_active_evidence >= 0.10
+        or current_frame.confidence >= min_confidence
     )
 
 
@@ -1624,26 +2156,102 @@ def _resolve_decision_state(
     warm_recovery: bool,
     low_quality: bool,
     sufficient_evidence: bool,
+    baseline_sample_count: int,
     smoothed_score: float,
     decision_confidence: float,
     no_face_consecutive_threshold: int,
 ) -> str:
     if consecutive_no_face_frames >= no_face_consecutive_threshold or face_present_ratio <= 0.15:
+        if _should_treat_no_face_as_insufficient(
+            recent_entries=recent_entries,
+            current_frame=current_frame,
+            face_present_ratio=face_present_ratio,
+            consecutive_no_face_frames=consecutive_no_face_frames,
+            baseline_sample_count=baseline_sample_count,
+            no_face_consecutive_threshold=no_face_consecutive_threshold,
+        ):
+            return "INSUFFICIENT_EVIDENCE"
         return "NO_FACE"
-    if _is_device_replay_spoof_detected(current_frame):
+    quality_reason = _quality_block_reason(current_frame)
+    quality_blocked = quality_reason != "-"
+    spoof_gate_active = _is_device_replay_spoof_detected(current_frame)
+    support_streak = int(_maybe_float(current_frame.details.get("preview_spoof_support_streak")) or 0.0)
+    spoof_ready_despite_evidence = spoof_gate_active and support_streak >= 3
+    early_live_ready = (
+        current_frame.face_detected
+        and current_frame.is_live
+        and not low_quality
+        and baseline_sample_count >= 3
+        and (current_frame.face_size_ratio or 0.0) >= 0.09
+        and smoothed_score >= (72.0 if warm_recovery else 76.0)
+        and decision_confidence >= (0.58 if warm_recovery else 0.72)
+        and not _is_device_replay_spoof_detected(current_frame)
+    )
+    if not sufficient_evidence and early_live_ready:
+        return "LIKELY_LIVE"
+    if spoof_gate_active:
         return "LIKELY_SPOOF"
+    if quality_blocked and not spoof_gate_active:
+        return "LOW_QUALITY"
+    if not sufficient_evidence and not spoof_ready_despite_evidence:
+        return "INSUFFICIENT_EVIDENCE"
     if low_quality:
         return "LOW_QUALITY"
-    if not sufficient_evidence:
-        return "INSUFFICIENT_EVIDENCE"
 
     live_score_threshold = 68.0 if warm_recovery else 80.0
     live_conf_threshold = 0.50 if warm_recovery else 0.65
     if smoothed_score >= live_score_threshold and decision_confidence >= live_conf_threshold:
         return "LIKELY_LIVE"
+    if (
+        sufficient_evidence
+        and current_frame.is_live
+        and smoothed_score >= (66.0 if warm_recovery else 70.0)
+        and decision_confidence >= (0.46 if warm_recovery else 0.72)
+    ):
+        return "LIKELY_LIVE"
     if smoothed_score < 55.0 and decision_confidence >= 0.55:
         return "LIKELY_SPOOF"
     return "INSUFFICIENT_EVIDENCE"
+
+
+def _should_treat_no_face_as_insufficient(
+    *,
+    recent_entries: list[FrameMetrics],
+    current_frame: FrameMetrics,
+    face_present_ratio: float,
+    consecutive_no_face_frames: int,
+    baseline_sample_count: int,
+    no_face_consecutive_threshold: int,
+) -> bool:
+    if current_frame.face_detected or current_frame.held_from_previous:
+        return False
+    if baseline_sample_count < 3:
+        return False
+    if not recent_entries:
+        return False
+    if consecutive_no_face_frames > max(2, no_face_consecutive_threshold - 2):
+        return False
+    if face_present_ratio < 0.18:
+        return False
+
+    prior_faces = [entry for entry in recent_entries[:-1] if entry.face_detected or entry.held_from_previous]
+    if len(prior_faces) < 3:
+        return False
+
+    last_face = prior_faces[-1]
+    if current_frame.timestamp - last_face.timestamp > 0.9:
+        return False
+
+    recent_face_run = 0
+    for entry in reversed(recent_entries[:-1]):
+        if entry.face_detected or entry.held_from_previous:
+            recent_face_run += 1
+            continue
+        break
+    if recent_face_run < 2:
+        return False
+
+    return True
 
 
 def _calculate_temporal_consistency(score_variance: float) -> float:
