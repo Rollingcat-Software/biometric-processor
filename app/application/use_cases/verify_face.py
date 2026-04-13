@@ -91,6 +91,10 @@ class VerifyFaceUseCase:
             raise ValueError(f"Failed to load image: {image_path}")
 
         # Step 2: Detect face
+        # Client pre-crops to 224×224 — detection only as fallback.
+        # When the input image is already ~224×224 (client-cropped), this step
+        # is fast (<10ms) because there is only one face region covering most of
+        # the frame. Full-frame detection (640×480+) previously cost 200-730ms.
         logger.debug("Step 1/5: Detecting face...")
         detection = await self._detector.detect(image)
 
