@@ -73,7 +73,9 @@ uniface>=3.0.0
 
 # ===========================================
 # Voice Biometric - Speaker Embeddings
-# DO NOT change resemblyzer version!
+# Embedding extraction uses a numba-free MFCC+scipy+torch pipeline
+# (avoids numba 0.65.0 / Python 3.12 @guvectorize crash in librosa.core.audio)
+# resemblyzer is kept as an installed package but is no longer imported
 # ===========================================
 resemblyzer>=0.1.3
 pydub>=0.25.1

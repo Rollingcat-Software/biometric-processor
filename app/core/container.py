@@ -735,9 +735,9 @@ def get_speaker_embedder() -> SpeakerEmbedder:
     """Get speaker embedder instance (singleton).
 
     Returns:
-        SpeakerEmbedder using Resemblyzer (256-dim speaker embeddings)
+        SpeakerEmbedder using numba-free MFCC + torch projection (256-dim)
     """
-    logger.info("Creating speaker embedder (Resemblyzer)")
+    logger.info("Creating speaker embedder (MFCC+torch, numba-free)")
     return SpeakerEmbedder()
 
 
@@ -830,8 +830,8 @@ def initialize_dependencies() -> None:
     get_similarity_calculator()
     get_liveness_detector()
 
-    # Pre-load voice model
-    logger.info("Pre-loading Resemblyzer speaker encoder...")
+    # Pre-load voice model (numba-free MFCC+torch embedder)
+    logger.info("Pre-loading speaker embedder...")
     get_speaker_embedder()
 
     # Initialize storage and repositories
