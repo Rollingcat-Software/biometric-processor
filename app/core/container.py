@@ -71,6 +71,9 @@ from app.infrastructure.persistence.repositories.pgvector_voice_repository impor
 # endpoints return 501 (WebAuthn is the production path).
 from app.infrastructure.ml.fingerprint.hash_embedder import FingerprintHashEmbedder
 from app.infrastructure.persistence.repositories.pgvector_fingerprint_repository import PgVectorFingerprintRepository
+from app.infrastructure.persistence.client_embedding_observation_repository import (
+    ClientEmbeddingObservationRepository,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -800,6 +803,31 @@ def get_fingerprint_repository() -> PgVectorFingerprintRepository:
 
 
 # ============================================================================
+# Client Embedding Observation (log-only, D1 pre-filter)
+# ============================================================================
+
+
+@lru_cache()
+def get_client_embedding_observation_repository() -> ClientEmbeddingObservationRepository:
+    """Get client embedding observation repository (singleton, log-only).
+
+    D1: client embeddings are logged for offline analysis only and are
+    NEVER used for authentication decisions.
+    """
+    if not settings.DATABASE_URL:
+        raise ValueError(
+            "DATABASE_URL must be set for client embedding observation logging."
+        )
+    logger.info("Creating client embedding observation repository (pgvector, dim=128, log-only)")
+    return ClientEmbeddingObservationRepository(
+        database_url=settings.DATABASE_URL,
+        pool_min_size=1,
+        pool_max_size=3,
+        embedding_dimension=128,
+    )
+
+
+# ============================================================================
 # Utility Functions
 # ============================================================================
 
@@ -1004,3 +1032,4 @@ def clear_cache() -> None:
     get_voice_repository.cache_clear()
     get_fingerprint_embedder.cache_clear()
     get_fingerprint_repository.cache_clear()
+    get_client_embedding_observation_repository.cache_clear()

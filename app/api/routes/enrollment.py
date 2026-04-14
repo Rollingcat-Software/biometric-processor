@@ -3,7 +3,7 @@
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException, Request, UploadFile
 
 from app.api.schemas.enrollment import EnrollmentResponse
 from app.api.schemas.multi_image_enrollment import MultiImageEnrollmentResponse
@@ -12,6 +12,7 @@ from app.application.use_cases.enroll_face import EnrollFaceUseCase
 from app.application.use_cases.enroll_multi_image import EnrollMultiImageUseCase
 from app.core.config import settings
 from app.core.container import (
+    get_client_embedding_observation_repository,
     get_delete_enrollment_use_case,
     get_enroll_face_use_case,
     get_enroll_multi_image_use_case,
@@ -21,6 +22,9 @@ from app.core.container import (
 from app.core.validation import ValidationError, validate_image_file, validate_user_id, validate_tenant_id
 from app.domain.interfaces.file_storage import IFileStorage
 from app.infrastructure.idempotency import IdempotencyStore
+from app.infrastructure.persistence.client_embedding_observation_repository import (
+    ClientEmbeddingObservationRepository,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +33,22 @@ router = APIRouter(tags=["Enrollment"])
 
 @router.post("/enroll", response_model=EnrollmentResponse, status_code=200)
 async def enroll_face(
+    request: Request,
+    background_tasks: BackgroundTasks,
     user_id: str = Form(..., description="User identifier"),
     file: UploadFile = File(..., description="Face image file"),
     tenant_id: str = Form(None, description="Optional tenant identifier"),
+    client_embedding: Optional[str] = Form(None, description="Optional client-side pre-filter embedding (JSON array, 128-dim, D1 log-only)"),
+    client_embeddings: Optional[str] = Form(None, description="Optional client-side embeddings (JSON array-of-arrays, D1 log-only)"),
+    client_model_version: Optional[str] = Form(None, description="Optional client model version tag"),
+    session_id: Optional[str] = Form(None, description="Optional session identifier"),
+    device_platform: Optional[str] = Form(None, description="Optional device platform ('web', 'android', ...)"),
     use_case: EnrollFaceUseCase = Depends(get_enroll_face_use_case),
     storage: IFileStorage = Depends(get_file_storage),
     idempotency_store: IdempotencyStore = Depends(get_idempotency_store),
+    observation_repo: ClientEmbeddingObservationRepository = Depends(
+        get_client_embedding_observation_repository
+    ),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", description="Optional idempotency key to prevent duplicate enrollments"),
 ) -> EnrollmentResponse:
     """Enroll a user's face.
@@ -136,6 +150,25 @@ async def enroll_face(
                 user_id=user_id
             )
 
+        # D1 log-only: persist client pre-filter embedding for offline analysis.
+        # Must never affect primary flow — BackgroundTasks runs after response.
+        _observation_embedding = _pick_single_client_embedding(
+            client_embedding, client_embeddings
+        )
+        background_tasks.add_task(
+            observation_repo.record,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            session_id=session_id,
+            modality="face",
+            flow="enroll",
+            client_embedding_json=_observation_embedding,
+            client_model_version=client_model_version,
+            server_embedding_ref=None,
+            device_platform=device_platform,
+            user_agent=request.headers.get("user-agent"),
+        )
+
         return response
 
     finally:
@@ -144,14 +177,48 @@ async def enroll_face(
             await storage.cleanup(image_path)
 
 
+def _pick_single_client_embedding(
+    client_embedding: Optional[str],
+    client_embeddings: Optional[str],
+) -> Optional[str]:
+    """Pick a single JSON-encoded embedding to log.
+
+    Prefers the single `client_embedding` field; otherwise the first entry
+    of `client_embeddings` (array-of-arrays). Returns a JSON-encoded string
+    or None. Never raises.
+    """
+    if client_embedding:
+        return client_embedding
+    if not client_embeddings:
+        return None
+    try:
+        import json as _json
+        parsed = _json.loads(client_embeddings)
+        if isinstance(parsed, list) and parsed and isinstance(parsed[0], list):
+            return _json.dumps(parsed[0])
+    except Exception:
+        return None
+    return None
+
+
 @router.post("/enroll/multi", response_model=MultiImageEnrollmentResponse, status_code=200)
 async def enroll_face_multi_image(
+    request: Request,
+    background_tasks: BackgroundTasks,
     user_id: str = Form(..., description="User identifier"),
     files: List[UploadFile] = File(..., description="2-5 face image files"),
     tenant_id: str = Form(None, description="Optional tenant identifier"),
+    client_embedding: Optional[str] = Form(None, description="Optional client-side pre-filter embedding (JSON array, 128-dim, D1 log-only)"),
+    client_embeddings: Optional[str] = Form(None, description="Optional client-side embeddings (JSON array-of-arrays, D1 log-only)"),
+    client_model_version: Optional[str] = Form(None, description="Optional client model version tag"),
+    session_id: Optional[str] = Form(None, description="Optional session identifier"),
+    device_platform: Optional[str] = Form(None, description="Optional device platform ('web', 'android', ...)"),
     use_case: EnrollMultiImageUseCase = Depends(get_enroll_multi_image_use_case),
     storage: IFileStorage = Depends(get_file_storage),
     idempotency_store: IdempotencyStore = Depends(get_idempotency_store),
+    observation_repo: ClientEmbeddingObservationRepository = Depends(
+        get_client_embedding_observation_repository
+    ),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", description="Optional idempotency key to prevent duplicate enrollments"),
 ) -> MultiImageEnrollmentResponse:
     """Enroll a user's face using multiple images (template fusion).
@@ -301,6 +368,24 @@ async def enroll_face_multi_image(
                 status_code=200,
                 user_id=user_id
             )
+
+        # D1 log-only: persist client pre-filter embedding for offline analysis.
+        _observation_embedding = _pick_single_client_embedding(
+            client_embedding, client_embeddings
+        )
+        background_tasks.add_task(
+            observation_repo.record,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            session_id=session_id,
+            modality="face",
+            flow="enroll",
+            client_embedding_json=_observation_embedding,
+            client_model_version=client_model_version,
+            server_embedding_ref=None,
+            device_platform=device_platform,
+            user_agent=request.headers.get("user-agent"),
+        )
 
         return response
 

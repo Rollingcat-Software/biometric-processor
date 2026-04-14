@@ -1,16 +1,24 @@
 """Verification API routes."""
 
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 
 from app.api.schemas.verification import VerificationResponse
 from app.application.use_cases.verify_face import VerifyFaceUseCase
-from app.core.container import get_file_storage, get_verify_face_use_case
+from app.core.container import (
+    get_client_embedding_observation_repository,
+    get_file_storage,
+    get_verify_face_use_case,
+)
 from app.core.config import get_settings
 from app.core.validation import ValidationError, validate_image_file, validate_user_id, validate_tenant_id
 from app.domain.exceptions.face_errors import PoorImageQualityError
 from app.domain.interfaces.file_storage import IFileStorage
+from app.infrastructure.persistence.client_embedding_observation_repository import (
+    ClientEmbeddingObservationRepository,
+)
 
 settings = get_settings()
 
@@ -21,11 +29,21 @@ router = APIRouter(tags=["Verification"])
 
 @router.post("/verify", response_model=VerificationResponse, status_code=200)
 async def verify_face(
+    request: Request,
+    background_tasks: BackgroundTasks,
     user_id: str = Form(..., description="User identifier to verify against"),
     file: UploadFile = File(..., description="Face image file"),
     tenant_id: str = Form(None, description="Optional tenant identifier"),
+    client_embedding: Optional[str] = Form(None, description="Optional client-side pre-filter embedding (JSON array, 128-dim, D1 log-only)"),
+    client_embeddings: Optional[str] = Form(None, description="Optional client-side embeddings (JSON array-of-arrays, D1 log-only)"),
+    client_model_version: Optional[str] = Form(None, description="Optional client model version tag"),
+    session_id: Optional[str] = Form(None, description="Optional session identifier"),
+    device_platform: Optional[str] = Form(None, description="Optional device platform ('web', 'android', ...)"),
     use_case: VerifyFaceUseCase = Depends(get_verify_face_use_case),
     storage: IFileStorage = Depends(get_file_storage),
+    observation_repo: ClientEmbeddingObservationRepository = Depends(
+        get_client_embedding_observation_repository
+    ),
 ) -> VerificationResponse:
     """Verify a user's face (1:1 matching).
 
@@ -96,7 +114,7 @@ async def verify_face(
 
         message = "Face verified successfully" if result.verified else "Face does not match"
 
-        return VerificationResponse(
+        response = VerificationResponse(
             verified=result.verified,
             confidence=result.confidence,
             distance=result.distance,
@@ -104,7 +122,52 @@ async def verify_face(
             message=message,
         )
 
+        # D1 log-only: persist client pre-filter embedding for offline analysis.
+        # Must never affect primary flow — scheduled via BackgroundTasks.
+        _observation_embedding = _pick_single_client_embedding(
+            client_embedding, client_embeddings
+        )
+        background_tasks.add_task(
+            observation_repo.record,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            session_id=session_id,
+            modality="face",
+            flow="verify",
+            client_embedding_json=_observation_embedding,
+            client_model_version=client_model_version,
+            server_embedding_ref=None,
+            device_platform=device_platform,
+            user_agent=request.headers.get("user-agent"),
+        )
+
+        return response
+
     finally:
         # Cleanup temporary file
         if image_path:
             await storage.cleanup(image_path)
+
+
+def _pick_single_client_embedding(
+    client_embedding: Optional[str],
+    client_embeddings: Optional[str],
+) -> Optional[str]:
+    """Pick a single JSON-encoded embedding to log.
+
+    Prefers the single `client_embedding` field; otherwise the first entry
+    of `client_embeddings` (array-of-arrays). Returns a JSON-encoded string
+    or None. Never raises.
+    """
+    if client_embedding:
+        return client_embedding
+    if not client_embeddings:
+        return None
+    try:
+        import json as _json
+        parsed = _json.loads(client_embeddings)
+        if isinstance(parsed, list) and parsed and isinstance(parsed[0], list):
+            return _json.dumps(parsed[0])
+    except Exception:
+        return None
+    return None
