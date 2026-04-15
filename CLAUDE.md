@@ -63,6 +63,11 @@ pytest tests/unit/ -v           # Unit tests only
 ### Not implemented:
 - **Iris**: No endpoints at all
 
+### Client Embedding Observations (Alembic 0004, log-only per D2, 2026-04-14):
+- `client_embedding_observations` table — vector(128), no HNSW (log, not search surface)
+- Populated via `BackgroundTasks` in `enrollment.py` / `verification.py` with fire-and-forget `record()`
+- NEVER used for auth decisions — offline divergence analysis only (MobileFaceNet 128-dim vs ArcFace 512-dim)
+
 ## Known Issues (March 2026)
 
 ### CRITICAL:
