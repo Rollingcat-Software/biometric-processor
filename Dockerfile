@@ -42,6 +42,10 @@ RUN pip install --no-cache-dir --no-deps deepface==0.0.98 && \
     pip install --no-cache-dir lightphe lightdsa
 
 # 4. Install remaining requirements
+# Note: requirements.txt pins librosa==0.9.2 to avoid numba @stencil/@guvectorize
+# crash on Python 3.12 (AttributeError: get_call_template). librosa >= 0.10.0
+# introduced eager-compiling numba decorators that crash at import time
+# regardless of NUMBA_DISABLE_JIT. librosa 0.9.2 has no numba stencil usage.
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 5. Force uninstall opencv-python if it got installed, reinstall headless

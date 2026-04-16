@@ -1,31 +1,17 @@
-"""Speaker embedding extraction — numba-free MFCC + torch projection.
+"""Speaker embedding extraction using Resemblyzer.
 
-Replaces the Resemblyzer-based implementation which crashed on Python 3.12
-due to a numba 0.65.0 / librosa @guvectorize incompatibility.
+Uses the pretrained GE2E speaker encoder from Resemblyzer to produce
+256-dim L2-normalised speaker embeddings suitable for cosine similarity
+in pgvector.
 
-Architecture:
-    1. Decode raw audio bytes → 16 kHz mono float32 PCM (via stdlib wave or pydub)
-    2. Pre-emphasis + framing + Hamming window
-    3. Mel-filterbank energies via pure numpy/scipy FFT (no numba)
-    4. Log mel → DCT (MFCC, 40 coefficients, 80 mel bins)
-    5. Aggregate statistics: per-coeff mean + std → 80-dim feature vector
-    6. Fixed seeded torch.nn.Linear projection → 256-dim speaker embedding
-    7. L2 normalise for cosine similarity in pgvector
-
-The projection matrix is initialised with a fixed seed (42) so embeddings
-are reproducible across restarts.  All previously enrolled voice vectors
-were computed with Resemblyzer and are stored in the database; the migration
-note below explains how to handle the rollover.
-
-Migration note (for future reference):
-    Resemblyzer and this embedder produce *incompatible* 256-dim vectors.
-    Any user enrolled with Resemblyzer must re-enroll.  The schema and DB
-    column widths are unchanged (vector(256)), so no migration SQL is needed.
-
-Usage:
-    embedder = SpeakerEmbedder()
-    embedding = embedder.extract_embedding(audio_bytes, content_type="audio/wav")
-    # embedding.shape == (256,), dtype float32, L2 norm == 1.0
+Compatibility notes:
+    - librosa >= 0.10.0 introduced @stencil + @guvectorize in core/audio.py
+      and util/utils.py that crash at import time on Python 3.12 with
+      numba >= 0.59 (AttributeError: 'function' object has no attribute
+      'get_call_template').  NUMBA_DISABLE_JIT=1 does NOT prevent this
+      because @guvectorize compiles eagerly at module load.
+    - Fix: pin librosa==0.9.2 in requirements.txt.  That version has no
+      stencil/guvectorize usage and imports cleanly with any numba version.
 """
 
 import io
@@ -37,71 +23,42 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Output embedding dimension — must match pgvector column and enrolled data
+# Output embedding dimension — matches pgvector column and enrolled data
 VOICE_EMBEDDING_DIM = 256
-
-# MFCC hyper-parameters
-_N_MFCC = 40        # Number of cepstral coefficients kept
-_N_MELS = 80        # Mel filterbank resolution
-_FRAME_LEN_MS = 25  # Frame length in milliseconds
-_FRAME_STEP_MS = 10  # Frame hop in milliseconds
-_FFT_SIZE = 512      # Must be >= frame_len samples
-_PREEMPH_COEFF = 0.97
-_MEL_FMIN = 80.0
-_MEL_FMAX = 7600.0
 
 # Minimum audio duration for a reliable embedding
 MIN_AUDIO_DURATION_SECS = 0.5
 
-# Target sample rate (speaker encoder convention)
+# Target sample rate (Resemblyzer convention)
 TARGET_SAMPLE_RATE = 16000
-
-# Fixed random seed for the projection matrix
-_PROJECTION_SEED = 42
 
 
 class SpeakerEmbedder:
-    """Extracts 256-dim speaker embeddings from audio — fully numba-free.
+    """Extracts 256-dim speaker embeddings from audio using Resemblyzer.
 
-    The pipeline is:
-        audio → MFCC (scipy FFT, no numba) → mean+std stats → torch linear → L2 norm
+    The Resemblyzer GE2E encoder is a pretrained LSTM trained on thousands
+    of speakers.  It produces speaker-discriminative embeddings: two
+    utterances from the same speaker have high cosine similarity (~0.85+)
+    while utterances from different speakers are distinctly lower (~0.3-0.6).
 
     Thread Safety:
-        The torch projection layer is read-only after __init__, so instances
-        are safe for concurrent use from multiple async tasks dispatched to
-        a thread pool executor.
+        VoiceEncoder is read-only after __init__, so instances are safe for
+        concurrent use from multiple async tasks dispatched to a thread pool.
     """
 
     def __init__(self) -> None:
-        """Initialise the MFCC extractor and fixed projection layer."""
-        import torch
+        """Load the pretrained Resemblyzer GE2E encoder."""
+        from resemblyzer import VoiceEncoder
 
-        logger.info(
-            "Loading numba-free speaker embedder "
-            f"(MFCC-{_N_MFCC} + Linear → {VOICE_EMBEDDING_DIM}d)..."
-        )
-
-        # Feature vector dimension: mean + std for each MFCC coefficient
-        feature_dim = _N_MFCC * 2  # 80
-
-        # Seeded projection: same weights every time → reproducible embeddings
-        torch.manual_seed(_PROJECTION_SEED)
-        self._proj_weight: np.ndarray = (
-            torch.nn.init.kaiming_uniform_(
-                torch.empty(VOICE_EMBEDDING_DIM, feature_dim)
-            )
-            .detach()
-            .numpy()
-        )  # shape (256, 80)
-
+        logger.info("Loading Resemblyzer GE2E speaker encoder...")
+        self._encoder = VoiceEncoder()
         self._embedding_dim = VOICE_EMBEDDING_DIM
         logger.info(
-            f"Speaker embedder ready: feature_dim={feature_dim}, "
-            f"output_dim={VOICE_EMBEDDING_DIM}"
+            f"Resemblyzer encoder ready: output_dim={VOICE_EMBEDDING_DIM}"
         )
 
     # ------------------------------------------------------------------
-    # Public API (same interface as the old Resemblyzer-based embedder)
+    # Public API
     # ------------------------------------------------------------------
 
     @property
@@ -126,8 +83,27 @@ class SpeakerEmbedder:
         Raises:
             ValueError: If audio is too short or cannot be decoded.
         """
+        from resemblyzer import preprocess_wav
+
         wav_samples = self._decode_to_wav_samples(audio_bytes, content_type)
-        return self._embed(wav_samples)
+
+        duration = len(wav_samples) / TARGET_SAMPLE_RATE
+        if duration < MIN_AUDIO_DURATION_SECS:
+            raise ValueError(
+                f"Audio too short ({duration:.2f}s). "
+                f"Minimum is {MIN_AUDIO_DURATION_SECS}s."
+            )
+
+        wav = preprocess_wav(wav_samples, source_sr=TARGET_SAMPLE_RATE)
+
+        if len(wav) == 0:
+            raise ValueError(
+                "Audio contains no speech (VAD removed all frames). "
+                "Please record at least 1 second of clear speech."
+            )
+
+        embedding = self._encoder.embed_utterance(wav)
+        return embedding.astype(np.float32)
 
     def extract_embedding_from_base64(self, base64_data: str) -> np.ndarray:
         """Extract a speaker embedding from a base64-encoded audio string.
@@ -153,7 +129,7 @@ class SpeakerEmbedder:
         return self.extract_embedding(audio_bytes, content_type)
 
     # ------------------------------------------------------------------
-    # Internal audio decoding helpers
+    # Audio decoding helpers
     # ------------------------------------------------------------------
 
     def _decode_to_wav_samples(
@@ -185,12 +161,6 @@ class SpeakerEmbedder:
             samples = samples / 32768.0  # int16 → float32 [-1, 1]
 
             duration = len(samples) / TARGET_SAMPLE_RATE
-            if duration < MIN_AUDIO_DURATION_SECS:
-                raise ValueError(
-                    f"Audio too short ({duration:.2f}s). "
-                    f"Minimum is {MIN_AUDIO_DURATION_SECS}s."
-                )
-
             logger.debug(
                 f"Audio decoded: {duration:.2f}s, {len(samples)} samples "
                 f"@ {TARGET_SAMPLE_RATE}Hz"
@@ -229,146 +199,7 @@ class SpeakerEmbedder:
             target_len = int(len(samples) * TARGET_SAMPLE_RATE / frame_rate)
             samples = scipy_resample(samples, target_len).astype(np.float32)
 
-        duration = len(samples) / TARGET_SAMPLE_RATE
-        if duration < MIN_AUDIO_DURATION_SECS:
-            raise ValueError(
-                f"Audio too short ({duration:.2f}s). "
-                f"Minimum is {MIN_AUDIO_DURATION_SECS}s."
-            )
-
         return samples
-
-    # ------------------------------------------------------------------
-    # Core embedding pipeline (numba-free)
-    # ------------------------------------------------------------------
-
-    def _embed(self, wav_samples: np.ndarray) -> np.ndarray:
-        """Compute the 256-dim speaker embedding from 16 kHz mono PCM.
-
-        Pipeline: pre-emphasis → framing → windowing → FFT power spectrum
-                  → mel filterbank → log → DCT (MFCC) → mean+std → linear
-                  projection → L2 normalise.
-        """
-        samples = wav_samples.astype(np.float32)
-
-        # 1. Pre-emphasis filter
-        samples = self._preemphasis(samples)
-
-        # 2. Framing
-        frames = self._frame_signal(samples)
-        if frames.shape[0] == 0:
-            raise ValueError(
-                "Audio too short for MFCC extraction after framing. "
-                "Please record at least 1 second of audio."
-            )
-
-        # 3. Hamming window + FFT power spectrum
-        window = np.hamming(frames.shape[1]).astype(np.float32)
-        frames = frames * window
-
-        padded = np.zeros((frames.shape[0], _FFT_SIZE), dtype=np.float32)
-        padded[:, : frames.shape[1]] = frames
-
-        # scipy.fft.rfft — pure C, no numba
-        from scipy.fft import rfft as scipy_rfft
-
-        mag = np.abs(scipy_rfft(padded, axis=1))
-        power = (1.0 / _FFT_SIZE) * (mag ** 2)  # shape (T, FFT_SIZE//2 + 1)
-
-        # 4. Mel filterbank
-        mel_filters = self._mel_filterbank()  # (n_mels, fft_bins)
-        mel_energy = np.dot(power, mel_filters.T)  # (T, n_mels)
-        mel_energy = np.maximum(mel_energy, np.finfo(np.float32).eps)
-        log_mel = np.log(mel_energy)  # (T, n_mels)
-
-        # 5. DCT (type-II) → MFCC
-        dct_matrix = self._dct_matrix()  # (n_mfcc, n_mels)
-        mfcc = np.dot(log_mel, dct_matrix.T)  # (T, n_mfcc)
-
-        # 6. Utterance-level statistics: mean + std across time
-        mu = mfcc.mean(axis=0)          # (n_mfcc,)
-        std = mfcc.std(axis=0) + 1e-8   # (n_mfcc,)
-        features = np.concatenate([mu, std]).astype(np.float32)  # (2*n_mfcc,)
-
-        # 7. Fixed linear projection → 256-dim
-        embedding = self._proj_weight @ features  # (256,)
-
-        # 8. L2 normalise for cosine similarity
-        norm = np.linalg.norm(embedding)
-        if norm > 0:
-            embedding = embedding / norm
-
-        embedding = embedding.astype(np.float32)
-
-        logger.debug(
-            f"Speaker embedding extracted: dim={len(embedding)}, "
-            f"norm={np.linalg.norm(embedding):.4f}"
-        )
-        return embedding
-
-    # ------------------------------------------------------------------
-    # MFCC building blocks (all pure numpy/scipy, no numba)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _preemphasis(signal: np.ndarray, coeff: float = _PREEMPH_COEFF) -> np.ndarray:
-        return np.append(signal[0], signal[1:] - coeff * signal[:-1])
-
-    @staticmethod
-    def _frame_signal(signal: np.ndarray) -> np.ndarray:
-        """Split signal into overlapping frames."""
-        frame_len = int(TARGET_SAMPLE_RATE * _FRAME_LEN_MS / 1000)  # 400 samples
-        frame_step = int(TARGET_SAMPLE_RATE * _FRAME_STEP_MS / 1000)  # 160 samples
-        sig_len = len(signal)
-        num_frames = max(1, 1 + (sig_len - frame_len) // frame_step)
-
-        # Build index matrix efficiently
-        col_idx = np.arange(frame_len)
-        row_idx = np.arange(num_frames) * frame_step
-        # Clip to avoid out-of-bounds on short signals
-        indices = row_idx[:, None] + col_idx[None, :]
-        indices = np.clip(indices, 0, sig_len - 1)
-        return signal[indices]
-
-    @staticmethod
-    def _mel_filterbank() -> np.ndarray:
-        """Return a (n_mels, fft_bins) triangular mel filterbank matrix."""
-        fft_bins = _FFT_SIZE // 2 + 1  # 257
-        mel_min = 2595.0 * np.log10(1.0 + _MEL_FMIN / 700.0)
-        mel_max = 2595.0 * np.log10(1.0 + _MEL_FMAX / 700.0)
-        mel_points = np.linspace(mel_min, mel_max, _N_MELS + 2)
-        hz_points = 700.0 * (10.0 ** (mel_points / 2595.0) - 1.0)
-        bin_points = np.floor((fft_bins - 1) * 2 * hz_points / TARGET_SAMPLE_RATE).astype(int)
-        bin_points = np.clip(bin_points, 0, fft_bins - 1)
-
-        filters = np.zeros((_N_MELS, fft_bins), dtype=np.float32)
-        for m in range(1, _N_MELS + 1):
-            f_left = bin_points[m - 1]
-            f_center = bin_points[m]
-            f_right = bin_points[m + 1]
-            if f_center > f_left:
-                for k in range(f_left, f_center + 1):
-                    filters[m - 1, k] = (k - f_left) / (f_center - f_left)
-            if f_right > f_center:
-                for k in range(f_center, f_right + 1):
-                    filters[m - 1, k] = (f_right - k) / (f_right - f_center)
-        return filters
-
-    @staticmethod
-    def _dct_matrix() -> np.ndarray:
-        """Return a (n_mfcc, n_mels) orthonormal DCT-II basis matrix."""
-        n = _N_MELS
-        k = np.arange(_N_MFCC)[:, None]      # (n_mfcc, 1)
-        m = np.arange(n)[None, :] + 0.5      # (1, n_mels)
-        dct = np.cos(np.pi / n * k * m).astype(np.float32)
-        # Orthonormal scaling
-        dct[0, :] *= np.sqrt(1.0 / n)
-        dct[1:, :] *= np.sqrt(2.0 / n)
-        return dct
-
-    # ------------------------------------------------------------------
-    # Format detection
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _guess_format(audio_bytes: bytes, content_type: Optional[str]) -> str:
