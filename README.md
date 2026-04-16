@@ -1,16 +1,23 @@
-# Biometric Processor API
+# Biometric Processor
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
-![Python](https://img.shields.io/badge/Python-3.11+-yellow.svg)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-green.svg)
-![DeepFace](https://img.shields.io/badge/DeepFace-AI-red.svg)
+![Python](https://img.shields.io/badge/Python-3.12-yellow.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green.svg)
+![DeepFace](https://img.shields.io/badge/DeepFace-0.0.98-red.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ## Overview
 
-**Biometric Processor API** is the AI/ML microservice of the **FIVUCSAS** (Face and Identity Verification Using Cloud-based SaaS) platform. Built with FastAPI and powered by DeepFace deep learning models, this service handles biometric operations including face enrollment, verification, search, liveness detection, and document card type detection.
+Biometric Processor is the AI/ML microservice for the **FIVUCSAS** biometric identity platform. Python 3.12 on FastAPI with Clean Architecture (domain → application → infrastructure), dependency injection, and async I/O.
 
-This microservice is part of a larger biometric authentication ecosystem developed as an Engineering Project at Marmara University's Computer Engineering Department.
+**Scope:**
+
+- **Face** — enroll, verify, search, liveness, quality, demographics, landmarks, comparison (DeepFace / MediaPipe / YOLO)
+- **Voice** — enroll, verify (MFCC + Torch speaker embeddings; Resemblyzer removed due to numba conflict)
+- **Fingerprint** — enroll, verify via WebAuthn FIDO2 assertion (no standalone sensor — platform authenticators only)
+- **Verification pipeline** — YOLO-based document detection + TD1/TD3 MRZ parser + Tesseract TC Kimlik OCR + selfie-to-document cosine matching + server-authoritative liveness verdict
+- **Client-side ML observations** — `client_embedding_observations` table (log-only per D2 design lock; never trusted for auth)
+
+**Security:** internal Docker network only. No public Traefik route. `X-API-Key` middleware on all `/api/*` routes. Demo UI disabled in production.
 
 ## Quick Start
 
