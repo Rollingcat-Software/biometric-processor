@@ -48,6 +48,7 @@ from app.infrastructure.ml.factories.detector_factory import FaceDetectorFactory
 from app.infrastructure.ml.factories.extractor_factory import EmbeddingExtractorFactory
 from app.infrastructure.ml.factories.similarity_factory import SimilarityCalculatorFactory
 from app.infrastructure.ml.liveness.enhanced_liveness_detector import EnhancedLivenessDetector
+from app.infrastructure.ml.liveness.optimized_texture_liveness import OptimizedTextureLivenessDetector
 from app.infrastructure.ml.liveness.texture_liveness_detector import TextureLivenessDetector
 from app.infrastructure.ml.liveness.uniface_liveness_detector import UniFaceLivenessDetector
 from app.infrastructure.ml.quality.quality_assessor import QualityAssessor
@@ -295,6 +296,20 @@ def get_liveness_detector() -> ILivenessDetector:
         return TextureLivenessDetector(
             texture_threshold=100.0,
             liveness_threshold=settings.LIVENESS_THRESHOLD,
+        )
+    elif backend == "optimized":
+        # LIVENESS_BACKEND=optimized → OptimizedTextureLivenessDetector
+        # Target: ~50ms on CPU (Gabor pre-computed, single conversion, FFT downsampled)
+        fft_width = settings.LIVENESS_FFT_DOWNSAMPLE_SIZE
+        fft_size = (fft_width, fft_width * 108 // 192)  # keep 16:9 aspect
+        logger.info(
+            "Creating liveness detector (optimized texture, Gabor+FFT), "
+            f"fft_size={fft_size}"
+        )
+        return OptimizedTextureLivenessDetector(
+            texture_threshold=100.0,
+            liveness_threshold=settings.LIVENESS_THRESHOLD,
+            fft_downsample_size=fft_size,
         )
     else:
         logger.info("Creating liveness detector (enhanced multi-modal)")

@@ -1,7 +1,9 @@
 """DeepFace-based demographics analyzer implementation."""
 
 import logging
-from typing import List
+import threading
+import time
+from typing import List, Optional
 
 import numpy as np
 from deepface import DeepFace
@@ -14,6 +16,7 @@ from app.domain.entities.demographics import (
     RaceEstimate,
 )
 from app.domain.exceptions.feature_errors import DemographicsError
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,8 @@ class DeepFaceDemographicsAnalyzer:
     """Demographics analyzer using DeepFace.
 
     Analyzes age, gender, and optionally race and emotion from face images.
+    Includes a 3-second TTL in-memory cache keyed by face spatial bucket
+    to avoid redundant inference on consecutive frames with the same face.
     """
 
     def __init__(
@@ -46,6 +51,12 @@ class DeepFaceDemographicsAnalyzer:
         self._min_image_size = min_image_size
         self._age_margin = age_margin
         self._age_confidence = age_confidence
+
+        # TTL cache: keyed by spatial bucket of face region, 3-second TTL, max 20 entries
+        self._cache: dict = {}
+        self._cache_ttl = 3.0
+        self._lock = threading.Lock()
+
         logger.info(
             f"DeepFaceDemographicsAnalyzer initialized: "
             f"race={include_race}, emotion={include_emotion}, "
@@ -53,11 +64,27 @@ class DeepFaceDemographicsAnalyzer:
             f"age_confidence={age_confidence:.2f}"
         )
 
-    def analyze(self, image: np.ndarray) -> DemographicsResult:
+    def _cache_key(self, face_region: dict) -> str:
+        """Build a spatial bucket cache key from a face region dict.
+
+        Floors x and y to the nearest 50px so that small tracking jitter
+        still hits the cache.
+        """
+        x = face_region.get("x", 0) // 50
+        y = face_region.get("y", 0) // 50
+        return f"{x}_{y}"
+
+    def analyze(
+        self, image: np.ndarray, face_region: Optional[dict] = None
+    ) -> DemographicsResult:
         """Analyze demographics from face image.
 
         Args:
             image: Face image as numpy array (RGB format)
+            face_region: Optional dict with 'x' and 'y' keys (face bounding-box
+                top-left corner in the original frame).  When provided the result
+                is cached for ``_cache_ttl`` seconds so consecutive frames at the
+                same position skip expensive DeepFace inference.
 
         Returns:
             DemographicsResult with demographics data
@@ -65,8 +92,19 @@ class DeepFaceDemographicsAnalyzer:
         Raises:
             DemographicsError: If analysis fails
         """
+        # --- Cache lookup ---
+        if face_region is not None:
+            key = self._cache_key(face_region)
+            with self._lock:
+                cached = self._cache.get(key)
+                if cached and (time.monotonic() - cached["ts"]) < self._cache_ttl:
+                    _log = logger.info if settings.ENABLE_ML_PROFILER else logger.debug
+                    _log(f"Demographics cache hit (age={cached['result'].age.value})")
+                    return cached["result"]
+
         logger.debug("Starting demographics analysis")
 
+        t0 = time.monotonic()
         try:
             # Validate image quality before analysis
             h, w = image.shape[:2]
@@ -92,6 +130,9 @@ class DeepFaceDemographicsAnalyzer:
                 enforce_detection=True,
                 silent=False,
             )
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            _log = logger.info if settings.ENABLE_ML_PROFILER else logger.debug
+            _log(f"Demographics computed in {elapsed_ms:.0f}ms")
 
             # Handle list result (when multiple faces)
             if isinstance(results, list):

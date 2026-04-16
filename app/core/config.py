@@ -117,7 +117,7 @@ class Settings(BaseSettings):
             return min(cpu_count, 8)
         return self.ML_THREAD_POOL_SIZE
 
-    def get_liveness_backend(self) -> Literal["enhanced", "texture", "uniface"]:
+    def get_liveness_backend(self) -> Literal["enhanced", "texture", "uniface", "optimized"]:
         """Get the effective liveness backend.
 
         LIVENESS_MODE is the canonical configuration source. LIVENESS_BACKEND is
@@ -167,12 +167,13 @@ class Settings(BaseSettings):
     )
 
     # Liveness Detection Backend
-    LIVENESS_BACKEND: Optional[Literal["enhanced", "texture", "uniface"]] = Field(
+    LIVENESS_BACKEND: Optional[Literal["enhanced", "texture", "uniface", "optimized"]] = Field(
         default=None,
         description=(
             "Deprecated compatibility alias for backend selection. "
             "Prefer LIVENESS_MODE. When set, this value overrides the backend "
-            "derived from LIVENESS_MODE."
+            "derived from LIVENESS_MODE. "
+            "Use 'optimized' for OptimizedTextureLivenessDetector (Gabor+FFT, ~50ms target)."
         ),
     )
     LIVENESS_UNIFACE_DEFAULT_ENABLED: bool = Field(
@@ -511,6 +512,16 @@ class Settings(BaseSettings):
     CARD_DETECTION_THRESHOLD: float = Field(
         default=0.25, ge=0.0, le=1.0,
         description="YOLO card detection confidence threshold (lowered from 0.5 for better recall on non-passport cards)"
+    )
+
+    # ML Profiler — when True, inference timing logs are emitted at INFO instead of DEBUG
+    ENABLE_ML_PROFILER: bool = Field(
+        default=False,
+        description=(
+            "When True, all ML inference timing logs (face detection, liveness, embedding, "
+            "demographics, card detection) are emitted at INFO level instead of DEBUG, "
+            "making them visible in production log streams without increasing LOG_LEVEL globally."
+        ),
     )
 
     # Batch Processing

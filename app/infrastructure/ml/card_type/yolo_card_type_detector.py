@@ -1,7 +1,9 @@
 """YOLO-based card type detector implementation."""
 
 import logging
+import os
 import re
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -56,22 +58,34 @@ _CONFUSABLE_PAIRS: set[frozenset[str]] = {
 }
 
 # Default model path relative to this file.
-# best.onnx (FP32 ONNX) is used instead of best.pt because Ultralytics+ONNX Runtime
-# is ~2.7x faster on CPU (avg 1,775ms vs 4,781ms) with identical class names and accuracy.
-DEFAULT_MODEL_PATH = Path(__file__).parent.parent.parent.parent / "core" / "card_type_model" / "best.onnx"
+# best_fp16.onnx (FP16 ONNX, 50MB) is used instead of best.onnx (FP32, 103MB).
+# FP16 on CPU has identical inference speed to FP32 but uses half the memory.
+# Override via CARD_MODEL_PATH env var (filename only, not full path).
+DEFAULT_MODEL_PATH = Path(__file__).parent.parent.parent.parent / "core" / "card_type_model" / os.getenv("CARD_MODEL_PATH", "best_fp16.onnx")
 
 
 @lru_cache(maxsize=1)
 def _get_yolo_model(model_path: str):
-    """Load YOLO model with caching.
+    """Load YOLO model with caching and ONNX Runtime warmup.
 
     Passes task='detect' explicitly so Ultralytics doesn't need to infer it from
     the file extension — required when loading .onnx exports.
+
+    A dummy inference on a blank 640×640 image is run after loading to warm up
+    ONNX Runtime session internals, so the first real request does not pay the
+    cold-start cost (~several hundred ms on CPU).
     """
     from ultralytics import YOLO
+    t0 = time.monotonic()
     logger.info(f"Loading YOLO model from: {model_path}")
     # task='detect' is required for .onnx; harmless for .pt
-    return YOLO(model_path, task="detect")
+    model = YOLO(model_path, task="detect")
+    # Warmup: one dummy inference on a blank 640×640 RGB image
+    dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+    model(dummy, conf=0.05, verbose=False)
+    elapsed = (time.monotonic() - t0) * 1000
+    logger.info(f"Card type model loaded and warmed up in {elapsed:.0f}ms")
+    return model
 
 
 class YOLOCardTypeDetector(ICardTypeDetector):
@@ -127,8 +141,10 @@ class YOLOCardTypeDetector(ICardTypeDetector):
         model = self._get_model()
 
         # Run inference at a low conf floor so we can log ALL raw detections
+        _t_infer = time.monotonic()
         raw_results = model(image, conf=0.05, verbose=False)
         raw_result = raw_results[0]
+        logger.info(f"Card detection inference: {(time.monotonic() - _t_infer) * 1000:.0f}ms")
 
         # Log every detection the model produces (diagnostic)
         for box in raw_result.boxes:
