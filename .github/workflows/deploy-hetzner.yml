@@ -1,0 +1,48 @@
+name: Deploy to Hetzner VPS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'Dockerfile*'
+      - 'docker-compose.prod.yml'
+      - 'requirements.txt'
+      - 'alembic/**'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-biometric
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy Biometric Processor
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        timeout-minutes: 10
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 8m
+          script: |
+            set -e
+            cd /opt/projects/fivucsas/biometric-processor
+            git pull origin main
+            cd /opt/projects
+            ./infra/deploy.sh build biometric
+            ./infra/deploy.sh restart biometric
+            # Health check via internal Docker network (service is internal-only)
+            for i in 1 2 3 4 5; do
+              sleep 10
+              if docker exec biometric-processor curl -sf http://localhost:8001/api/v1/health > /dev/null 2>&1; then
+                echo "Biometric processor healthy after attempt $i"
+                break
+              fi
+              echo "Attempt $i: service not ready yet..."
+              if [ "$i" = "5" ]; then echo "Health check failed after 50s" && exit 1; fi
+            done
+            echo "Biometric processor deployed successfully"
