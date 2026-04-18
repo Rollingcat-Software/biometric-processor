@@ -165,6 +165,13 @@ class Settings(BaseSettings):
             "'combined' maps to enhanced multi-modal checks."
         ),
     )
+    LIVENESS_SECURITY_PROFILE: Literal["standard"] = Field(
+        default="standard",
+        description=(
+            "Security posture for liveness decisions. "
+            "'standard' preserves the baseline behavior."
+        ),
+    )
 
     # Liveness Detection Backend
     LIVENESS_BACKEND: Optional[Literal["enhanced", "texture", "uniface", "hybrid"]] = Field(
@@ -548,6 +555,90 @@ class Settings(BaseSettings):
         default=True,
         description="Show extended per-frame debug metrics in the live liveness preview overlay.",
     )
+    DEV_LIVENESS_PREVIEW_FLASH_REPLAY_ENABLED: bool = Field(
+        default=True,
+        description="Drive the developer preview with debug-only screen flash challenges and compute flash replay metrics.",
+    )
+    DEV_LIVENESS_PREVIEW_FLASH_INTERVAL_SECONDS: float = Field(
+        default=2.5,
+        ge=0.0,
+        le=10.0,
+        description="Seconds between debug flash challenges in the live liveness preview.",
+    )
+    DEV_LIVENESS_PREVIEW_FLASH_HISTORY_SIZE: int = Field(
+        default=4,
+        ge=1,
+        le=20,
+        description="Number of recent flash challenges averaged into the flash replay metrics.",
+    )
+    DEV_LIVENESS_PREVIEW_PUZZLE_ENABLED: bool = Field(
+        default=True,
+        description="Enable Biometric Puzzle controls and active-score fusion in the developer live preview.",
+    )
+    DEV_LIVENESS_PREVIEW_PUZZLE_DIFFICULTY: Literal["easy", "standard", "hard"] = Field(
+        default="standard",
+        description="Default Biometric Puzzle difficulty used when starting a preview challenge session.",
+    )
+    DEV_LIVENESS_PREVIEW_PUZZLE_MIN_STEPS: int = Field(
+        default=3,
+        ge=1,
+        le=6,
+        description="Minimum number of puzzle steps generated for the developer live preview.",
+    )
+    DEV_LIVENESS_PREVIEW_PUZZLE_MAX_STEPS: int = Field(
+        default=4,
+        ge=1,
+        le=8,
+        description="Maximum number of puzzle steps generated for the developer live preview.",
+    )
+    DEV_LIVENESS_PREVIEW_PUZZLE_TIMEOUT_SECONDS: int = Field(
+        default=60,
+        ge=5,
+        le=300,
+        description="Overall timeout for a preview Biometric Puzzle session.",
+    )
+    DEV_LIVENESS_PREVIEW_ACTIVE_FUSION_BACKGROUND_WEIGHT: float = Field(
+        default=0.40,
+        ge=0.0,
+        le=1.0,
+        description="Default fusion weight for background active evidence when a preview puzzle session is active.",
+    )
+    DEV_LIVENESS_PREVIEW_ACTIVE_FUSION_PUZZLE_WEIGHT: float = Field(
+        default=0.60,
+        ge=0.0,
+        le=1.0,
+        description="Default fusion weight for puzzle active evidence when a preview puzzle session is active.",
+    )
+    DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_MOIRE: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description="Replay fusion weight for moire risk in the live liveness preview.",
+    )
+    DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_REFLECTION: float = Field(
+        default=0.20,
+        ge=0.0,
+        le=1.0,
+        description="Replay fusion weight for reflection risk in the live liveness preview.",
+    )
+    DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_FLICKER: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=1.0,
+        description="Replay fusion weight for flicker risk in the live liveness preview.",
+    )
+    DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_FLASH: float = Field(
+        default=0.30,
+        ge=0.0,
+        le=1.0,
+        description="Replay fusion weight for flash replay risk in the live liveness preview.",
+    )
+    DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_SCREEN_FRAME: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Optional replay fusion weight for screen-frame risk in the live liveness preview.",
+    )
     DEV_LIVENESS_PREVIEW_LOG_EVERY_N_FRAMES: int = Field(
         default=0,
         ge=0,
@@ -690,6 +781,62 @@ class Settings(BaseSettings):
     def should_run_dev_liveness_preview(self) -> bool:
         """Return whether the dev-only live liveness preview may run."""
         return self.is_development() and self.DEV_LIVENESS_PREVIEW
+
+    def is_strict_exam_security_profile(self) -> bool:
+        """Return whether strict exam anti-spoof behavior is enabled."""
+        return False
+
+    def get_liveness_security_profile(self) -> str:
+        """Return the configured liveness security profile name."""
+        return "standard"
+
+    def get_dev_preview_device_replay_weights(self) -> dict[str, float]:
+        """Return effective replay-fusion weights for the developer preview."""
+        return {
+            "moire": self.DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_MOIRE,
+            "reflection": self.DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_REFLECTION,
+            "flicker": self.DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_FLICKER,
+            "flash": self.DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_FLASH,
+            "screen_frame": self.DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_SCREEN_FRAME,
+        }
+
+    def get_dev_preview_active_fusion_weights(self) -> dict[str, float]:
+        """Return normalized active-evidence fusion weights for preview puzzle sessions."""
+        background = max(0.0, float(self.DEV_LIVENESS_PREVIEW_ACTIVE_FUSION_BACKGROUND_WEIGHT))
+        puzzle = max(0.0, float(self.DEV_LIVENESS_PREVIEW_ACTIVE_FUSION_PUZZLE_WEIGHT))
+        total = background + puzzle
+        if total <= 1e-6:
+            return {"background": 0.40, "puzzle": 0.60}
+        return {
+            "background": background / total,
+            "puzzle": puzzle / total,
+        }
+
+    def get_strict_sigmoid_config(self) -> dict[str, float]:
+        """Return the normalized sigmoid parameters used by strict liveness scoring."""
+        return {
+            "midpoint": 0.62,
+            "steepness": 12.0,
+            "scale": 100.0,
+        }
+
+    def get_strict_micro_texture_config(self) -> dict[str, float]:
+        """Return strict-mode micro-texture and moire spoof-support weights."""
+        return {
+            "micro_texture_weight": 1.0,
+            "moire_support_weight": 1.0,
+            "cutout_support_weight": 1.0,
+        }
+
+    def get_strict_exam_decision_config(self) -> dict[str, float]:
+        """Return strict-exam decision-layer penalties and escalation thresholds."""
+        return {
+            "replay_penalty_max": 0.0,
+            "spoof_support_penalty_max": 0.0,
+            "challenge_penalty": 0.0,
+            "hard_block_replay_risk": 1.0,
+            "hard_block_spoof_support": 1.0,
+        }
 
     def get_cors_config(self) -> dict:
         """Get CORS configuration.

@@ -112,7 +112,10 @@ class DeepFaceDetector:
 
             bounding_box: Optional[Tuple[int, int, int, int]] = (x, y, w, h)
             additional_bounding_boxes = tuple(
-                candidate_bbox for candidate_bbox in candidate_bounding_boxes if candidate_bbox != bounding_box
+                candidate_bbox
+                for candidate_bbox in candidate_bounding_boxes
+                if candidate_bbox != bounding_box
+                and not self._is_nested_false_positive(candidate_bbox, bounding_box)
             )
 
             # Extract confidence
@@ -287,3 +290,37 @@ class DeepFaceDetector:
                 len(face_objs) - len(plausible),
             )
         return plausible or face_objs
+
+    @staticmethod
+    def _is_nested_false_positive(
+        candidate_bbox: Tuple[int, int, int, int],
+        primary_bbox: Tuple[int, int, int, int],
+    ) -> bool:
+        cx, cy, cw, ch = candidate_bbox
+        px, py, pw, ph = primary_bbox
+        candidate_area = max(cw * ch, 1)
+        primary_area = max(pw * ph, 1)
+
+        inter_left = max(cx, px)
+        inter_top = max(cy, py)
+        inter_right = min(cx + cw, px + pw)
+        inter_bottom = min(cy + ch, py + ph)
+        inter_width = max(0, inter_right - inter_left)
+        inter_height = max(0, inter_bottom - inter_top)
+        intersection_area = inter_width * inter_height
+        candidate_cover = intersection_area / candidate_area
+        primary_cover = intersection_area / primary_area
+
+        candidate_center_x = cx + (cw / 2.0)
+        candidate_center_y = cy + (ch / 2.0)
+        inside_primary = (
+            px <= candidate_center_x <= (px + pw)
+            and py <= candidate_center_y <= (py + ph)
+        )
+        lower_face_region = candidate_center_y >= (py + ph * 0.48)
+        small_relative_candidate = candidate_area <= (primary_area * 0.45)
+
+        return bool(
+            (inside_primary and candidate_cover >= 0.78 and small_relative_candidate)
+            or (inside_primary and lower_face_region and primary_cover >= 0.10 and small_relative_candidate)
+        )

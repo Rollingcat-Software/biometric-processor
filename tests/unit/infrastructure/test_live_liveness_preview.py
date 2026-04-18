@@ -3,6 +3,7 @@
 from dataclasses import replace
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import pytest
 
@@ -10,12 +11,21 @@ from app.application.services.background_active_reaction_evaluator import (
     BackgroundActiveReactionEvaluator,
     ReactionSignalFrame,
 )
+from app.application.services.cutout_anomaly_detector import CutoutAnomalyDetector
 from app.application.services.device_spoof_risk_evaluator import DeviceSpoofRiskEvaluator
+from app.application.services.flash_spoof_analyzer import FlashSpoofAnalyzer
+from app.application.services.light_challenge_service import LightChallengeService
+from app.application.services.preview_biometric_puzzle import (
+    PreviewBiometricPuzzleController,
+    PreviewPuzzleSummary,
+)
 from app.core.config import Settings
+from app.domain.entities.puzzle import Puzzle, PuzzleDifficulty, PuzzleStep
 from app.infrastructure.ml.liveness.moire_pattern_analysis import analyze_moire_pattern
 from app.tools.live_liveness_preview import (
     FrameMetrics,
     TemporalLivenessAggregator,
+    _is_device_replay_spoof_detected,
 )
 
 
@@ -24,6 +34,13 @@ def _device_spoof(
     moire_risk: float = 0.0,
     reflection_risk: float = 0.0,
     flicker_risk: float = 0.0,
+    flash_response_score: float = 0.0,
+    flash_response_strength: float = 0.0,
+    flash_response_consistency: float = 0.0,
+    flash_replay_risk: float = 0.0,
+    hole_cutout_risk: float = 0.0,
+    focal_blur_anomaly_risk: float = 0.0,
+    cutout_spoof_support: float = 0.0,
     screen_frame_risk: float = 0.0,
     device_replay_risk: float = 0.0,
 ) -> SimpleNamespace:
@@ -31,6 +48,13 @@ def _device_spoof(
         moire_risk=moire_risk,
         reflection_risk=reflection_risk,
         flicker_risk=flicker_risk,
+        flash_response_score=flash_response_score,
+        flash_response_strength=flash_response_strength,
+        flash_response_consistency=flash_response_consistency,
+        flash_replay_risk=flash_replay_risk,
+        hole_cutout_risk=hole_cutout_risk,
+        focal_blur_anomaly_risk=focal_blur_anomaly_risk,
+        cutout_spoof_support=cutout_spoof_support,
         screen_frame_risk=screen_frame_risk,
         device_replay_risk=device_replay_risk,
     )
@@ -104,6 +128,11 @@ def test_device_spoof_risk_evaluator_returns_normalized_scores():
     assert 0.0 <= assessment.moire_risk <= 1.0
     assert 0.0 <= assessment.reflection_risk <= 1.0
     assert 0.0 <= assessment.flicker_risk <= 1.0
+    assert 0.0 <= assessment.flash_response_score <= 1.0
+    assert 0.0 <= assessment.flash_replay_risk <= 1.0
+    assert 0.0 <= assessment.hole_cutout_risk <= 1.0
+    assert 0.0 <= assessment.focal_blur_anomaly_risk <= 1.0
+    assert 0.0 <= assessment.cutout_spoof_support <= 1.0
     assert 0.0 <= assessment.device_replay_risk <= 1.0
 
 
@@ -170,15 +199,131 @@ def test_device_replay_risk_uses_configured_weighted_fusion():
         moire_risk=0.8,
         reflection_risk=0.5,
         flicker_risk=0.4,
+        flash_replay_risk=0.6,
     )
 
     expected = (
         DeviceSpoofRiskEvaluator.DEVICE_REPLAY_MOIRE_WEIGHT * 0.8
         + DeviceSpoofRiskEvaluator.DEVICE_REPLAY_REFLECTION_WEIGHT * 0.5
         + DeviceSpoofRiskEvaluator.DEVICE_REPLAY_FLICKER_WEIGHT * 0.4
+        + DeviceSpoofRiskEvaluator.DEVICE_REPLAY_FLASH_WEIGHT * 0.6
     )
 
     assert combined == pytest.approx(expected)
+
+
+def test_device_spoof_flash_replay_risk_drops_when_face_roi_tracks_flash_response(monkeypatch):
+    evaluator = DeviceSpoofRiskEvaluator(
+        history_size=6,
+        enable_flash_replay=True,
+        flash_interval_seconds=10.0,
+        replay_fusion_weights={
+            "moire": 0.0,
+            "reflection": 0.0,
+            "flicker": 0.0,
+            "flash": 1.0,
+            "screen_frame": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        evaluator._light_challenge_service,
+        "generate_challenge",
+        lambda: {
+            "color": "red",
+            "issued_at": 0.0,
+            "expires_at": 0.5,
+            "duration_ms": 150,
+            "expected_response_window_ms": 500,
+            "minimum_delay_ms": 50,
+            "baseline_required": True,
+            "ready_for_flash": True,
+        },
+    )
+
+    baseline = np.full((32, 32, 3), (45, 45, 45), dtype=np.uint8)
+    response = np.full((32, 32, 3), (45, 45, 98), dtype=np.uint8)
+
+    evaluator.evaluate(frame_bgr=baseline, face_region_bgr=baseline, frame_timestamp=1.00)
+    assessment = evaluator.evaluate(frame_bgr=response, face_region_bgr=response, frame_timestamp=1.12)
+
+    assert assessment.flash_response_strength > 0.0
+    assert assessment.flash_response_score > 0.0
+    assert assessment.flash_replay_risk < 0.7
+    assert assessment.device_replay_risk == pytest.approx(assessment.flash_replay_risk)
+
+
+def test_device_spoof_flash_replay_risk_rises_when_face_roi_does_not_track_flash(monkeypatch):
+    evaluator = DeviceSpoofRiskEvaluator(
+        history_size=6,
+        enable_flash_replay=True,
+        flash_interval_seconds=10.0,
+        replay_fusion_weights={
+            "moire": 0.0,
+            "reflection": 0.0,
+            "flicker": 0.0,
+            "flash": 1.0,
+            "screen_frame": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        evaluator._light_challenge_service,
+        "generate_challenge",
+        lambda: {
+            "color": "green",
+            "issued_at": 0.0,
+            "expires_at": 0.5,
+            "duration_ms": 150,
+            "expected_response_window_ms": 500,
+            "minimum_delay_ms": 50,
+            "baseline_required": True,
+            "ready_for_flash": True,
+        },
+    )
+
+    baseline = np.full((32, 32, 3), (52, 52, 52), dtype=np.uint8)
+    no_response = np.full((32, 32, 3), (52, 52, 52), dtype=np.uint8)
+
+    evaluator.evaluate(frame_bgr=baseline, face_region_bgr=baseline, frame_timestamp=2.00)
+    assessment = evaluator.evaluate(frame_bgr=no_response, face_region_bgr=no_response, frame_timestamp=2.14)
+
+    assert assessment.flash_response_score < 0.2
+    assert assessment.flash_replay_risk > 0.8
+    assert assessment.device_replay_risk == pytest.approx(assessment.flash_replay_risk)
+
+
+def test_light_challenge_service_detects_subtle_red_chroma_shift_from_baseline():
+    service = LightChallengeService(min_color_shift=0.02, colors=("red",))
+    baseline = np.full((32, 32, 3), (84, 96, 108), dtype=np.uint8)
+    response = np.full((32, 32, 3), (88, 97, 123), dtype=np.uint8)
+
+    verification = service.verify_response(
+        frame=response,
+        expected_color="red",
+        flash_timestamp=1.0,
+        frame_timestamp=1.12,
+        baseline_bgr=baseline.mean(axis=(0, 1)).tolist(),
+    )
+
+    assert verification["passed"] is True
+    assert verification["color_shift"] > 0.02
+
+
+def test_flash_spoof_analyzer_color_match_survives_small_roi_translation():
+    analyzer = FlashSpoofAnalyzer()
+    pre = np.full((64, 64, 3), (82, 96, 108), dtype=np.uint8)
+    flash = pre.copy()
+    flash[16:48, 16:48, 2] = np.clip(flash[16:48, 16:48, 2] + 18, 0, 255)
+    flash = np.roll(flash, shift=2, axis=1)
+
+    analysis = analyzer.analyze(
+        pre_flash_bgr=pre,
+        flash_bgr=flash,
+        expected_color="red",
+    )
+
+    assert analysis.flash_color_match_score > 0.10
+    assert analysis.flash_response_strength > 0.10
+
 
 def test_temporal_liveness_aggregator_ignores_device_spoof_values_for_scores():
     aggregator_without_spoof = TemporalLivenessAggregator(window_seconds=2.0, max_entries=10, ema_alpha=0.5)
@@ -516,6 +661,442 @@ def test_background_active_evidence_is_supportive_not_dominant():
     assert result.supported_score >= 84.0
     assert result.supported_score <= 90.0
     assert result.active_weight < 0.22
+
+
+
+def test_preview_biometric_puzzle_controller_preserves_ordered_steps(monkeypatch):
+    controller = PreviewBiometricPuzzleController()
+
+    async def _fake_execute(**kwargs):
+        return Puzzle(
+            steps=(
+                PuzzleStep(action="blink", duration_seconds=5.0, order=0),
+                PuzzleStep(action="smile", duration_seconds=5.0, order=1),
+            ),
+            difficulty=PuzzleDifficulty.STANDARD,
+        )
+
+    monkeypatch.setattr(controller._generate_use_case, "execute", _fake_execute)
+
+    started = controller.start_session()
+    assert started.status == "running"
+    assert started.current_step == "blink"
+
+    first = controller.evaluate(
+        frame_timestamp=1.0,
+        current_frame_details={},
+        temporal_signal_summary={"blink_evidence": 0.85, "smile_evidence": 0.10},
+    )
+    assert first.status == "running"
+    assert first.current_step == "smile"
+    assert first.completed_steps == 1
+    assert first.progress == pytest.approx(0.5)
+
+    second = controller.evaluate(
+        frame_timestamp=1.4,
+        current_frame_details={},
+        temporal_signal_summary={"blink_evidence": 0.05, "smile_evidence": 0.92},
+    )
+    assert second.status == "completed"
+    assert second.success is True
+    assert second.active_evidence == pytest.approx(1.0)
+
+
+def test_temporal_liveness_aggregator_keeps_final_active_equal_to_background_without_puzzle(monkeypatch):
+    monkeypatch.setattr(
+        "app.tools.live_liveness_preview.get_settings",
+        lambda: Settings(_env_file=None, JWT_ENABLED=False, DEV_LIVENESS_PREVIEW_PUZZLE_ENABLED=True),
+    )
+    aggregator = TemporalLivenessAggregator(window_seconds=2.0, max_entries=10, ema_alpha=0.5)
+    monkeypatch.setattr(aggregator, "_evaluate_puzzle", lambda metrics, summary: PreviewPuzzleSummary(
+        status="idle",
+        current_step="-",
+        progress=0.0,
+        completed_steps=0,
+        total_steps=0,
+        active_evidence=0.0,
+        confidence=0.0,
+        success=False,
+        fusion_active=False,
+        sequence_label="-",
+    ))
+
+    result = aggregator.add(_frame_metrics(raw_score=84.0, confidence=0.82, timestamp=1.0))
+
+    assert result.final_active_evidence == pytest.approx(result.background_active_evidence)
+    assert result.final_active_score == pytest.approx(result.background_active_score)
+    assert result.puzzle_status == "idle"
+
+
+def test_temporal_liveness_aggregator_keeps_background_active_score_when_puzzle_is_running(monkeypatch):
+    monkeypatch.setattr(
+        "app.tools.live_liveness_preview.get_settings",
+        lambda: Settings(
+            _env_file=None,
+            JWT_ENABLED=False,
+            DEV_LIVENESS_PREVIEW_PUZZLE_ENABLED=True,
+            DEV_LIVENESS_PREVIEW_ACTIVE_FUSION_BACKGROUND_WEIGHT=0.40,
+            DEV_LIVENESS_PREVIEW_ACTIVE_FUSION_PUZZLE_WEIGHT=0.60,
+        ),
+    )
+    aggregator = TemporalLivenessAggregator(window_seconds=2.0, max_entries=10, ema_alpha=0.5)
+    monkeypatch.setattr(aggregator, "_evaluate_puzzle", lambda metrics, summary: PreviewPuzzleSummary(
+        status="running",
+        current_step="smile",
+        progress=0.5,
+        completed_steps=1,
+        total_steps=2,
+        active_evidence=0.90,
+        confidence=0.80,
+        success=False,
+        fusion_active=True,
+        sequence_label="blink -> smile",
+    ))
+
+    result = aggregator.add(_frame_metrics(raw_score=88.0, confidence=0.85, timestamp=1.0))
+    assert result.puzzle_fusion_active is True
+    assert result.puzzle_current_step == "smile"
+    assert result.puzzle_progress == pytest.approx(0.5)
+    assert result.puzzle_active_evidence == pytest.approx(0.90)
+    assert result.final_active_evidence == pytest.approx(result.background_active_evidence)
+    assert result.final_active_score == pytest.approx(result.background_active_score)
+    assert result.final_supported_score == pytest.approx(result.supported_score)
+
+
+def test_preview_debug_decision_layer_applies_mid_replay_penalty():
+    aggregator = TemporalLivenessAggregator(window_seconds=2.0, baseline_seconds=0.5, max_entries=20, ema_alpha=0.3)
+
+    result = None
+    for index in range(7):
+        result = aggregator.add(
+            replace(
+                _frame_metrics(raw_score=90.0, confidence=0.84, timestamp=1.0 + index * 0.1),
+                details={"smile": 49.0},
+                device_spoof=_device_spoof(device_replay_risk=0.50),
+            )
+        )
+
+    assert result is not None
+    assert result.replay_veto is False
+    assert result.adjusted_score == pytest.approx(result.smoothed_score)
+    assert "HIGH_REPLAY_RISK" in result.suspicion_reasons
+
+
+def test_support_based_spoof_gate_triggers_with_support_count_and_compact_reflection():
+    frame = replace(
+        _frame_metrics(raw_score=88.0, confidence=0.84, timestamp=1.0),
+        details={
+            "reflection_risk": 0.70,
+            "reflection_compact_highlight_score": 0.73,
+            "preview_spoof_support_streak": 8.0,
+            "cutout_spoof_support": 0.68,
+            "hole_cutout_risk": 0.64,
+            "focal_blur_anomaly_risk": 0.60,
+            "screen_frame_face_center_inside": 0.18,
+            "uniface_score": 40.0,
+        },
+        device_spoof=_device_spoof(
+            reflection_risk=0.70,
+            cutout_spoof_support=0.68,
+            hole_cutout_risk=0.64,
+            focal_blur_anomaly_risk=0.60,
+            device_replay_risk=0.58,
+        ),
+    )
+
+    assert _is_device_replay_spoof_detected(frame) is True
+
+
+def test_support_based_spoof_gate_does_not_trigger_below_compact_reflection_threshold():
+    frame = replace(
+        _frame_metrics(raw_score=88.0, confidence=0.84, timestamp=1.0),
+        details={
+            "reflection_risk": 0.70,
+            "reflection_compact_highlight_score": 0.62,
+            "preview_spoof_support_streak": 8.0,
+            "screen_frame_risk": 0.72,
+        },
+        device_spoof=_device_spoof(
+            reflection_risk=0.70,
+            screen_frame_risk=0.72,
+            device_replay_risk=0.58,
+        ),
+    )
+
+    assert _is_device_replay_spoof_detected(frame) is False
+
+
+def test_preview_debug_decision_layer_replay_veto_forces_likely_spoof():
+    aggregator = TemporalLivenessAggregator(window_seconds=2.0, baseline_seconds=0.5, max_entries=20, ema_alpha=0.3)
+
+    result = None
+    for index in range(7):
+        result = aggregator.add(
+            replace(
+                _frame_metrics(raw_score=92.0, confidence=0.86, timestamp=1.0 + index * 0.1),
+                details={
+                    "smile": 49.0,
+                    "moire_risk": 0.78,
+                    "moire_fft_risk": 0.62,
+                    "moire_orientation_selectivity": 0.38,
+                },
+                device_spoof=_device_spoof(
+                    moire_risk=0.78,
+                    device_replay_risk=0.84,
+                ),
+            )
+        )
+
+    assert result is not None
+    assert result.replay_veto is True
+    assert result.decision_state == "LIKELY_SPOOF"
+    assert "HIGH_REPLAY_RISK" in result.suspicion_reasons
+
+
+def test_preview_debug_decision_layer_high_reflection_alone_does_not_trigger_replay_veto():
+    aggregator = TemporalLivenessAggregator(window_seconds=2.0, baseline_seconds=0.5, max_entries=20, ema_alpha=0.3)
+
+    result = aggregator.add(
+        replace(
+            _frame_metrics(raw_score=72.0, confidence=0.82, timestamp=1.0),
+            details={
+                "reflection_risk": 0.88,
+                "reflection_compact_highlight_score": 0.84,
+            },
+            device_spoof=_device_spoof(
+                reflection_risk=0.88,
+                device_replay_risk=0.77,
+            ),
+        )
+    )
+
+    assert result.replay_veto is False
+
+
+def test_preview_debug_decision_layer_uses_standard_active_thresholds(monkeypatch):
+    monkeypatch.setattr(
+        "app.tools.live_liveness_preview.get_settings",
+        lambda: Settings(_env_file=None, JWT_ENABLED=False),
+    )
+    aggregator = TemporalLivenessAggregator(window_seconds=2.0, baseline_seconds=0.5, max_entries=20, ema_alpha=0.3)
+    monkeypatch.setattr(
+        aggregator,
+        "_evaluate_puzzle",
+        lambda metrics, summary: PreviewPuzzleSummary(
+            status="idle",
+            current_step="-",
+            progress=0.0,
+            completed_steps=0,
+            total_steps=0,
+            active_evidence=0.0,
+            confidence=0.0,
+            success=False,
+            fusion_active=False,
+            sequence_label="-",
+        ),
+    )
+
+    result = None
+    for index in range(7):
+        result = aggregator.add(
+            replace(
+                _frame_metrics(raw_score=91.0, confidence=0.88, timestamp=1.0 + index * 0.1),
+                details={"smile": 49.0},
+            )
+        )
+
+    assert result is not None
+    assert result.final_active_evidence > 0.25
+    assert result.debug_active_score < 20.0
+    assert result.decision_state == "LIKELY_SPOOF"
+
+
+def test_positive_flash_response_is_exposed_in_preview_decision(monkeypatch):
+    monkeypatch.setattr(
+        "app.tools.live_liveness_preview.get_settings",
+        lambda: Settings(_env_file=None, JWT_ENABLED=False),
+    )
+    aggregator = TemporalLivenessAggregator(window_seconds=2.0, baseline_seconds=0.5, max_entries=20, ema_alpha=0.3)
+
+    result = aggregator.add(
+        replace(
+            _frame_metrics(raw_score=86.0, confidence=0.84, timestamp=1.0),
+            details={
+                "flash_response_sample_count": 2.0,
+            },
+            device_spoof=_device_spoof(
+                flash_response_score=0.72,
+                flash_replay_risk=0.22,
+                device_replay_risk=0.41,
+            ),
+        )
+    )
+
+    assert result.preview_flash_live_response is True
+    assert result.preview_flash_replay_support is False
+    assert "FLASH_LIVE_RESPONSE" in result.suspicion_reasons
+
+
+def test_flash_replay_risk_with_compact_reflection_forces_likely_spoof():
+    aggregator = TemporalLivenessAggregator(window_seconds=2.0, baseline_seconds=0.5, max_entries=20, ema_alpha=0.3)
+
+    result = aggregator.add(
+        replace(
+            _frame_metrics(raw_score=86.0, confidence=0.84, timestamp=1.0),
+            details={
+                "flash_response_sample_count": 2.0,
+                "reflection_compact_highlight_score": 0.72,
+                "smile": 49.0,
+            },
+            device_spoof=_device_spoof(
+                flash_response_score=0.18,
+                flash_replay_risk=0.82,
+                device_replay_risk=0.41,
+            ),
+        )
+    )
+
+    assert "FLASH_REPLAY_RISK" in result.suspicion_reasons
+    assert result.decision_state == "LIKELY_SPOOF"
+
+
+def test_preview_debug_decision_layer_triggers_puzzle_and_failed_puzzle_forces_spoof(monkeypatch):
+    monkeypatch.setattr(
+        "app.tools.live_liveness_preview.get_settings",
+        lambda: Settings(_env_file=None, JWT_ENABLED=False, DEV_LIVENESS_PREVIEW_PUZZLE_ENABLED=True),
+    )
+    aggregator = TemporalLivenessAggregator(window_seconds=2.0, baseline_seconds=0.5, max_entries=20, ema_alpha=0.3)
+    monkeypatch.setattr(
+        aggregator,
+        "start_puzzle_session",
+        lambda: PreviewPuzzleSummary(
+            status="running",
+            current_step="blink",
+            progress=0.0,
+            completed_steps=0,
+            total_steps=2,
+            active_evidence=0.0,
+            confidence=0.0,
+            success=False,
+            fusion_active=True,
+            sequence_label="blink -> smile",
+        ),
+    )
+    monkeypatch.setattr(
+        aggregator,
+        "_evaluate_puzzle",
+        lambda metrics, summary: PreviewPuzzleSummary(
+            status="failed",
+            current_step="smile",
+            progress=0.5,
+            completed_steps=1,
+            total_steps=2,
+            active_evidence=0.40,
+            confidence=0.45,
+            success=False,
+            fusion_active=True,
+            sequence_label="blink -> smile",
+        ),
+    )
+
+    result = aggregator.add(
+        replace(
+            _frame_metrics(raw_score=88.0, confidence=0.82, timestamp=1.0),
+            details={"smile": 49.0},
+            device_spoof=_device_spoof(device_replay_risk=0.84),
+        )
+    )
+
+    assert result.puzzle_required is True
+    assert result.puzzle_result == pytest.approx(0.40)
+    assert result.debug_active_score == pytest.approx(result.final_active_score)
+    assert result.decision_state == "LIKELY_SPOOF"
+    assert "PUZZLE_FAILED" in result.suspicion_reasons
+
+
+def test_preview_debug_decision_layer_failed_puzzle_without_strong_replay_does_not_force_spoof(monkeypatch):
+    monkeypatch.setattr(
+        "app.tools.live_liveness_preview.get_settings",
+        lambda: Settings(_env_file=None, JWT_ENABLED=False, DEV_LIVENESS_PREVIEW_PUZZLE_ENABLED=True),
+    )
+    aggregator = TemporalLivenessAggregator(window_seconds=2.0, baseline_seconds=0.5, max_entries=20, ema_alpha=0.3)
+    monkeypatch.setattr(
+        aggregator,
+        "_evaluate_puzzle",
+        lambda metrics, summary: PreviewPuzzleSummary(
+            status="failed",
+            current_step="smile",
+            progress=0.5,
+            completed_steps=1,
+            total_steps=2,
+            active_evidence=0.40,
+            confidence=0.45,
+            success=False,
+            fusion_active=True,
+            sequence_label="blink -> smile",
+        ),
+    )
+
+    result = aggregator.add(
+        replace(
+            _frame_metrics(raw_score=88.0, confidence=0.82, timestamp=1.0),
+            details={"smile": 49.0},
+            device_spoof=_device_spoof(device_replay_risk=0.45),
+        )
+    )
+
+    assert result.puzzle_result == pytest.approx(0.40)
+    assert "PUZZLE_FAILED" in result.suspicion_reasons
+    assert result.decision_state != "LIKELY_SPOOF"
+
+
+def test_preview_debug_decision_layer_adds_post_no_face_cooldown():
+    aggregator = TemporalLivenessAggregator(window_seconds=2.0, baseline_seconds=0.5, max_entries=20, ema_alpha=0.3)
+
+    no_face_result = aggregator.add(
+        replace(
+            _frame_metrics(raw_score=0.0, confidence=0.0, is_live=False, timestamp=1.0),
+            face_detected=False,
+            details={},
+        )
+    )
+    live_result = aggregator.add(
+        replace(
+            _frame_metrics(raw_score=92.0, confidence=0.86, timestamp=1.1),
+            details={"smile": 49.0},
+        )
+    )
+
+    assert no_face_result.decision_state == "NO_FACE"
+    assert live_result.decision_state == "INSUFFICIENT_EVIDENCE"
+    assert live_result.no_face_cooldown_active is True
+    assert "POST_NO_FACE_COOLDOWN" in live_result.suspicion_reasons
+
+
+
+def test_cutout_anomaly_detector_rises_for_dark_flat_eye_mouth_cutouts():
+    detector = CutoutAnomalyDetector()
+
+    natural = np.full((160, 160, 3), 165, dtype=np.uint8)
+    natural[30:65, 30:130] = 150
+    natural[95:125, 45:115] = 145
+    natural = cv2.GaussianBlur(natural, (7, 7), 0)
+
+    cutout = natural.copy()
+    cv2.rectangle(cutout, (28, 34), (68, 60), (18, 18, 18), -1)
+    cv2.rectangle(cutout, (92, 34), (132, 60), (18, 18, 18), -1)
+    cv2.rectangle(cutout, (48, 98), (112, 124), (12, 12, 12), -1)
+    cv2.rectangle(cutout, (26, 32), (70, 62), (245, 245, 245), 2)
+    cv2.rectangle(cutout, (90, 32), (134, 62), (245, 245, 245), 2)
+    cv2.rectangle(cutout, (46, 96), (114, 126), (245, 245, 245), 2)
+
+    natural_assessment = detector.analyze(natural)
+    cutout_assessment = detector.analyze(cutout)
+
+    assert cutout_assessment.hole_cutout_risk > natural_assessment.hole_cutout_risk
+    assert cutout_assessment.focal_blur_anomaly_risk > natural_assessment.focal_blur_anomaly_risk
+    assert cutout_assessment.cutout_spoof_support > natural_assessment.cutout_spoof_support
+
 
 
 def test_background_active_score_is_low_without_meaningful_evidence():

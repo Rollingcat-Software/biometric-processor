@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from statistics import pvariance
 from typing import Any, Optional
 
@@ -28,7 +28,11 @@ from app.application.services.live_session_baseline_calibrator import (
     LiveSessionBaselineCalibrator,
     SessionBaseline,
 )
-from app.core.config import Settings
+from app.application.services.preview_biometric_puzzle import (
+    PreviewBiometricPuzzleController,
+    PreviewPuzzleSummary,
+)
+from app.core.config import Settings, get_settings
 from app.domain.entities.liveness_result import LivenessResult
 from app.domain.exceptions.face_errors import FaceNotDetectedError
 from app.domain.exceptions.liveness_errors import LivenessCheckError
@@ -37,6 +41,7 @@ from app.domain.interfaces.landmark_detector import ILandmarkDetector
 from app.domain.interfaces.liveness_detector import ILivenessDetector
 
 logger = logging.getLogger(__name__)
+PREVIEW_SECURITY_PROFILE = "standard"
 
 
 @dataclass(frozen=True)
@@ -152,8 +157,47 @@ class AggregatedMetrics:
     persisted_secondary: float
     persisted_reaction_evidence: float
     raw_active_evidence: float
+    background_active_evidence: float
+    background_active_score: float
     combined_active_evidence: float
     combined_active_score: float
+    active_score_mapping_mode: str
+    active_score_standard_mapping: float
+    active_score_strict_mapping: float
+    puzzle_active_evidence: float
+    puzzle_progress: float
+    puzzle_current_step: str
+    puzzle_completed_steps: int
+    puzzle_total_steps: int
+    puzzle_status: str
+    puzzle_confidence: float
+    puzzle_success: bool
+    puzzle_fusion_active: bool
+    puzzle_sequence_label: str
+    final_active_evidence: float
+    final_active_score: float
+    final_active_score_mapping_mode: str
+    final_active_score_standard_mapping: float
+    final_active_score_strict_mapping: float
+    final_supported_score: float
+    strict_decision_score: float
+    strict_replay_penalty: float
+    strict_spoof_support_penalty: float
+    strict_challenge_penalty: float
+    strict_hard_block: bool
+    strict_hard_replay_cues: float
+    replay_veto: bool
+    adjusted_score: float
+    debug_active_score: float
+    puzzle_required: bool
+    puzzle_result: Optional[float]
+    puzzle_trigger_reasons: tuple[str, ...]
+    preview_flash_live_response: bool
+    preview_flash_replay_support: bool
+    suspicion_reasons: tuple[str, ...]
+    unstable_signal: bool
+    no_face_cooldown_active: bool
+    stable_live_hold_active: bool
     passive_window_score: float
     active_frame_score_mean: float
     active_frame_evidence_mean: float
@@ -189,12 +233,26 @@ class TemporalLivenessAggregator:
         self._face_return_grace_seconds = face_return_grace_seconds
         self._face_loss_reset_seconds = face_loss_reset_seconds
         self._min_trusted_face_size_ratio = min_trusted_face_size_ratio
+        self._settings = get_settings()
         self._background_reaction_evaluator = BackgroundActiveReactionEvaluator(
             decay_seconds=active_decay_seconds,
             min_face_size_ratio=min_trusted_face_size_ratio,
+            security_profile=PREVIEW_SECURITY_PROFILE,
+            strict_sigmoid_midpoint=self._settings.get_strict_sigmoid_config()["midpoint"],
+            strict_sigmoid_steepness=self._settings.get_strict_sigmoid_config()["steepness"],
+            strict_sigmoid_scale=self._settings.get_strict_sigmoid_config()["scale"],
         )
         self._baseline_calibrator = LiveSessionBaselineCalibrator(baseline_seconds=baseline_seconds)
+        self._puzzle_controller = (
+            PreviewBiometricPuzzleController()
+            if self._settings.DEV_LIVENESS_PREVIEW_PUZZLE_ENABLED
+            else None
+        )
         self._ema_score: Optional[float] = None
+        self._debug_decision_history: deque[str] = deque(maxlen=8)
+        self._last_debug_decision_state: Optional[str] = None
+        self._no_face_live_cooldown_frames = 0
+        self._stable_live_hold_frames = 0
 
     def add(self, metrics: FrameMetrics) -> AggregatedMetrics:
         """Add a frame result and return the updated temporal summary."""
@@ -248,6 +306,27 @@ class TemporalLivenessAggregator:
             passive_window_score=passive_window_score,
             session_baseline=session_baseline,
         )
+        puzzle_summary = self._evaluate_puzzle(metrics, temporal_signal_summary)
+        temporal_signal_summary.update(
+            _compute_preview_active_fusion(
+                background_active_evidence=float(temporal_signal_summary.get("combined_active_evidence") or 0.0),
+                background_active_score=float(temporal_signal_summary.get("combined_active_score") or 0.0),
+                background_supported_score=float(temporal_signal_summary.get("supported_score") or 0.0),
+                passive_window_score=passive_window_score,
+                puzzle_summary=puzzle_summary,
+                settings=self._settings,
+            )
+        )
+        decision_base_score = _effective_decision_score(
+            smoothed_score=smoothed_score,
+            temporal_signal_summary=temporal_signal_summary,
+        )
+        strict_decision_layers = _preview_strict_exam_decision_layers(
+            current_frame=metrics,
+            temporal_signal_summary=temporal_signal_summary,
+            base_decision_score=decision_base_score,
+        )
+        temporal_signal_summary.update(strict_decision_layers)
         low_quality = _is_low_quality(metrics)
         sufficient_evidence = _has_sufficient_evidence(
             recent_entries=effective_entries,
@@ -290,27 +369,53 @@ class TemporalLivenessAggregator:
             blur_adequacy=blur_adequacy,
             brightness_adequacy=brightness_adequacy,
         )
+        temporal_signal_summary.update(
+            self._maybe_trigger_debug_puzzle(
+                metrics=metrics,
+                temporal_signal_summary=temporal_signal_summary,
+                smoothed_score=smoothed_score,
+                window_confidence=window_confidence,
+            )
+        )
+        debug_decision_summary = self._apply_debug_decision_layer(
+            metrics=metrics,
+            temporal_signal_summary=temporal_signal_summary,
+            smoothed_score=smoothed_score,
+            sufficient_evidence=sufficient_evidence,
+            window_confidence=window_confidence,
+            low_quality=low_quality,
+            face_present_ratio=face_present_ratio,
+            consecutive_no_face_frames=consecutive_no_face_frames,
+        )
+        temporal_signal_summary.update(debug_decision_summary)
         decision_state = _resolve_decision_state(
             recent_entries=effective_entries,
             current_frame=metrics,
+            temporal_signal_summary=temporal_signal_summary,
             face_present_ratio=face_present_ratio,
             consecutive_no_face_frames=consecutive_no_face_frames,
             warm_recovery=warm_recovery,
             low_quality=low_quality,
             sufficient_evidence=sufficient_evidence,
             baseline_sample_count=session_baseline.sample_count if session_baseline else 0,
-            smoothed_score=smoothed_score,
+            smoothed_score=float(debug_decision_summary["adjusted_score"]),
             decision_confidence=window_confidence,
             no_face_consecutive_threshold=self._no_face_consecutive_threshold,
         )
+        self._update_debug_state(decision_state)
         aggregation_elapsed_ms = (time.perf_counter() - aggregation_started) * 1000.0
+        aggregate_field_names = {item.name for item in fields(AggregatedMetrics)}
         return AggregatedMetrics(
             sample_count=len(effective_entries),
             window_seconds=self._window_seconds,
             decision_state=decision_state,
             ema_score=float(self._ema_score),
             score_mean=score_mean,
-            supported_score=float(temporal_signal_summary["supported_score"]),
+            supported_score=float(
+                temporal_signal_summary.get("final_supported_score")
+                if temporal_signal_summary.get("final_supported_score") is not None
+                else temporal_signal_summary["supported_score"]
+            ),
             smoothed_score=smoothed_score,
             window_confidence=window_confidence,
             score_variance=score_variance,
@@ -335,7 +440,7 @@ class TemporalLivenessAggregator:
             **{
                 key: value
                 for key, value in temporal_signal_summary.items()
-                if key not in {"supported_score", "background_reaction_ms"}
+                if key in aggregate_field_names and key not in {"supported_score", "background_reaction_ms"}
             },
         )
 
@@ -367,7 +472,259 @@ class TemporalLivenessAggregator:
             return
         self._background_reaction_evaluator.reset()
         self._baseline_calibrator.reset()
+        if self._puzzle_controller is not None:
+            self._puzzle_controller.reset()
         self._ema_score = None
+        self._debug_decision_history.clear()
+        self._last_debug_decision_state = None
+        self._no_face_live_cooldown_frames = 0
+        self._stable_live_hold_frames = 0
+
+    def start_puzzle_session(self) -> Optional[PreviewPuzzleSummary]:
+        """Start a preview puzzle session using the configured defaults."""
+        if self._puzzle_controller is None:
+            return None
+        return self._puzzle_controller.start_session(
+            difficulty=self._settings.DEV_LIVENESS_PREVIEW_PUZZLE_DIFFICULTY,
+            min_steps=self._settings.DEV_LIVENESS_PREVIEW_PUZZLE_MIN_STEPS,
+            max_steps=self._settings.DEV_LIVENESS_PREVIEW_PUZZLE_MAX_STEPS,
+            timeout_seconds=self._settings.DEV_LIVENESS_PREVIEW_PUZZLE_TIMEOUT_SECONDS,
+        )
+
+    def reset_puzzle_session(self) -> None:
+        """Reset the current preview puzzle session."""
+        if self._puzzle_controller is not None:
+            self._puzzle_controller.reset()
+
+    def _evaluate_puzzle(
+        self,
+        metrics: FrameMetrics,
+        temporal_signal_summary: dict[str, Any],
+    ) -> PreviewPuzzleSummary:
+        if self._puzzle_controller is None:
+            return _idle_puzzle_summary()
+        return self._puzzle_controller.evaluate(
+            frame_timestamp=metrics.timestamp,
+            current_frame_details=metrics.details,
+            temporal_signal_summary=temporal_signal_summary,
+        )
+
+    def _maybe_trigger_debug_puzzle(
+        self,
+        *,
+        metrics: FrameMetrics,
+        temporal_signal_summary: dict[str, Any],
+        smoothed_score: float,
+        window_confidence: float,
+    ) -> dict[str, Any]:
+        puzzle_status = str(temporal_signal_summary.get("puzzle_status") or "idle")
+        current_active_score = float(temporal_signal_summary.get("final_active_score") or 0.0)
+        device_replay_risk = _device_spoof_value(metrics, "device_replay_risk") or 0.0
+        sudden_face_return = bool(
+            self._last_debug_decision_state == "NO_FACE"
+            and metrics.face_detected
+            and metrics.is_live
+        )
+        unstable_signal = _decision_history_unstable(list(self._debug_decision_history))
+        trigger_reasons: list[str] = []
+        if device_replay_risk > 0.5:
+            trigger_reasons.append("HIGH_REPLAY_RISK")
+        if smoothed_score > 80.0 and current_active_score < 60.0:
+            trigger_reasons.append("LOW_ACTIVE_SCORE")
+        if window_confidence < 0.6:
+            trigger_reasons.append("LOW_CONFIDENCE")
+        if sudden_face_return:
+            trigger_reasons.append("SUDDEN_FACE_RETURN")
+        if unstable_signal:
+            trigger_reasons.append("UNSTABLE_SIGNAL")
+
+        puzzle_required = bool(trigger_reasons)
+        if (
+            puzzle_required
+            and puzzle_status == "idle"
+            and self._puzzle_controller is not None
+        ):
+            started = self.start_puzzle_session()
+            if started is not None:
+                temporal_signal_summary.update(
+                    _compute_preview_active_fusion(
+                        background_active_evidence=float(temporal_signal_summary.get("combined_active_evidence") or 0.0),
+                        background_active_score=float(temporal_signal_summary.get("combined_active_score") or 0.0),
+                        background_supported_score=float(temporal_signal_summary.get("supported_score") or 0.0),
+                        passive_window_score=float(temporal_signal_summary.get("passive_window_score") or 0.0),
+                        puzzle_summary=started,
+                        settings=self._settings,
+                    )
+                )
+                temporal_signal_summary.update(
+                    {
+                        "puzzle_progress": started.progress,
+                        "puzzle_current_step": started.current_step,
+                        "puzzle_completed_steps": started.completed_steps,
+                        "puzzle_total_steps": started.total_steps,
+                        "puzzle_status": started.status,
+                        "puzzle_confidence": started.confidence,
+                        "puzzle_success": started.success,
+                        "puzzle_fusion_active": started.fusion_active,
+                        "puzzle_sequence_label": started.sequence_label,
+                    }
+                )
+                puzzle_status = started.status
+
+        puzzle_result = _current_puzzle_result_from_summary(temporal_signal_summary)
+        return {
+            "puzzle_required": puzzle_required,
+            "puzzle_trigger_reasons": tuple(trigger_reasons),
+            "puzzle_result": puzzle_result,
+            "unstable_signal": unstable_signal,
+        }
+
+    def _apply_debug_decision_layer(
+        self,
+        *,
+        metrics: FrameMetrics,
+        temporal_signal_summary: dict[str, Any],
+        smoothed_score: float,
+        sufficient_evidence: bool,
+        window_confidence: float,
+        low_quality: bool,
+        face_present_ratio: float,
+        consecutive_no_face_frames: int,
+    ) -> dict[str, Any]:
+        device_replay_risk = _device_spoof_value(metrics, "device_replay_risk") or 0.0
+        hard_replay_cues = sum(
+            (
+                int(_is_moire_high(metrics)),
+                int(_is_flicker_high(metrics)),
+                int(_is_confirmed_screen_device(metrics)),
+                int(_is_flash_replay_high(metrics)),
+            )
+        )
+        replay_veto = bool(
+            device_replay_risk > 0.85
+            or (device_replay_risk > 0.75 and hard_replay_cues >= 1)
+        )
+        base_score = float(smoothed_score)
+        adjusted_score = base_score
+        flash_response_score = _device_spoof_value(metrics, "flash_response_score") or 0.0
+        flash_replay_risk = _device_spoof_value(metrics, "flash_replay_risk") or 0.0
+        flash_samples = _maybe_float(metrics.details.get("flash_response_sample_count")) or 0.0
+        positive_flash_response = bool(
+            flash_samples >= 1.0
+            and flash_response_score >= 0.55
+            and flash_replay_risk <= 0.45
+        )
+        negative_flash_response = bool(
+            flash_samples >= 1.0
+            and flash_replay_risk >= 0.70
+            and flash_response_score <= 0.30
+        )
+        replay_penalty = 0.0
+        if not replay_veto and device_replay_risk >= 0.80:
+            replay_penalty = 0.30 * device_replay_risk
+            if positive_flash_response:
+                replay_penalty *= 0.35
+        adjusted_score = base_score * (1.0 - replay_penalty)
+
+        puzzle_result = _current_puzzle_result_from_summary(temporal_signal_summary)
+        puzzle_failed = puzzle_result is not None and puzzle_result < 0.5
+        strong_replay_for_puzzle_failure = bool(
+            replay_veto
+            or _is_device_replay_spoof_detected(metrics)
+            or device_replay_risk >= 0.70
+        )
+        debug_active_score = float(temporal_signal_summary.get("final_active_score") or 0.0)
+        live_active_ready = bool(debug_active_score > 60.0)
+        reflect_compact = _maybe_float(metrics.details.get("reflection_compact_highlight_score")) or 0.0
+
+        suspicion_reasons: list[str] = []
+        if replay_veto:
+            suspicion_reasons.append("HIGH_REPLAY_RISK")
+        elif device_replay_risk > 0.4:
+            suspicion_reasons.append("HIGH_REPLAY_RISK")
+        if negative_flash_response:
+            suspicion_reasons.append("FLASH_REPLAY_RISK")
+        elif positive_flash_response:
+            suspicion_reasons.append("FLASH_LIVE_RESPONSE")
+        if not live_active_ready:
+            suspicion_reasons.append("LOW_ACTIVE_SCORE")
+        if window_confidence < 0.6:
+            suspicion_reasons.append("LOW_CONFIDENCE")
+        if bool(temporal_signal_summary.get("unstable_signal")):
+            suspicion_reasons.append("UNSTABLE_SIGNAL")
+        if puzzle_failed:
+            suspicion_reasons.append("PUZZLE_FAILED")
+
+        no_face = (
+            not metrics.face_detected
+            and not metrics.held_from_previous
+        ) or (
+            consecutive_no_face_frames >= self._no_face_consecutive_threshold
+            or face_present_ratio <= 0.15
+        )
+        if no_face:
+            raw_decision = "NO_FACE"
+        elif low_quality:
+            raw_decision = "LOW_QUALITY"
+        elif replay_veto:
+            raw_decision = "LIKELY_SPOOF"
+        elif negative_flash_response and reflect_compact >= 0.65:
+            raw_decision = "LIKELY_SPOOF"
+        elif puzzle_failed and strong_replay_for_puzzle_failure:
+            raw_decision = "LIKELY_SPOOF"
+        elif not sufficient_evidence:
+            raw_decision = "INSUFFICIENT_EVIDENCE"
+        elif adjusted_score > 75.0 and live_active_ready and window_confidence > 0.6:
+            raw_decision = "LIKELY_LIVE"
+        else:
+            raw_decision = "LIKELY_SPOOF"
+
+        no_face_cooldown_active = self._no_face_live_cooldown_frames > 0
+        if raw_decision == "LIKELY_LIVE" and no_face_cooldown_active:
+            raw_decision = "INSUFFICIENT_EVIDENCE"
+            suspicion_reasons.append("POST_NO_FACE_COOLDOWN")
+
+        stable_live_hold_active = False
+        if (
+            raw_decision == "LIKELY_SPOOF"
+            and self._stable_live_hold_frames > 0
+            and metrics.face_detected
+            and not replay_veto
+            and (puzzle_result is None or puzzle_result >= 0.5)
+            and window_confidence >= 0.52
+        ):
+            raw_decision = "LIKELY_LIVE"
+            stable_live_hold_active = True
+            suspicion_reasons.append("LIVE_HOLD")
+
+        return {
+            "replay_veto": replay_veto,
+            "adjusted_score": adjusted_score,
+            "debug_active_score": debug_active_score,
+            "puzzle_required": bool(temporal_signal_summary.get("puzzle_required")),
+            "puzzle_result": puzzle_result,
+            "preview_flash_live_response": positive_flash_response,
+            "preview_flash_replay_support": negative_flash_response,
+            "suspicion_reasons": tuple(dict.fromkeys(suspicion_reasons)),
+            "unstable_signal": bool(temporal_signal_summary.get("unstable_signal")),
+            "no_face_cooldown_active": no_face_cooldown_active,
+            "stable_live_hold_active": stable_live_hold_active,
+            "debug_decision_state": raw_decision,
+        }
+
+    def _update_debug_state(self, decision_state: str) -> None:
+        self._debug_decision_history.append(decision_state)
+        self._last_debug_decision_state = decision_state
+        if decision_state == "NO_FACE":
+            self._no_face_live_cooldown_frames = 6
+            self._stable_live_hold_frames = 0
+            return
+        if self._no_face_live_cooldown_frames > 0:
+            self._no_face_live_cooldown_frames -= 1
+        if decision_state == "LIKELY_LIVE":
+            self._stable_live_hold_frames = 4
+        elif self._stable_live_hold_frames > 0:
+            self._stable_live_hold_frames -= 1
 
 
 class LivenessPreviewFrameProcessor:
@@ -391,11 +748,23 @@ class LivenessPreviewFrameProcessor:
         self._cached_liveness_result: Optional[LivenessResult] = None
         self._last_successful_metrics: Optional[FrameMetrics] = None
         self._last_successful_frame_index = 0
-        self._device_spoof_risk_evaluator = DeviceSpoofRiskEvaluator()
+        self._device_spoof_risk_evaluator = DeviceSpoofRiskEvaluator(
+            enable_flash_replay=settings.DEV_LIVENESS_PREVIEW_FLASH_REPLAY_ENABLED,
+            flash_interval_seconds=settings.DEV_LIVENESS_PREVIEW_FLASH_INTERVAL_SECONDS,
+            flash_history_size=settings.DEV_LIVENESS_PREVIEW_FLASH_HISTORY_SIZE,
+            replay_fusion_weights={
+                "moire": settings.DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_MOIRE,
+                "reflection": settings.DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_REFLECTION,
+                "flicker": settings.DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_FLICKER,
+                "flash": settings.DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_FLASH,
+                "screen_frame": settings.DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_SCREEN_FRAME,
+            },
+        )
 
     def process_frame(self, frame: np.ndarray) -> FrameMetrics:
         """Synchronously process one frame via the async detector APIs."""
         self._frame_index += 1
+        frame_timestamp = time.time()
         profiling: dict[str, float] = {}
         reused_face_detection = False
         reused_landmarks = False
@@ -587,10 +956,15 @@ class LivenessPreviewFrameProcessor:
             reused_landmarks=reused_landmarks,
             reused_liveness=reused_liveness,
             inference_scale=inference_scale,
+            frame_timestamp=frame_timestamp,
         )
         self._last_successful_metrics = metrics
         self._last_successful_frame_index = self._frame_index
         return metrics
+
+    def get_flash_visual_state(self) -> dict[str, float | str | bool | None]:
+        """Expose the current flash debug state to the preview renderer."""
+        return self._device_spoof_risk_evaluator.get_flash_visual_state()
 
     def _should_reuse_cached_box_on_miss(self) -> bool:
         if self._cached_bounding_box is None or self._last_successful_metrics is None:
@@ -630,6 +1004,11 @@ class LivenessPreviewFrameProcessor:
             depth_temporal_flat_risk,
         )
         updated_details["preview_spoof_support_count"] = _spoof_support_count_from_details(updated_details)
+        updated_details["preview_moire_raw_metric"] = _maybe_float(updated_details.get("moire_score")) or 0.0
+        updated_details["preview_moire_normalized_risk"] = _maybe_float(updated_details.get("moire_risk")) or 0.0
+        updated_details["preview_strict_moire_support_contribution"] = 0.0
+        updated_details["preview_strict_cutout_support_contribution"] = 0.0
+        updated_details["preview_weighted_spoof_support_score"] = _weighted_spoof_support_score_from_details(updated_details)
         updated_details["preview_spoof_support_streak"] = _spoof_support_streak(
             [*recent_entries, replace(metrics, details=updated_details, device_spoof=updated_device_spoof)]
         )
@@ -831,6 +1210,7 @@ class LivenessPreviewFrameProcessor:
         reused_landmarks: bool = False,
         reused_liveness: bool = False,
         inference_scale: float = 1.0,
+        frame_timestamp: Optional[float] = None,
     ) -> FrameMetrics:
         details = dict(result.details)
         details.update(face_signal_metrics.to_dict())
@@ -850,11 +1230,15 @@ class LivenessPreviewFrameProcessor:
             mar_current=mar_current,
             yaw_current=yaw_current,
         )
-        frame_active_score = min(100.0, max(0.0, 100.0 * float(np.sqrt(max(frame_active_evidence, 0.0)))))
+        standard_frame_active_score = _standard_active_support_score(frame_active_evidence)
+        frame_active_score = standard_frame_active_score
         details["detector_active_score"] = detector_active_score
         details["detector_active_evidence"] = detector_active_evidence
         details["preview_frame_active_score"] = frame_active_score
         details["preview_frame_active_evidence"] = frame_active_evidence
+        details["preview_frame_active_score_standard"] = standard_frame_active_score
+        details["preview_frame_active_score_mapping"] = "standard_sqrt"
+        details["security_profile"] = PREVIEW_SECURITY_PROFILE
         details["preview_bbox_x"] = float(bounding_box[0])
         details["preview_bbox_y"] = float(bounding_box[1])
         details["preview_bbox_w"] = float(bounding_box[2])
@@ -867,10 +1251,11 @@ class LivenessPreviewFrameProcessor:
             frame_bgr=frame,
             face_region_bgr=face_region,
             face_bounding_box=bounding_box,
+            frame_timestamp=frame_timestamp,
         )
         details.update(device_spoof.to_dict())
         return FrameMetrics(
-            timestamp=time.time(),
+            timestamp=float(frame_timestamp or time.time()),
             face_detected=True,
             is_live=result.is_live,
             raw_score=result.score,
@@ -992,7 +1377,8 @@ class LiveLivenessPreview:
     def run(self) -> None:
         """Open the webcam and continuously render preview overlays."""
         logger.info(
-            "Starting dev liveness preview: camera_index=%s window_seconds=%.2f max_entries=%s ema_alpha=%.2f infer_max_side=%s detect_every=%s landmark_every=%s liveness_every=%s",
+            "Starting dev liveness preview: profile=%s camera_index=%s window_seconds=%.2f max_entries=%s ema_alpha=%.2f infer_max_side=%s detect_every=%s landmark_every=%s liveness_every=%s",
+            PREVIEW_SECURITY_PROFILE,
             self._settings.DEV_LIVENESS_PREVIEW_CAMERA_INDEX,
             self._temporal_aggregator.window_seconds,
             self._temporal_aggregator.max_entries,
@@ -1051,6 +1437,20 @@ class LiveLivenessPreview:
                 )
 
                 key = cv2.waitKey(1) & 0xFF
+                if key == ord("p"):
+                    puzzle_summary = self._temporal_aggregator.start_puzzle_session()
+                    if puzzle_summary is not None:
+                        logger.info(
+                            "dev_liveness_preview puzzle_start status=%s steps=%s sequence=%s",
+                            puzzle_summary.status,
+                            puzzle_summary.total_steps,
+                            puzzle_summary.sequence_label,
+                        )
+                    continue
+                if key == ord("r"):
+                    self._temporal_aggregator.reset_puzzle_session()
+                    logger.info("dev_liveness_preview puzzle_reset")
+                    continue
                 if key in (ord("q"), 27) or self._window_closed():
                     break
         finally:
@@ -1077,12 +1477,12 @@ class LiveLivenessPreview:
             return
 
         logger.info(
-            "dev_liveness_preview frame=%s raw=%.1f smooth=%.1f active_support=%.2f active_score=%.1f conf=%.2f stable_live=%.2f display_fps=%.1f inference_fps=%.1f capture_ms=%.1f detect_ms=%.1f landmark_ms=%.1f liveness_ms=%.1f bg_ms=%.1f agg_ms=%.1f overlay_ms=%.1f reuse=det:%s lm:%s liv:%s scale=%.2f face=%s error=%s",
+            "dev_liveness_preview frame=%s raw=%.1f smooth=%.1f final_active=%.2f final_active_score=%.1f conf=%.2f stable_live=%.2f display_fps=%.1f inference_fps=%.1f capture_ms=%.1f detect_ms=%.1f landmark_ms=%.1f liveness_ms=%.1f bg_ms=%.1f agg_ms=%.1f overlay_ms=%.1f reuse=det:%s lm:%s liv:%s scale=%.2f face=%s error=%s",
             frame_count,
             frame_metrics.raw_score,
             aggregate.smoothed_score,
-            aggregate.combined_active_evidence,
-            aggregate.combined_active_score,
+            aggregate.final_active_evidence,
+            aggregate.final_active_score,
             aggregate.window_confidence,
             aggregate.stable_live_ratio,
             display_fps,
@@ -1105,6 +1505,7 @@ class LiveLivenessPreview:
             "dev_liveness_preview metrics %s",
             " | ".join(
                 [
+                    f"profile={PREVIEW_SECURITY_PROFILE}",
                     f"status={aggregate.decision_state}",
                     f"frame_score={frame_metrics.raw_score:.1f}",
                     f"smoothed={aggregate.smoothed_score:.1f}",
@@ -1114,15 +1515,47 @@ class LiveLivenessPreview:
                     f"passive_win={aggregate.passive_window_score:.1f}",
                     f"frame_active={frame_metrics.active_score:.1f}",
                     f"frame_active_ev={_format_optional(frame_metrics.active_evidence)}",
+                    f"frame_active_std={_format_optional(_maybe_float(frame_metrics.details.get('preview_frame_active_score_standard')))}",
                     f"detector_active={_format_optional(_maybe_float(frame_metrics.details.get('detector_active_score')))}",
                     f"detector_active_ev={_format_optional(_maybe_float(frame_metrics.details.get('detector_active_evidence')))}",
                     f"bg_active_raw={_format_optional(aggregate.raw_active_evidence)}",
-                    f"bg_active_temp={_format_optional(aggregate.combined_active_evidence)}",
+                    f"bg_active_temp={_format_optional(aggregate.background_active_evidence)}",
+                    f"bg_active_score={aggregate.active_score_standard_mapping:0.1f}",
+                    f"puzzle_status={aggregate.puzzle_status}",
+                    f"puzzle_step={aggregate.puzzle_current_step}",
+                    f"puzzle_progress={aggregate.puzzle_progress:0.2f}",
+                    f"puzzle_ev={aggregate.puzzle_active_evidence:0.2f}",
+                    f"puzzle_conf={aggregate.puzzle_confidence:0.2f}",
+                    f"fusion_active={int(aggregate.puzzle_fusion_active)}",
+                    f"final_active={aggregate.final_active_evidence:0.2f}",
+                    f"final_active_score={aggregate.final_active_score:0.1f}",
+                    f"final_supported={aggregate.final_supported_score:0.1f}",
+                    f"replay_veto={int(aggregate.replay_veto)}",
+                    f"adjusted_score={aggregate.adjusted_score:0.1f}",
+                    f"debug_active={aggregate.debug_active_score:0.1f}",
+                    f"puzzle_required={int(aggregate.puzzle_required)}",
+                    f"puzzle_result={_format_optional(aggregate.puzzle_result)}",
+                    f"flash_live_resp={int(aggregate.preview_flash_live_response)}",
+                    f"flash_replay_sup={int(aggregate.preview_flash_replay_support)}",
+                    f"flash_match={_format_optional(_maybe_float(frame_metrics.details.get('flash_color_match_score')))}",
+                    f"flash_specular={_format_optional(_maybe_float(frame_metrics.details.get('specular_hotspot_risk')))}",
+                    f"flash_diffuse={_format_optional(_maybe_float(frame_metrics.details.get('diffuse_response_score')))}",
+                    f"flash_geom={_format_optional(_maybe_float(frame_metrics.details.get('geometry_response_consistency')))}",
+                    f"flash_planar={_format_optional(_maybe_float(frame_metrics.details.get('planar_surface_risk')))}",
+                    f"unstable_signal={int(aggregate.unstable_signal)}",
+                    f"no_face_cooldown={int(aggregate.no_face_cooldown_active)}",
+                    f"stable_live_hold={int(aggregate.stable_live_hold_active)}",
+                    f"suspicion={','.join(aggregate.suspicion_reasons) if aggregate.suspicion_reasons else '-'}",
                     f"moire={_format_optional(_device_spoof_value(frame_metrics, 'moire_risk'))}",
+                    f"moire_raw={_format_optional(_maybe_float(frame_metrics.details.get('preview_moire_raw_metric')))}",
                     f"moire_sel={_format_optional(_maybe_float(frame_metrics.details.get('moire_orientation_selectivity')))}",
                     f"moire_fft={_format_optional(_maybe_float(frame_metrics.details.get('moire_fft_risk')))}",
+                    f"spoof_support_w={_format_optional(_maybe_float(frame_metrics.details.get('preview_weighted_spoof_support_score')))}",
                     f"depth_flat={_format_optional(_maybe_float(frame_metrics.details.get('preview_depth_flat_combined_risk')))}",
                     f"reflection={_format_optional(_device_spoof_value(frame_metrics, 'reflection_risk'))}",
+                    f"cutout={_format_optional(_device_spoof_value(frame_metrics, 'cutout_spoof_support'))}",
+                    f"hole_cutout={_format_optional(_device_spoof_value(frame_metrics, 'hole_cutout_risk'))}",
+                    f"focal_blur={_format_optional(_device_spoof_value(frame_metrics, 'focal_blur_anomaly_risk'))}",
                     f"screen_frame={_format_optional(_device_spoof_value(frame_metrics, 'screen_frame_risk'))}",
                     f"screen_conf={int(_is_confirmed_screen_device(frame_metrics))}",
                     f"reflect_clip={_format_optional(_maybe_float(frame_metrics.details.get('reflection_clipped_ratio')))}",
@@ -1135,6 +1568,7 @@ class LiveLivenessPreview:
                     f"depth_hi={int(_is_depth_flat(frame_metrics))}",
                     f"reflect_hi={int(_is_reflection_high(frame_metrics))}",
                     f"flicker_hi={int(_is_flicker_high(frame_metrics))}",
+                    f"cutout_hi={int(_is_cutout_high(frame_metrics))}",
                     f"uniface_neg={int(_is_uniface_negative(frame_metrics))}",
                     f"spoof_support={_spoof_support_count(frame_metrics)}",
                     f"spoof_streak={int(_maybe_float(frame_metrics.details.get('preview_spoof_support_streak')) or 0.0)}",
@@ -1223,10 +1657,14 @@ class LiveLivenessPreview:
         inference_fps: float,
     ) -> np.ndarray:
         overlay = frame.copy()
+        self._apply_flash_debug_stimulus(overlay)
+        flash_state = self._frame_processor.get_flash_visual_state()
+        flash_visible = bool(flash_state.get("enabled") and flash_state.get("visible"))
         status_color = _status_color(frame_metrics, aggregate)
         status_text = _status_text(frame_metrics, aggregate)
         lines = [
             ("STATUS", status_text),
+            ("Profile", PREVIEW_SECURITY_PROFILE),
             ("Frame score", f"{frame_metrics.raw_score:5.1f}"),
             ("Smoothed", f"{aggregate.smoothed_score:5.1f}"),
             ("Frame conf.", f"{frame_metrics.frame_confidence:0.2f}"),
@@ -1234,8 +1672,16 @@ class LiveLivenessPreview:
             ("Decision", aggregate.decision_state),
             ("Passive", f"{frame_metrics.passive_score:5.1f} / win {aggregate.passive_window_score:5.1f}"),
             ("Frame active", f"{frame_metrics.active_score:5.1f}"),
-            ("BG active temp", f"{aggregate.combined_active_score:5.1f}"),
+            ("BG active", f"{aggregate.background_active_score:5.1f}"),
+            ("Puzzle", f"{aggregate.puzzle_status} / {aggregate.puzzle_current_step}"),
+            ("Final active", f"{aggregate.final_active_score:5.1f}"),
             ("Device replay", _format_optional(_device_spoof_value(frame_metrics, "device_replay_risk"))),
+            ("Replay veto", str(int(aggregate.replay_veto))),
+            ("Adjusted score", f"{aggregate.adjusted_score:5.1f}"),
+            ("Puzzle req.", str(int(aggregate.puzzle_required))),
+            ("Puzzle result", _format_optional(aggregate.puzzle_result)),
+            ("Flash live", str(int(aggregate.preview_flash_live_response))),
+            ("Flash replay", str(int(aggregate.preview_flash_replay_support))),
             ("Face", "YES" if frame_metrics.face_detected else "NO"),
             ("Window", f"{aggregate.window_seconds:0.1f}s / {aggregate.sample_count} samples"),
             ("FPS", f"{display_fps:0.1f} / inf {inference_fps:0.1f}"),
@@ -1245,6 +1691,7 @@ class LiveLivenessPreview:
             lines.extend(
                 [
                     ("Moire risk", _format_optional(_device_spoof_value(frame_metrics, "moire_risk"))),
+                    ("Moire raw", _format_optional(_maybe_float(frame_metrics.details.get("preview_moire_raw_metric")))),
                     ("Moire select.", _format_optional(_maybe_float(frame_metrics.details.get("moire_orientation_selectivity")))),
                     ("Moire FFT", _format_optional(_maybe_float(frame_metrics.details.get("moire_fft_risk")))),
                     ("Moire std mean", _format_optional(_maybe_float(frame_metrics.details.get("moire_response_std_mean")))),
@@ -1252,27 +1699,72 @@ class LiveLivenessPreview:
                     ("Depth range", _format_optional(_maybe_float(frame_metrics.details.get("depth_range")))),
                     ("Nose-cheek dz", _format_optional(_maybe_float(frame_metrics.details.get("nose_cheek_depth_delta")))),
                     ("Reflection risk", _format_optional(_device_spoof_value(frame_metrics, "reflection_risk"))),
+                    ("Cutout risk", _format_optional(_device_spoof_value(frame_metrics, "cutout_spoof_support"))),
+                    ("Hole cutout", _format_optional(_device_spoof_value(frame_metrics, "hole_cutout_risk"))),
+                    ("Focal blur", _format_optional(_device_spoof_value(frame_metrics, "focal_blur_anomaly_risk"))),
                     ("Screen frame", _format_optional(_device_spoof_value(frame_metrics, "screen_frame_risk"))),
                     ("Screen confirmed", str(int(_is_confirmed_screen_device(frame_metrics)))),
                     ("Flicker risk", _format_optional(_device_spoof_value(frame_metrics, "flicker_risk"))),
+                    ("Flash score", _format_optional(_device_spoof_value(frame_metrics, "flash_response_score"))),
+                    ("Flash strength", _format_optional(_device_spoof_value(frame_metrics, "flash_response_strength"))),
+                    ("Flash consist.", _format_optional(_device_spoof_value(frame_metrics, "flash_response_consistency"))),
+                    ("Flash risk", _format_optional(_device_spoof_value(frame_metrics, "flash_replay_risk"))),
+                    ("Flash phase", str(frame_metrics.details.get("flash_challenge_phase") or "-")),
+                    ("Flash color", str(frame_metrics.details.get("flash_challenge_color") or "-")),
+                    ("Flash visible", str(int(_maybe_float(frame_metrics.details.get("flash_challenge_visible")) or 0.0))),
+                    ("Flash samples", str(int(_maybe_float(frame_metrics.details.get("flash_response_sample_count")) or 0.0))),
+                    ("Flash match", _format_optional(_maybe_float(frame_metrics.details.get("flash_color_match_score")))),
+                    ("Flash specular", _format_optional(_maybe_float(frame_metrics.details.get("specular_hotspot_risk")))),
+                    ("Flash diffuse", _format_optional(_maybe_float(frame_metrics.details.get("diffuse_response_score")))),
+                    ("Flash geom.", _format_optional(_maybe_float(frame_metrics.details.get("geometry_response_consistency")))),
+                    ("Flash planar", _format_optional(_maybe_float(frame_metrics.details.get("planar_surface_risk")))),
+                    ("Pre-flash cap.", str(int(_maybe_float(frame_metrics.details.get("pre_flash_captured")) or 0.0))),
+                    ("Flash frame cap.", str(int(_maybe_float(frame_metrics.details.get("flash_frame_captured")) or 0.0))),
                     ("Device replay", _format_optional(_device_spoof_value(frame_metrics, "device_replay_risk"))),
                     ("Screen hi", str(int(_is_screen_frame_high(frame_metrics)))),
                     ("Moire hi", str(int(_is_moire_high(frame_metrics)))),
                     ("Depth hi", str(int(_is_depth_flat(frame_metrics)))),
                     ("Reflect hi", str(int(_is_reflection_high(frame_metrics)))),
                     ("Flicker hi", str(int(_is_flicker_high(frame_metrics)))),
+                    ("Flash hi", str(int(_is_flash_replay_high(frame_metrics)))),
+                    ("Cutout hi", str(int(_is_cutout_high(frame_metrics)))),
                     ("UniFace neg", str(int(_is_uniface_negative(frame_metrics)))),
                     ("Spoof support", str(_spoof_support_count(frame_metrics))),
+                    ("Spoof support w.", _format_optional(_maybe_float(frame_metrics.details.get("preview_weighted_spoof_support_score")))),
                     ("Spoof streak", str(int(_maybe_float(frame_metrics.details.get("preview_spoof_support_streak")) or 0.0))),
                     ("Spoof gate", str(int(_is_device_replay_spoof_detected(frame_metrics)))),
                     ("BBox", _format_bbox(frame_metrics)),
                     ("BBox reuse", str(int(frame_metrics.reused_face_detection))),
                     ("--- Liveness Debug ---", ""),
                     ("Frame active ev.", _format_optional(frame_metrics.active_evidence)),
+                    ("Frame act score", _format_optional(_maybe_float(frame_metrics.details.get("preview_frame_active_score_standard")))),
                     ("Detector active", _format_optional(_maybe_float(frame_metrics.details.get("detector_active_score")))),
                     ("Detector act ev.", _format_optional(_maybe_float(frame_metrics.details.get("detector_active_evidence")))),
                     ("BG active raw", _format_optional(aggregate.raw_active_evidence)),
-                    ("BG active temp", _format_optional(aggregate.combined_active_evidence)),
+                    ("BG active temp", _format_optional(aggregate.background_active_evidence)),
+                    ("BG act score", f"{aggregate.active_score_standard_mapping:0.1f}"),
+                    ("Puzzle status", aggregate.puzzle_status),
+                    ("Puzzle step", aggregate.puzzle_current_step),
+                    ("Puzzle progress", f"{aggregate.puzzle_completed_steps}/{aggregate.puzzle_total_steps} ({aggregate.puzzle_progress:0.2f})"),
+                    ("Puzzle seq.", aggregate.puzzle_sequence_label),
+                    ("Puzzle ev.", f"{aggregate.puzzle_active_evidence:0.2f}"),
+                    ("Puzzle conf.", f"{aggregate.puzzle_confidence:0.2f}"),
+                    ("Puzzle success", str(int(aggregate.puzzle_success))),
+                    ("Fusion active", str(int(aggregate.puzzle_fusion_active))),
+                    ("Final active ev.", f"{aggregate.final_active_evidence:0.2f}"),
+                    ("Final act score", f"{aggregate.final_active_score:0.1f}"),
+                    ("Final support", f"{aggregate.final_supported_score:0.1f}"),
+                    ("Replay veto", str(int(aggregate.replay_veto))),
+                    ("Adjusted score", f"{aggregate.adjusted_score:0.1f}"),
+                    ("Debug active", f"{aggregate.debug_active_score:0.1f}"),
+                    ("Puzzle required", str(int(aggregate.puzzle_required))),
+                    ("Puzzle result", _format_optional(aggregate.puzzle_result)),
+                    ("Flash live resp.", str(int(aggregate.preview_flash_live_response))),
+                    ("Flash replay sup.", str(int(aggregate.preview_flash_replay_support))),
+                    ("Unstable signal", str(int(aggregate.unstable_signal))),
+                    ("No-face cooldown", str(int(aggregate.no_face_cooldown_active))),
+                    ("Stable live hold", str(int(aggregate.stable_live_hold_active))),
+                    ("Suspicion", ", ".join(aggregate.suspicion_reasons) if aggregate.suspicion_reasons else "-"),
                     ("Frame conf. mean", f"{aggregate.frame_confidence_mean:0.2f}"),
                     ("Directional agr.", _format_optional(frame_metrics.directional_agreement)),
                     ("Face quality", _format_optional(frame_metrics.face_quality)),
@@ -1332,18 +1824,22 @@ class LiveLivenessPreview:
                     ("Quality", "LOW" if aggregate.low_quality else "OK"),
                     ("BG mode", frame_metrics.background_active_mode),
                     ("BG detect", "YES" if frame_metrics.background_active_detected else "NO"),
+                    ("Controls", "P=start puzzle R=reset Q=quit"),
                 ]
             )
 
+        rendered_lines = lines if not flash_visible else lines[:8]
+        panel_width = 540 if not flash_visible else 280
         panel_bottom = min(
             overlay.shape[0] - 6,
-            10 + len(lines) * self.OVERLAY_LINE_HEIGHT + (30 if frame_metrics.error else 0),
+            10 + len(rendered_lines) * self.OVERLAY_LINE_HEIGHT + (30 if frame_metrics.error else 0),
         )
-        cv2.rectangle(overlay, (6, 4), (540, panel_bottom), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.42, frame, 0.58, 0, overlay)
+        if not flash_visible:
+            cv2.rectangle(overlay, (6, 4), (panel_width, panel_bottom), (0, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.42, frame, 0.58, 0, overlay)
 
         y = 18
-        for index, (label, value) in enumerate(lines):
+        for index, (label, value) in enumerate(rendered_lines):
             color = status_color if index == 0 else (0, 0, 0)
             if label.startswith("--- "):
                 color = (40, 40, 40)
@@ -1358,6 +1854,18 @@ class LiveLivenessPreview:
                 cv2.LINE_AA,
             )
             y += self.OVERLAY_LINE_HEIGHT
+
+        if flash_visible:
+            cv2.putText(
+                overlay,
+                f"FLASH {str(flash_state.get('color') or '-').upper()}",
+                (max(20, overlay.shape[1] // 2 - 110), max(70, overlay.shape[0] - 28)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.0,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
 
         if frame_metrics.error:
             cv2.putText(
@@ -1375,6 +1883,32 @@ class LiveLivenessPreview:
         border_color = status_color
         cv2.rectangle(overlay, (0, 0), (overlay.shape[1] - 1, overlay.shape[0] - 1), border_color, 4)
         return overlay
+
+    def _apply_flash_debug_stimulus(self, overlay: np.ndarray) -> None:
+        flash_state = self._frame_processor.get_flash_visual_state()
+        if not flash_state.get("enabled") or not flash_state.get("visible"):
+            return
+        color_name = str(flash_state.get("color") or "white")
+        bgr = {
+            "red": (40, 40, 255),
+            "green": (60, 255, 60),
+            "blue": (255, 90, 40),
+            "yellow": (40, 255, 255),
+            "white": (255, 255, 255),
+        }.get(color_name, (255, 255, 255))
+        stimulus = overlay.copy()
+        cv2.rectangle(stimulus, (0, 0), (overlay.shape[1] - 1, overlay.shape[0] - 1), bgr, -1)
+        cv2.addWeighted(stimulus, 0.84, overlay, 0.16, 0, overlay)
+        cv2.putText(
+            overlay,
+            f"FLASH {color_name.upper()}",
+            (max(20, overlay.shape[1] // 2 - 90), 36),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 0, 0) if color_name == "white" else (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
 
     def _draw_face_bbox(
         self,
@@ -1541,21 +2075,36 @@ def _is_device_replay_spoof_detected(frame_metrics: FrameMetrics) -> bool:
 
     device_replay_risk = getattr(frame_metrics.device_spoof, "device_replay_risk", None) or 0.0
     reflection_risk = getattr(frame_metrics.device_spoof, "reflection_risk", None) or 0.0
+    flash_replay_risk = getattr(frame_metrics.device_spoof, "flash_replay_risk", None) or 0.0
     screen_frame_risk = getattr(frame_metrics.device_spoof, "screen_frame_risk", None) or 0.0
     reflect_compact = float(
         frame_metrics.details.get("reflection_compact_highlight_score") or 0.0
     )
     face_center_inside = float(frame_metrics.details.get("screen_frame_face_center_inside") or 0.0)
-    support_count = _spoof_support_count(frame_metrics)
+    flash_response_score = float(frame_metrics.details.get("flash_response_score") or 0.0)
+    flash_samples = float(frame_metrics.details.get("flash_response_sample_count") or 0.0)
+    weighted_support_score = _weighted_spoof_support_score_from_details(frame_metrics.details)
     support_streak = int(_maybe_float(frame_metrics.details.get("preview_spoof_support_streak")) or 0.0)
-    uniface_negative = _is_uniface_negative(frame_metrics)
-    depth_flat = _is_depth_flat(frame_metrics)
     confirmed_screen = _is_confirmed_screen_device(frame_metrics)
+    hard_replay_cues = sum(
+        (
+            int(_is_moire_high(frame_metrics)),
+            int(_is_flicker_high(frame_metrics)),
+            int(confirmed_screen),
+            int(_is_flash_replay_high(frame_metrics)),
+        )
+    )
 
     hard_reflection_rule = (
         reflect_compact >= 0.50
         and reflection_risk >= 0.60
         and device_replay_risk >= 0.75
+        and (
+            _is_screen_frame_supportive(frame_metrics)
+            or _is_moire_high(frame_metrics)
+            or _is_flash_replay_high(frame_metrics)
+            or _is_flicker_high(frame_metrics)
+        )
     )
     hard_confirmed_screen_rule = confirmed_screen and face_center_inside >= 0.55
     hard_screen_rule = (
@@ -1563,12 +2112,19 @@ def _is_device_replay_spoof_detected(frame_metrics: FrameMetrics) -> bool:
         and device_replay_risk >= 0.68
         and face_center_inside >= 0.5
     )
+    hard_flash_rule = (
+        flash_samples >= 1.0
+        and flash_replay_risk >= 0.78
+        and flash_response_score <= 0.22
+        and device_replay_risk >= 0.58
+    )
     live_motion_override = _has_strong_live_override(frame_metrics)
     strong_spoof_corroboration = _has_strong_spoof_corroboration(frame_metrics)
     support_based_rule = (
         device_replay_risk >= 0.48
-        and support_count >= 2
+        and weighted_support_score >= 2.0
         and support_streak >= 4
+        and hard_replay_cues >= 1
         and strong_spoof_corroboration
         and not (live_motion_override and not hard_reflection_rule and not hard_screen_rule)
     )
@@ -1577,6 +2133,7 @@ def _is_device_replay_spoof_detected(frame_metrics: FrameMetrics) -> bool:
         hard_reflection_rule
         or hard_confirmed_screen_rule
         or hard_screen_rule
+        or hard_flash_rule
         or support_based_rule
     )
 
@@ -1632,7 +2189,10 @@ def _is_moire_high(frame_metrics: FrameMetrics) -> bool:
     moire_risk = _device_spoof_value(frame_metrics, "moire_risk") or 0.0
     moire_fft = _maybe_float(frame_metrics.details.get("moire_fft_risk")) or 0.0
     moire_selectivity = _maybe_float(frame_metrics.details.get("moire_orientation_selectivity")) or 0.0
-    return moire_risk >= 0.70 and (moire_fft >= 0.55 or moire_selectivity >= 0.35)
+    return moire_risk >= 0.70 and (
+        moire_fft >= 0.55
+        or moire_selectivity >= 0.35
+    )
 
 
 def _is_reflection_high(frame_metrics: FrameMetrics) -> bool:
@@ -1661,6 +2221,19 @@ def _is_flicker_high(frame_metrics: FrameMetrics) -> bool:
     return (_device_spoof_value(frame_metrics, "flicker_risk") or 0.0) >= 0.70
 
 
+def _is_flash_replay_high(frame_metrics: FrameMetrics) -> bool:
+    return (_device_spoof_value(frame_metrics, "flash_replay_risk") or 0.0) >= 0.70
+
+
+def _is_cutout_high(frame_metrics: FrameMetrics) -> bool:
+    hole_cutout_risk = _device_spoof_value(frame_metrics, "hole_cutout_risk") or 0.0
+    focal_blur_risk = _device_spoof_value(frame_metrics, "focal_blur_anomaly_risk") or 0.0
+    cutout_support = _device_spoof_value(frame_metrics, "cutout_spoof_support") or 0.0
+    return cutout_support >= 0.62 or (
+        hole_cutout_risk >= 0.64 and focal_blur_risk >= 0.50
+    )
+
+
 def _is_depth_flat(frame_metrics: FrameMetrics) -> bool:
     return (_maybe_float(frame_metrics.details.get("preview_depth_flat_combined_risk")) or 0.0) >= 0.72
 
@@ -1681,15 +2254,69 @@ def _spoof_support_count(frame_metrics: FrameMetrics) -> int:
 
 
 def _spoof_support_count_from_details(details: dict[str, Any]) -> int:
+    strict_exam = _is_strict_exam_profile(details)
     support_flags = (
         _is_detail_screen_frame_supportive(details),
         _is_detail_moire_high(details),
         _is_detail_reflection_high(details),
         _is_detail_flicker_high(details),
+        _is_detail_flash_replay_high(details),
+        strict_exam and _is_detail_cutout_high(details),
         _is_detail_uniface_negative(details),
         _is_detail_depth_flat(details),
     )
     return int(sum(1 for flag in support_flags if flag))
+
+
+def _strict_moire_support_contribution_from_details(details: dict[str, Any]) -> float:
+    if not _is_strict_exam_profile(details):
+        return 0.0
+    moire_risk = _maybe_float(details.get("moire_risk")) or 0.0
+    moire_fft_risk = _maybe_float(details.get("moire_fft_risk")) or 0.0
+    moire_selectivity = _maybe_float(details.get("moire_orientation_selectivity")) or 0.0
+    normalized_selectivity = _normalize(moire_selectivity, 0.20, 0.45)
+    moire_support_strength = _clamp01(
+        0.50 * moire_risk
+        + 0.30 * moire_fft_risk
+        + 0.20 * normalized_selectivity
+    ) or 0.0
+    config = get_settings().get_strict_micro_texture_config()
+    return float(config["moire_support_weight"] * moire_support_strength)
+
+
+def _strict_cutout_support_contribution_from_details(details: dict[str, Any]) -> float:
+    if not _is_strict_exam_profile(details):
+        return 0.0
+    hole_cutout_risk = _maybe_float(details.get("hole_cutout_risk")) or 0.0
+    focal_blur_risk = _maybe_float(details.get("focal_blur_anomaly_risk")) or 0.0
+    cutout_support = _maybe_float(details.get("cutout_spoof_support")) or 0.0
+    cutout_strength = _clamp01(
+        0.30 * hole_cutout_risk
+        + 0.25 * focal_blur_risk
+        + 0.45 * cutout_support
+    ) or 0.0
+    config = get_settings().get_strict_micro_texture_config()
+    return float(config["cutout_support_weight"] * cutout_strength)
+
+
+def _weighted_spoof_support_score_from_details(details: dict[str, Any]) -> float:
+    base_support_count = float(_spoof_support_count_from_details(details))
+    strict_moire_contribution = _strict_moire_support_contribution_from_details(details)
+    strict_cutout_contribution = _strict_cutout_support_contribution_from_details(details)
+    weighted_score = base_support_count
+    if strict_moire_contribution > 0.0:
+        weighted_score += (
+            max(0.0, strict_moire_contribution - 1.0)
+            if _is_detail_moire_high(details)
+            else strict_moire_contribution
+        )
+    if strict_cutout_contribution > 0.0:
+        weighted_score += (
+            max(0.0, strict_cutout_contribution - 1.0)
+            if _is_detail_cutout_high(details)
+            else strict_cutout_contribution
+        )
+    return weighted_score
 
 
 def _spoof_support_streak(entries: list[FrameMetrics]) -> int:
@@ -1711,13 +2338,9 @@ def _is_support_based_spoof_candidate_from_details(
     details: dict[str, Any],
     device_spoof: DeviceSpoofRiskAssessment,
 ) -> bool:
-    device_replay_risk = float(device_spoof.device_replay_risk or 0.0)
     support_count = _spoof_support_count_from_details(details)
-    return (
-        device_replay_risk >= 0.48
-        and support_count >= 2
-        and _has_strong_spoof_corroboration_from_details(details)
-    )
+    reflect_compact = _maybe_float(details.get("reflection_compact_highlight_score")) or 0.0
+    return support_count >= 2 and reflect_compact >= 0.65
 
 
 def _compute_depth_temporal_flat_risk(entries: list[FrameMetrics]) -> float:
@@ -1762,10 +2385,14 @@ def _compute_depth_temporal_flat_risk(entries: list[FrameMetrics]) -> float:
 
 
 def _is_detail_moire_high(details: dict[str, Any]) -> bool:
+    strict_exam = _is_strict_exam_profile(details)
     moire_risk = _maybe_float(details.get("moire_risk")) or 0.0
     moire_fft = _maybe_float(details.get("moire_fft_risk")) or 0.0
     moire_selectivity = _maybe_float(details.get("moire_orientation_selectivity")) or 0.0
-    return moire_risk >= 0.70 and (moire_fft >= 0.55 or moire_selectivity >= 0.35)
+    return moire_risk >= (0.62 if strict_exam else 0.70) and (
+        moire_fft >= (0.48 if strict_exam else 0.55)
+        or moire_selectivity >= (0.30 if strict_exam else 0.35)
+    )
 
 
 def _is_detail_reflection_high(details: dict[str, Any]) -> bool:
@@ -1778,12 +2405,26 @@ def _is_detail_flicker_high(details: dict[str, Any]) -> bool:
     return (_maybe_float(details.get("flicker_risk")) or 0.0) >= 0.70
 
 
+def _is_detail_flash_replay_high(details: dict[str, Any]) -> bool:
+    return (_maybe_float(details.get("flash_replay_risk")) or 0.0) >= 0.70
+
+
+def _is_detail_cutout_high(details: dict[str, Any]) -> bool:
+    hole_cutout_risk = _maybe_float(details.get("hole_cutout_risk")) or 0.0
+    focal_blur_risk = _maybe_float(details.get("focal_blur_anomaly_risk")) or 0.0
+    cutout_support = _maybe_float(details.get("cutout_spoof_support")) or 0.0
+    return cutout_support >= 0.62 or (hole_cutout_risk >= 0.64 and focal_blur_risk >= 0.50)
+
+
 def _has_strong_spoof_corroboration_from_details(details: dict[str, Any]) -> bool:
+    strict_exam = _is_strict_exam_profile(details)
     return bool(
         _is_detail_moire_high(details)
         or _is_detail_depth_flat(details)
         or _is_detail_uniface_negative(details)
         or _is_detail_screen_frame_high(details)
+        or _is_detail_flash_replay_high(details)
+        or (strict_exam and _is_detail_cutout_high(details))
         or (_is_detail_screen_frame_supportive(details) and _is_detail_flicker_high(details))
     )
 
@@ -1832,6 +2473,124 @@ def _normalize(value: float, low: float, high: float) -> float:
     return max(0.0, min(1.0, (float(value) - low) / (high - low)))
 
 
+def _normalized_sigmoid_score(
+    evidence: float,
+    *,
+    midpoint: float,
+    steepness: float,
+    scale: float,
+) -> float:
+    clipped_evidence = max(0.0, min(1.0, float(evidence)))
+
+    def _sigmoid(x: float) -> float:
+        return 1.0 / (1.0 + float(np.exp(-steepness * (x - midpoint))))
+
+    low = _sigmoid(0.0)
+    high = _sigmoid(1.0)
+    if high - low <= 1e-6:
+        return 0.0
+    normalized = (_sigmoid(clipped_evidence) - low) / (high - low)
+    return max(0.0, min(float(scale), float(scale) * normalized))
+
+
+def _idle_puzzle_summary() -> PreviewPuzzleSummary:
+    return PreviewPuzzleSummary(
+        status="idle",
+        current_step="-",
+        progress=0.0,
+        completed_steps=0,
+        total_steps=0,
+        active_evidence=0.0,
+        confidence=0.0,
+        success=False,
+        fusion_active=False,
+        sequence_label="-",
+    )
+
+
+def _decision_history_unstable(history: list[str]) -> bool:
+    recent = [state for state in history[-6:] if state]
+    if len(recent) < 4:
+        return False
+    transitions = sum(1 for previous, current in zip(recent, recent[1:]) if previous != current)
+    return transitions >= 3 or len(set(recent)) >= 3
+
+
+def _current_puzzle_result_from_summary(temporal_signal_summary: dict[str, Any]) -> Optional[float]:
+    puzzle_status = str(temporal_signal_summary.get("puzzle_status") or "idle")
+    puzzle_required = bool(temporal_signal_summary.get("puzzle_required"))
+    if puzzle_status == "idle" and not puzzle_required:
+        return None
+    return float(temporal_signal_summary.get("puzzle_active_evidence") or 0.0)
+
+
+def _compute_preview_active_fusion(
+    *,
+    background_active_evidence: float,
+    background_active_score: float,
+    background_supported_score: float,
+    passive_window_score: float,
+    puzzle_summary: PreviewPuzzleSummary,
+    settings: Settings,
+) -> dict[str, Any]:
+    background_evidence = _clamp01(background_active_evidence) or 0.0
+    background_score = max(0.0, min(100.0, float(background_active_score)))
+    puzzle_evidence = _clamp01(puzzle_summary.active_evidence) or 0.0
+    final_active_evidence = background_evidence
+    fusion_active = bool(puzzle_summary.fusion_active)
+
+    final_active_score_standard = _standard_active_support_score(final_active_evidence)
+    final_active_score_mapping_mode = "standard_sqrt"
+    final_active_score = final_active_score_standard
+
+    final_supported_score = float(background_supported_score)
+
+    return {
+        "background_active_evidence": background_evidence,
+        "background_active_score": background_score,
+        "puzzle_active_evidence": puzzle_evidence,
+        "puzzle_progress": float(puzzle_summary.progress),
+        "puzzle_current_step": puzzle_summary.current_step,
+        "puzzle_completed_steps": int(puzzle_summary.completed_steps),
+        "puzzle_total_steps": int(puzzle_summary.total_steps),
+        "puzzle_status": puzzle_summary.status,
+        "puzzle_confidence": float(puzzle_summary.confidence),
+        "puzzle_success": bool(puzzle_summary.success),
+        "puzzle_fusion_active": fusion_active,
+        "puzzle_sequence_label": puzzle_summary.sequence_label,
+        "final_active_evidence": final_active_evidence,
+        "final_active_score": final_active_score,
+        "final_active_score_mapping_mode": final_active_score_mapping_mode,
+        "final_active_score_standard_mapping": final_active_score_standard,
+        "final_active_score_strict_mapping": final_active_score_standard,
+        "final_supported_score": final_supported_score,
+    }
+
+
+def _effective_decision_score(
+    *,
+    smoothed_score: float,
+    temporal_signal_summary: dict[str, Any],
+) -> float:
+    return smoothed_score
+
+
+def _preview_strict_exam_decision_layers(
+    *,
+    current_frame: FrameMetrics,
+    temporal_signal_summary: dict[str, Any],
+    base_decision_score: float,
+) -> dict[str, Any]:
+    return {
+        "strict_decision_score": float(base_decision_score),
+        "strict_replay_penalty": 0.0,
+        "strict_spoof_support_penalty": 0.0,
+        "strict_challenge_penalty": 0.0,
+        "strict_hard_block": False,
+        "strict_hard_replay_cues": 0.0,
+    }
+
+
 def _inverse_normalize(value: float, low: float, high: float) -> float:
     return 1.0 - _normalize(value, low, high)
 
@@ -1842,7 +2601,7 @@ def _compute_temporal_signal_summary(
     background_reaction_evaluator: Optional[BackgroundActiveReactionEvaluator] = None,
     passive_window_score: Optional[float] = None,
     session_baseline: Optional[SessionBaseline] = None,
-) -> dict[str, Optional[float]]:
+) -> dict[str, Any]:
     ear_values = [entry.ear_current for entry in entries if entry.ear_current is not None]
     mar_values = [entry.mar_current for entry in entries if entry.mar_current is not None]
     yaw_values = [entry.yaw_current for entry in entries if entry.yaw_current is not None]
@@ -1981,6 +2740,9 @@ def _compute_temporal_signal_summary(
         "raw_active_evidence": raw_active_evidence,
         "combined_active_evidence": combined_active_evidence,
         "combined_active_score": combined_active_score,
+        "active_score_mapping_mode": reaction_summary.active_score_mapping_mode if reaction_summary else "standard_sqrt",
+        "active_score_standard_mapping": reaction_summary.active_score_standard_mapping if reaction_summary else _standard_active_support_score(combined_active_evidence),
+        "active_score_strict_mapping": reaction_summary.active_score_strict_mapping if reaction_summary else _standard_active_support_score(combined_active_evidence),
         "passive_window_score": passive_window_score,
         "active_frame_score_mean": active_frame_score_mean,
         "active_frame_evidence_mean": active_frame_evidence_mean,
@@ -1992,6 +2754,20 @@ def _mean(values: list[float]) -> Optional[float]:
     if not values:
         return None
     return float(np.mean(values))
+
+
+def _standard_active_support_score(active_evidence: float) -> float:
+    return min(100.0, max(0.0, 100.0 * float(np.sqrt(max(active_evidence, 0.0)))))
+
+
+def _strict_sigmoid_active_support_score(active_evidence: float, settings: Settings) -> float:
+    sigmoid = settings.get_strict_sigmoid_config()
+    return _normalized_sigmoid_score(
+        active_evidence,
+        midpoint=sigmoid["midpoint"],
+        steepness=sigmoid["steepness"],
+        scale=sigmoid["scale"],
+    )
 
 
 def _ratio(numerator: Optional[float], denominator: Optional[float]) -> Optional[float]:
@@ -2120,12 +2896,13 @@ def _is_warm_recovery_candidate(
 def _has_sufficient_evidence(
     *,
     recent_entries: list[FrameMetrics],
-    temporal_signal_summary: dict[str, Optional[float]],
+    temporal_signal_summary: dict[str, Any],
     current_frame: FrameMetrics,
     min_trusted_face_size_ratio: float,
     warm_recovery: bool,
 ) -> bool:
-    minimum_samples = 2 if warm_recovery else 6
+    strict_exam = _is_strict_exam_profile(current_frame.details)
+    minimum_samples = 3 if (warm_recovery and strict_exam) else 2 if warm_recovery else 8 if strict_exam else 6
     if len(recent_entries) < minimum_samples:
         return False
     if not current_frame.face_detected:
@@ -2134,15 +2911,20 @@ def _has_sufficient_evidence(
         return False
     baseline_ready = bool(temporal_signal_summary.get("baseline_ready"))
     baseline_sample_count = int(temporal_signal_summary.get("baseline_sample_count") or 0)
-    if not baseline_ready and not (warm_recovery and baseline_sample_count >= 1):
+    baseline_min = 2 if strict_exam else 1
+    if not baseline_ready and not (warm_recovery and baseline_sample_count >= baseline_min):
         return False
 
-    combined_active_evidence = temporal_signal_summary.get("combined_active_evidence") or 0.0
+    combined_active_evidence = (
+        temporal_signal_summary.get("final_active_evidence")
+        if temporal_signal_summary.get("final_active_evidence") is not None
+        else temporal_signal_summary.get("combined_active_evidence")
+    ) or 0.0
     face_present_ratio = sum(1 for entry in recent_entries if entry.face_detected) / max(len(recent_entries), 1)
-    min_face_ratio = 0.35 if warm_recovery else 0.6
-    min_confidence = 0.45 if warm_recovery else 0.60
+    min_face_ratio = 0.45 if (warm_recovery and strict_exam) else 0.35 if warm_recovery else 0.68 if strict_exam else 0.6
+    min_confidence = 0.52 if (warm_recovery and strict_exam) else 0.45 if warm_recovery else 0.66 if strict_exam else 0.60
     return face_present_ratio >= min_face_ratio and (
-        combined_active_evidence >= 0.10
+        combined_active_evidence >= (0.14 if strict_exam else 0.10)
         or current_frame.confidence >= min_confidence
     )
 
@@ -2151,6 +2933,7 @@ def _resolve_decision_state(
     *,
     recent_entries: list[FrameMetrics],
     current_frame: FrameMetrics,
+    temporal_signal_summary: dict[str, Any],
     face_present_ratio: float,
     consecutive_no_face_frames: int,
     warm_recovery: bool,
@@ -2161,6 +2944,9 @@ def _resolve_decision_state(
     decision_confidence: float,
     no_face_consecutive_threshold: int,
 ) -> str:
+    debug_decision_state = temporal_signal_summary.get("debug_decision_state")
+    if isinstance(debug_decision_state, str) and debug_decision_state:
+        return debug_decision_state
     if consecutive_no_face_frames >= no_face_consecutive_threshold or face_present_ratio <= 0.15:
         if _should_treat_no_face_as_insufficient(
             recent_entries=recent_entries,
@@ -2175,6 +2961,10 @@ def _resolve_decision_state(
     quality_reason = _quality_block_reason(current_frame)
     quality_blocked = quality_reason != "-"
     spoof_gate_active = _is_device_replay_spoof_detected(current_frame)
+    strict_hard_block = bool(temporal_signal_summary.get("strict_hard_block"))
+    puzzle_fusion_active = bool(temporal_signal_summary.get("puzzle_fusion_active"))
+    puzzle_success = bool(temporal_signal_summary.get("puzzle_success"))
+    puzzle_status = str(temporal_signal_summary.get("puzzle_status") or "idle")
     support_streak = int(_maybe_float(current_frame.details.get("preview_spoof_support_streak")) or 0.0)
     spoof_ready_despite_evidence = spoof_gate_active and support_streak >= 3
     early_live_ready = (
@@ -2187,8 +2977,15 @@ def _resolve_decision_state(
         and decision_confidence >= (0.58 if warm_recovery else 0.72)
         and not _is_device_replay_spoof_detected(current_frame)
     )
+    challenge_live_block = bool(
+        puzzle_fusion_active
+        and not puzzle_success
+        and puzzle_status in {"running", "failed", "timed_out"}
+    )
     if not sufficient_evidence and early_live_ready:
         return "LIKELY_LIVE"
+    if strict_hard_block:
+        return "LIKELY_SPOOF"
     if spoof_gate_active:
         return "LIKELY_SPOOF"
     if quality_blocked and not spoof_gate_active:
@@ -2200,10 +2997,11 @@ def _resolve_decision_state(
 
     live_score_threshold = 68.0 if warm_recovery else 80.0
     live_conf_threshold = 0.50 if warm_recovery else 0.65
-    if smoothed_score >= live_score_threshold and decision_confidence >= live_conf_threshold:
+    if not challenge_live_block and smoothed_score >= live_score_threshold and decision_confidence >= live_conf_threshold:
         return "LIKELY_LIVE"
     if (
-        sufficient_evidence
+        not challenge_live_block
+        and sufficient_evidence
         and current_frame.is_live
         and smoothed_score >= (66.0 if warm_recovery else 70.0)
         and decision_confidence >= (0.46 if warm_recovery else 0.72)
@@ -2212,6 +3010,10 @@ def _resolve_decision_state(
     if smoothed_score < 55.0 and decision_confidence >= 0.55:
         return "LIKELY_SPOOF"
     return "INSUFFICIENT_EVIDENCE"
+
+
+def _is_strict_exam_profile(details: dict[str, Any]) -> bool:
+    return False
 
 
 def _should_treat_no_face_as_insufficient(
@@ -2278,7 +3080,7 @@ def _calculate_window_confidence(
     *,
     recent_entries: list[FrameMetrics],
     face_present_ratio: float,
-    temporal_signal_summary: dict[str, Optional[float]],
+    temporal_signal_summary: dict[str, Any],
     sufficient_evidence: bool,
     temporal_consistency: float,
     frame_confidence_mean: float,
@@ -2299,7 +3101,15 @@ def _calculate_window_confidence(
         0.0,
         min(
             1.0,
-            0.55 * float(temporal_signal_summary.get("combined_active_evidence") or 0.0)
+            0.55
+            * float(
+                (
+                    temporal_signal_summary.get("final_active_evidence")
+                    if temporal_signal_summary.get("final_active_evidence") is not None
+                    else temporal_signal_summary.get("combined_active_evidence")
+                )
+                or 0.0
+            )
             + 0.45 * (1.0 if sufficient_evidence else 0.0),
         ),
     )
