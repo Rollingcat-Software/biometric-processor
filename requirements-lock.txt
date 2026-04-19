@@ -47,7 +47,7 @@ lightphe==0.0.8
 
 # DeepFace dependencies
 tqdm==4.66.1
-gdown==5.1.0
+gdown==5.2.2
 pandas==2.1.4
 flask==3.0.0
 mtcnn==0.1.1
