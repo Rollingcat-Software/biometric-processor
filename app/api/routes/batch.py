@@ -3,8 +3,15 @@
 CRITICAL SECURITY FIX:
     Added batch size limits to prevent DoS attacks and memory exhaustion.
     Validates both count and total size before processing.
+
+ML-M4 (Audit 2026-04-19):
+    Added an in-flight concurrency guard via asyncio.Semaphore so that
+    ``BATCH_MAX_CONCURRENT`` batch requests may run simultaneously. Without
+    this, the only throttle was a per-minute rate limit, which does not
+    bound RAM/CPU pressure from simultaneously-executing batches.
 """
 
+import asyncio
 import json
 import logging
 from typing import List
@@ -35,6 +42,12 @@ from app.domain.interfaces.file_storage import IFileStorage
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/batch", tags=["batch"])
+
+# ML-M4: module-level semaphore bounds the number of batch requests that can
+# be mid-flight simultaneously across the whole process. Per-minute rate
+# limits do not bound concurrency, so a burst of 10 requests could all land
+# in-flight at once. Capped at BATCH_MAX_CONCURRENT (default 4).
+_batch_semaphore = asyncio.Semaphore(int(settings.BATCH_MAX_CONCURRENT))
 
 
 @router.post("/enroll", response_model=BatchEnrollmentResponse)
@@ -69,6 +82,18 @@ async def batch_enroll(
     """
     logger.info(f"Batch enrollment request: {len(files)} files")
 
+    # ML-M4: bound concurrent in-flight batch requests (memory/CPU guard)
+    async with _batch_semaphore:
+        return await _do_batch_enroll(files, items, skip_duplicates, use_case, storage)
+
+
+async def _do_batch_enroll(
+    files: List[UploadFile],
+    items: str,
+    skip_duplicates: bool,
+    use_case: BatchEnrollmentUseCase,
+    storage: IFileStorage,
+) -> BatchEnrollmentResponse:
     # CRITICAL FIX: Validate batch size to prevent DoS attacks
     if len(files) > settings.BATCH_MAX_SIZE:
         raise HTTPException(
@@ -213,6 +238,18 @@ async def batch_verify(
     """
     logger.info(f"Batch verification request: {len(files)} files")
 
+    # ML-M4: bound concurrent in-flight batch requests (memory/CPU guard)
+    async with _batch_semaphore:
+        return await _do_batch_verify(files, items, threshold, use_case, storage)
+
+
+async def _do_batch_verify(
+    files: List[UploadFile],
+    items: str,
+    threshold: float,
+    use_case: BatchVerificationUseCase,
+    storage: IFileStorage,
+) -> BatchVerificationResponse:
     # Validate batch size to prevent DoS attacks
     if len(files) > settings.BATCH_MAX_SIZE:
         raise HTTPException(

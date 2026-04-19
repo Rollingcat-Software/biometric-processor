@@ -251,25 +251,63 @@ class PgVectorVoiceRepository:
             logger.error(f"Failed to delete voice enrollment: {e}", exc_info=True)
             raise RepositoryError(operation="delete", reason=str(e))
 
-    async def find_similar(self, embedding, threshold=0.4, limit=5):
-        """Search for similar voice embeddings (1:N identification)."""
+    async def find_similar(self, embedding, threshold=0.4, limit=5, tenant_id: Optional[str] = None):
+        """Search for similar voice embeddings (1:N identification).
+
+        ML-M5 (Audit 2026-04-19): caller-supplied ``threshold`` and ``limit``
+        are clamped against configurable caps to prevent enumeration-via-
+        inflated-parameters. ``tenant_id`` is accepted for symmetry with the
+        face repository; when supplied it scopes the query at the SQL layer.
+        """
+        # ML-M5: server-side caps
+        from app.core.config import settings as _settings
+        max_threshold = _settings.FIND_SIMILAR_VOICE_MAX_THRESHOLD
+        max_limit = _settings.FIND_SIMILAR_MAX_LIMIT
+        if threshold > max_threshold:
+            logger.warning(
+                "voice find_similar threshold %.3f exceeds cap %.3f; clamping",
+                threshold, max_threshold,
+            )
+            threshold = max_threshold
+        if limit > max_limit:
+            logger.warning(
+                "voice find_similar limit %d exceeds cap %d; clamping",
+                limit, max_limit,
+            )
+            limit = max_limit
+
         try:
             pool = await self._ensure_pool()
             embedding_list = embedding.tolist()
 
             async with pool.acquire() as conn:
-                rows = await conn.fetch(
-                    """
-                    SELECT user_id, embedding <=> $1::vector AS distance
-                    FROM voice_enrollments
-                    WHERE deleted_at IS NULL
-                      AND (enrollment_type = 'CENTROID' OR enrollment_type IS NULL)
-                      AND embedding <=> $1::vector < $2
-                    ORDER BY distance ASC
-                    LIMIT $3
-                    """,
-                    embedding_list, threshold, limit,
-                )
+                if tenant_id:
+                    rows = await conn.fetch(
+                        """
+                        SELECT user_id, embedding <=> $1::vector AS distance
+                        FROM voice_enrollments
+                        WHERE deleted_at IS NULL
+                          AND (enrollment_type = 'CENTROID' OR enrollment_type IS NULL)
+                          AND embedding <=> $1::vector < $2
+                          AND tenant_id = $4::VARCHAR
+                        ORDER BY distance ASC
+                        LIMIT $3
+                        """,
+                        embedding_list, threshold, limit, tenant_id,
+                    )
+                else:
+                    rows = await conn.fetch(
+                        """
+                        SELECT user_id, embedding <=> $1::vector AS distance
+                        FROM voice_enrollments
+                        WHERE deleted_at IS NULL
+                          AND (enrollment_type = 'CENTROID' OR enrollment_type IS NULL)
+                          AND embedding <=> $1::vector < $2
+                        ORDER BY distance ASC
+                        LIMIT $3
+                        """,
+                        embedding_list, threshold, limit,
+                    )
 
             return [(row["user_id"], float(row["distance"])) for row in rows]
 

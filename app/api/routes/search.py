@@ -24,7 +24,7 @@ async def search_face(
     file: UploadFile = File(..., description="Face image file"),
     max_results: int = Form(5, ge=1, le=100, description="Maximum results to return"),
     threshold: Optional[float] = Form(None, ge=0.0, le=2.0, description="Distance threshold"),
-    tenant_id: Optional[str] = Form(None, description="Optional tenant identifier"),
+    tenant_id: str = Form(..., min_length=1, description="Tenant identifier (required for defense-in-depth isolation)"),
     use_case: SearchFaceUseCase = Depends(get_search_face_use_case),
     storage: IFileStorage = Depends(get_file_storage),
 ) -> SearchResponse:

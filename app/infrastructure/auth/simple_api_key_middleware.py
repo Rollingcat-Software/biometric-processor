@@ -5,6 +5,7 @@ Used in production to restrict biometric API access to
 identity-core-api and other authorized services.
 """
 
+import hmac
 import json
 import logging
 from typing import List, Optional
@@ -63,10 +64,10 @@ class SimpleAPIKeyMiddleware:
             await self._send_401(send, "API key required. Provide X-API-Key header.")
             return
 
-        if provided_key != self._api_key:
+        if not hmac.compare_digest(provided_key, self._api_key):
             logger.warning(
                 f"Invalid API key for {scope.get('method', '?')} {path} "
-                f"(prefix: {provided_key[:8]}...)"
+                f"(len={len(provided_key)})"
             )
             await self._send_401(send, "Invalid API key.")
             return

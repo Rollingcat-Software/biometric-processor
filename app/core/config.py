@@ -525,8 +525,58 @@ class Settings(BaseSettings):
     )
 
     # Batch Processing
-    BATCH_MAX_CONCURRENT: int = Field(default=5, ge=1, le=20)
+    BATCH_MAX_CONCURRENT: int = Field(default=4, ge=1, le=20)
     BATCH_ADAPTIVE_CONCURRENCY: bool = Field(default=False)
+
+    # ---------------------------------------------------------------
+    # Audit 2026-04-19 remediation (ML-M1, ML-M5, ML-H4)
+    # ---------------------------------------------------------------
+    # ML-M1: SHA256 integrity check for DeepFace Facenet512 weights.
+    # TODO: populate with known-good hash once the model file is available.
+    #   sha256sum ~/.deepface/weights/facenet512_weights.h5
+    # When empty string, startup logs a WARNING and skips the check (does not raise).
+    DEEPFACE_FACENET512_SHA256: str = Field(
+        default="",
+        description="Expected SHA256 hex digest for Facenet512 weights file (empty = skip with warning)",
+    )
+
+    # ML-M5: server-side caps on find_similar threshold/limit (caller-controlled today).
+    FIND_SIMILAR_FACE_MAX_THRESHOLD: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=2.0,
+        description="Maximum cosine-distance threshold accepted from callers for face find_similar",
+    )
+    FIND_SIMILAR_VOICE_MAX_THRESHOLD: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=2.0,
+        description="Maximum cosine-distance threshold accepted from callers for voice find_similar",
+    )
+    FIND_SIMILAR_MAX_LIMIT: int = Field(
+        default=50,
+        ge=1,
+        le=1000,
+        description="Maximum result-count cap for find_similar (caller-supplied limit is clamped)",
+    )
+
+    # ML-H4: voice replay detection (log-only skeleton per D2/D4).
+    VOICE_REPLAY_DETECTION_ENABLED: bool = Field(
+        default=False,
+        description="Enable voice replay-attack detection (log-only; does not block requests)",
+    )
+    VOICE_REPLAY_CACHE_SIZE: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        description="Number of recent voice fingerprints retained per user for replay detection",
+    )
+    VOICE_REPLAY_SIMILARITY_THRESHOLD: float = Field(
+        default=0.95,
+        ge=0.5,
+        le=1.0,
+        description="Cosine-similarity threshold on spectral fingerprint above which a replay is suspected",
+    )
 
     @field_validator("JWT_SECRET")
     @classmethod

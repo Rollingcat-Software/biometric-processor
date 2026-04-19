@@ -775,6 +775,9 @@ async def pipeline_test(
         steps.append(PipelineStepResult(step="face_match", success=False, error=str(e)))
 
     # ---- Step 4: Liveness Check ----
+    # ML-M3 (Audit 2026-04-19): wrap temp-file cleanup in try/finally so the
+    # temp JPEG cannot leak when liveness_uc.execute() raises. Mirrors the
+    # enrollment path's cleanup discipline.
     try:
         # Write face image to temp file for liveness use case
         face_buffer = BytesIO()
@@ -782,20 +785,20 @@ async def pipeline_test(
         face_buffer.seek(0)
 
         # Create a temporary UploadFile-like object
+        import os
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp.write(face_buffer.getvalue())
             tmp_path = tmp.name
 
-        liveness_uc = get_check_liveness_use_case()
-        liveness_result = await liveness_uc.execute(image_path=tmp_path)
-
-        # Cleanup temp file
-        import os
         try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+            liveness_uc = get_check_liveness_use_case()
+            liveness_result = await liveness_uc.execute(image_path=tmp_path)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
         steps.append(PipelineStepResult(
             step="liveness_check",

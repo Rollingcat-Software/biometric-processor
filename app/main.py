@@ -9,11 +9,17 @@ This module creates and configures the FastAPI application with:
 - API documentation
 """
 
+import hmac
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from PIL import Image
+
+# Defense-in-depth: cap decompressed pixels to ~50 MP to block decompression bombs.
+# RequestSizeLimitMiddleware caps wire bytes; this caps post-decode RAM.
+Image.MAX_IMAGE_PIXELS = 50_000_000
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
@@ -186,7 +192,7 @@ if settings.API_KEY_ENABLED and settings.API_KEY_REQUIRE_AUTH:
         path = request.url.path
         if path.startswith("/api/") and path not in _EXCLUDED_PATHS:
             key = request.headers.get(_API_KEY_HEADER)
-            if not key or key != _API_KEY_SECRET:
+            if not key or not hmac.compare_digest(key, _API_KEY_SECRET):
                 from fastapi.responses import JSONResponse as JR
                 return JR(
                     status_code=401,

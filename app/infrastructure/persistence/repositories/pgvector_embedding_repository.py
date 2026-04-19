@@ -409,6 +409,30 @@ class PgVectorEmbeddingRepository:
                 f"got {len(embedding)}"
             )
 
+        if not tenant_id:
+            # Defense-in-depth: never search across tenants at the vector layer.
+            raise ValueError("tenant_id is required for find_similar (cross-tenant search forbidden)")
+
+        # ML-M5 (Audit 2026-04-19): server-side floor on caller-controlled
+        # threshold/limit to prevent enumeration via inflated parameters
+        # (e.g. threshold=2.0, limit=1000 would return the whole tenant).
+        from app.core.config import settings as _settings
+        max_threshold = _settings.FIND_SIMILAR_FACE_MAX_THRESHOLD
+        max_limit = _settings.FIND_SIMILAR_MAX_LIMIT
+        if threshold > max_threshold:
+            logger.warning(
+                "find_similar threshold %.3f exceeds cap %.3f; clamping "
+                "(tenant_id=%s)",
+                threshold, max_threshold, tenant_id,
+            )
+            threshold = max_threshold
+        if limit > max_limit:
+            logger.warning(
+                "find_similar limit %d exceeds cap %d; clamping (tenant_id=%s)",
+                limit, max_limit, tenant_id,
+            )
+            limit = max_limit
+
         try:
             pool = await self._ensure_pool()
 
@@ -425,12 +449,14 @@ class PgVectorEmbeddingRepository:
                     WHERE embedding <=> $1::vector < $2
                       AND deleted_at IS NULL
                       AND (enrollment_type = 'CENTROID' OR enrollment_type IS NULL)
+                      AND tenant_id = $4::VARCHAR
                     ORDER BY distance ASC
                     LIMIT $3
                     """,
                     embedding_list,
                     threshold,
                     limit,
+                    tenant_id,
                 )
 
             # Convert to list of tuples
@@ -465,6 +491,10 @@ class PgVectorEmbeddingRepository:
         Note:
             Uses soft delete (sets deleted_at timestamp) to maintain audit trail.
         """
+        if not tenant_id:
+            # Defense-in-depth: never delete without tenant scope.
+            raise ValueError("tenant_id is required for delete (cross-tenant delete forbidden)")
+
         try:
             pool = await self._ensure_pool()
 
@@ -473,7 +503,7 @@ class PgVectorEmbeddingRepository:
                     """
                     DELETE FROM face_embeddings
                     WHERE user_id = $1
-                      AND ($2::VARCHAR IS NULL OR tenant_id = $2::VARCHAR)
+                      AND tenant_id = $2::VARCHAR
                     """,
                     user_id,
                     tenant_id,

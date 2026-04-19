@@ -1,3 +1,17 @@
+# REGENERATE-ME: this lockfile is stale vs requirements.txt. See issue #47.
+# Regenerate with: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pip freeze > requirements-lock.txt
+#
+# Audit 2026-04-19 (ML-H1 / issue #47):
+#   This lockfile pins tensorflow-cpu==2.15.0 + keras==3.13.2, which is
+#   inconsistent with requirements.txt (TF 2.21) and the Dockerfile (which
+#   explicitly installs TF 2.21 and ignores this lock). TF 2.15 ships
+#   tf.keras=Keras 2.15; Keras 3 is not wire-compatible. If anyone ever
+#   installs from this lock, DeepFace startup will fail.
+#
+# Regeneration was attempted on 2026-04-19 in this workspace but failed:
+# python3-venv was not available on the host (ensurepip missing). Leaving
+# this banner in place until regenerated on a build box with network + TF.
+#
 # requirements-lock.txt
 # Locked dependencies for reproducible builds
 # Generated: 2025-12-28
