@@ -1,10 +1,14 @@
 """Application configuration with Pydantic validation."""
 
 import os
+from pathlib import Path
 from typing import List, Literal, Optional
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings
+
+# Repo root resolved once for default model paths (biometric-processor/).
+_REPO_ROOT = Path(__file__).parent.parent.parent
 
 
 class Settings(BaseSettings):
@@ -507,6 +511,44 @@ class Settings(BaseSettings):
     # Liveness Detection Optimization
     LIVENESS_ENABLE_OPTIMIZED: bool = Field(default=True)
     LIVENESS_FFT_DOWNSAMPLE_SIZE: int = Field(default=192, ge=64, le=512)
+
+    # ---------------------------------------------------------------
+    # Active Gesture Liveness — Phase 0 prereqs (2026-04-24)
+    # ---------------------------------------------------------------
+    # Design note: MediaPipe hand inference runs CLIENT-SIDE. The server receives
+    # 21-landmark arrays + anti-spoof scores and runs deterministic geometry
+    # checks — no ML inference here. The hand_landmarker.task file may still be
+    # distributed as a static asset so clients can download + SHA256-verify it,
+    # allowing ops to rotate the model without re-releasing client apps.
+    ACTIVE_GESTURE_LIVENESS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Phase-gated feature flag for active gesture liveness. "
+            "OFF until the gesture backend ships."
+        ),
+    )
+    GESTURE_HAND_LANDMARKER_MODEL_PATH: str = Field(
+        default=str(_REPO_ROOT / "models" / "hand_landmarker.task"),
+        description=(
+            "Filesystem path to the MediaPipe hand_landmarker.task asset. "
+            "Server does not load this model — it is served to clients as a "
+            "static, SHA256-verified asset so it can be rotated centrally."
+        ),
+    )
+    GESTURE_HAND_LANDMARKER_MODEL_SHA256: str = Field(
+        default="",
+        description=(
+            "Expected SHA256 hex digest for hand_landmarker.task. Set in "
+            ".env.prod when shipping; empty = skip verification (dev only)."
+        ),
+    )
+    FACE_LANDMARKER_MODEL_SHA256: str = Field(
+        default="",
+        description=(
+            "Expected SHA256 hex digest for face_landmarker.task. Set in "
+            ".env.prod; empty = skip verification with a log warning."
+        ),
+    )
 
     # Card Detection
     CARD_DETECTION_THRESHOLD: float = Field(
