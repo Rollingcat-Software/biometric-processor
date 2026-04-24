@@ -714,6 +714,98 @@ class Settings(BaseSettings):
         description="Cosine-similarity threshold on spectral fingerprint above which a replay is suspected",
     )
 
+    # ---------------------------------------------------------------
+    # Phase 1.3b (Audit 2026-04-19 remediation): biometric embedding
+    # envelope encryption (AES-GCM-256). KVKK Decision 2018/10 requires
+    # special-category biometric data to be stored cryptographically
+    # with keys held in a secure environment.
+    # ---------------------------------------------------------------
+    FIVUCSAS_EMBEDDING_KEK: str = Field(
+        default="",
+        description=(
+            "Base64-encoded 32-byte Key Encryption Key (KEK) used to envelope-"
+            "encrypt biometric embeddings. REQUIRED in production when "
+            "FIVUCSAS_EMBEDDING_ENC_ENABLED=true. Generate with "
+            "`openssl rand -base64 32`. Must be stored in the deployment "
+            "secret store — NEVER committed to the repo."
+        ),
+    )
+    FIVUCSAS_EMBEDDING_ENC_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for embedding encryption. When true, writes "
+            "encrypt into embedding_ciphertext and reads prefer the "
+            "ciphertext column. Off by default to preserve current "
+            "behaviour until the KEK has been provisioned everywhere."
+        ),
+    )
+    FIVUCSAS_EMBEDDING_MIGRATE: bool = Field(
+        default=False,
+        description=(
+            "Alembic gate for migration 0006_backfill_embedding_ciphertext. "
+            "The migration is a no-op unless this env var is set to true. "
+            "This is also read directly from os.environ by the migration so "
+            "it works for stand-alone alembic invocations."
+        ),
+    )
+    FIVUCSAS_EMBEDDING_ENC_STRICT: bool = Field(
+        default=False,
+        description=(
+            "When true, repositories refuse to serve legacy plaintext rows "
+            "and migration 0007_drop_plaintext_embedding_columns is allowed "
+            "to run. Flip only after the dual-read window has validated "
+            "ciphertext parity with the pgvector path."
+        ),
+    )
+    FIVUCSAS_EMBEDDING_MATCH_CACHE_TTL_SEC: int = Field(
+        default=60,
+        ge=1,
+        le=3600,
+        description=(
+            "Seconds a decrypted per-tenant match matrix lives in-process "
+            "before it is rebuilt from authoritative ciphertext."
+        ),
+    )
+    FIVUCSAS_EMBEDDING_MATCH_CACHE_MAX_TENANTS: int = Field(
+        default=64,
+        ge=1,
+        le=1024,
+        description=(
+            "LRU cap on the number of distinct tenants whose decrypted "
+            "match matrices may be cached concurrently."
+        ),
+    )
+
+    @field_validator("FIVUCSAS_EMBEDDING_MATCH_CACHE_MAX_TENANTS")
+    @classmethod
+    def validate_embedding_encryption_config(cls, v, info):
+        """Fail-fast when the KEK is empty in production with encryption on.
+
+        Attached to ``FIVUCSAS_EMBEDDING_MATCH_CACHE_MAX_TENANTS`` because
+        Pydantic field validators only see ``info.data`` for fields
+        declared earlier. This is the last field in the encryption
+        settings block, so all three of ``ENVIRONMENT``,
+        ``FIVUCSAS_EMBEDDING_ENC_ENABLED`` and ``FIVUCSAS_EMBEDDING_KEK``
+        are guaranteed populated by the time this validator runs.
+
+        The full format/length check of the KEK lives in
+        :class:`app.security.embedding_cipher.EmbeddingCipher`. This
+        validator only enforces the "must be present" half so
+        misconfigured production deployments crash at startup rather than
+        silently storing plaintext.
+        """
+        environment = info.data.get("ENVIRONMENT", "development")
+        enc_enabled = info.data.get("FIVUCSAS_EMBEDDING_ENC_ENABLED", False)
+        kek = info.data.get("FIVUCSAS_EMBEDDING_KEK", "") or ""
+        if environment == "production" and enc_enabled and not kek.strip():
+            raise ValueError(
+                "SECURITY ERROR: FIVUCSAS_EMBEDDING_KEK must be set when "
+                "FIVUCSAS_EMBEDDING_ENC_ENABLED=true in production. "
+                "Generate one with `openssl rand -base64 32` and store "
+                "it in the deployment secret store."
+            )
+        return v
+
     @field_validator("JWT_SECRET")
     @classmethod
     def validate_jwt_secret(cls, v, info):

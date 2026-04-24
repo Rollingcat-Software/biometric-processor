@@ -24,6 +24,12 @@ import asyncpg
 import numpy as np
 
 from app.domain.exceptions.repository_errors import RepositoryError
+from app.security.embedding_aad import (
+    MODALITY_FACE,
+    bytes_to_embedding,
+    embedding_aad,
+    embedding_to_bytes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +69,10 @@ class PgVectorEmbeddingRepository:
         command_timeout: float = 30.0,
         max_queries: int = 50000,
         max_inactive_connection_lifetime: float = 300.0,
+        cipher: Optional[object] = None,
+        match_service: Optional[object] = None,
+        enc_enabled: bool = False,
+        enc_strict: bool = False,
     ) -> None:
         """Initialize PostgreSQL pgvector repository with optimized connection pool.
 
@@ -92,13 +102,42 @@ class PgVectorEmbeddingRepository:
         self._max_queries = max_queries
         self._max_inactive_connection_lifetime = max_inactive_connection_lifetime
         self._pool: Optional[asyncpg.Pool] = None
+        # Phase 1.3b — envelope encryption (see app/security/).
+        self._cipher = cipher
+        self._match_service = match_service
+        self._enc_enabled = bool(enc_enabled)
+        self._enc_strict = bool(enc_strict)
 
         logger.info(
             f"Initialized PgVectorEmbeddingRepository with optimized pool settings "
             f"(dimension={embedding_dimension}, pool={pool_min_size}-{pool_max_size}, "
             f"command_timeout={command_timeout}s, max_queries={max_queries}, "
-            f"max_inactive_lifetime={max_inactive_connection_lifetime}s)"
+            f"max_inactive_lifetime={max_inactive_connection_lifetime}s, "
+            f"enc_enabled={self._enc_enabled}, enc_strict={self._enc_strict})"
         )
+
+    def _encrypt_embedding(
+        self, embedding: np.ndarray, tenant_id: Optional[str], user_id: str
+    ) -> Optional[bytes]:
+        """Return ASCII-encoded ``enc:v1:...`` bytes or None when disabled."""
+        if not self._enc_enabled or self._cipher is None:
+            return None
+        aad = _embedding_aad("face", tenant_id, user_id)
+        return self._cipher.encrypt(_embedding_to_bytes(embedding), aad).encode("ascii")
+
+    def _decrypt_ciphertext(
+        self, ciphertext: object, tenant_id: Optional[str], user_id: str
+    ) -> Optional[np.ndarray]:
+        """Return the decrypted embedding or None if ciphertext is absent."""
+        if ciphertext is None or self._cipher is None:
+            return None
+        if isinstance(ciphertext, (bytes, bytearray, memoryview)):
+            stored = bytes(ciphertext).decode("ascii")
+        else:
+            stored = str(ciphertext)
+        aad = _embedding_aad("face", tenant_id, user_id)
+        raw = self._cipher.decrypt(stored, aad)
+        return _bytes_to_embedding(raw, self._embedding_dimension)
 
     async def _ensure_pool(self) -> asyncpg.Pool:
         """Ensure connection pool is created with optimized async settings.
@@ -209,15 +248,24 @@ class PgVectorEmbeddingRepository:
             # Normalize quality score to 0-1 range (database expects 0-1)
             normalized_quality = quality_score / 100.0 if quality_score > 1.0 else quality_score
 
+            # Phase 1.3b — dual-write ciphertext when encryption is enabled.
+            # Plaintext column remains populated during the rollout window
+            # (strict=false). Once strict=true + migration 0007 runs, the
+            # plaintext column is physically removed.
+            individual_ct = self._encrypt_embedding(embedding, tenant_id, user_id)
+
             async with pool.acquire() as conn:
                 # Insert individual enrollment (never overwrite — accumulate)
                 await conn.execute(
                     """
                     INSERT INTO face_embeddings (
-                        user_id, tenant_id, embedding, quality_score, enrollment_type
-                    ) VALUES ($1, $2, $3, $4, 'INDIVIDUAL')
+                        user_id, tenant_id, embedding, quality_score, enrollment_type,
+                        embedding_ciphertext, enc_version
+                    ) VALUES ($1, $2, $3, $4, 'INDIVIDUAL', $5, $6)
                     """,
                     user_id, tenant_id, embedding_list, normalized_quality,
+                    individual_ct,
+                    1 if individual_ct is not None else None,
                 )
 
                 # Cap individual enrollments at 5 per user — delete oldest when exceeding
@@ -297,6 +345,41 @@ class PgVectorEmbeddingRepository:
                         user_id,
                     )
 
+                # Phase 1.3b — encrypt the (just-computed) centroid plaintext
+                # into embedding_ciphertext. Done as a second pass because
+                # pgvector AVG() runs in SQL; we cannot pre-encrypt the
+                # server-side average.
+                if self._enc_enabled and self._cipher is not None:
+                    centroid_row = await conn.fetchrow(
+                        """
+                        SELECT embedding
+                        FROM face_embeddings
+                        WHERE user_id = $1
+                          AND enrollment_type = 'CENTROID'
+                          AND deleted_at IS NULL
+                        LIMIT 1
+                        """,
+                        user_id,
+                    )
+                    if centroid_row and centroid_row["embedding"] is not None:
+                        centroid_vec = np.array(
+                            centroid_row["embedding"], dtype=np.float32
+                        )
+                        centroid_ct = self._encrypt_embedding(
+                            centroid_vec, tenant_id, user_id
+                        )
+                        await conn.execute(
+                            """
+                            UPDATE face_embeddings
+                            SET embedding_ciphertext = $1,
+                                enc_version = 1
+                            WHERE user_id = $2
+                              AND enrollment_type = 'CENTROID'
+                              AND deleted_at IS NULL
+                            """,
+                            centroid_ct, user_id,
+                        )
+
                 # Get final count
                 count = await conn.fetchval(
                     """
@@ -305,6 +388,17 @@ class PgVectorEmbeddingRepository:
                     """,
                     user_id,
                 )
+
+            # Invalidate per-tenant match cache so the next search sees the
+            # freshly-enrolled centroid.
+            if self._match_service is not None:
+                try:
+                    tu = _tenant_uuid(tenant_id)
+                    if tu is not None:
+                        await self._match_service.invalidate(tu)
+                except Exception:
+                    # Cache invalidation errors must not fail the enrollment.
+                    logger.debug("match cache invalidate failed", exc_info=True)
 
             logger.info(
                 f"Embedding saved: user_id={user_id}, "
@@ -338,11 +432,18 @@ class PgVectorEmbeddingRepository:
         try:
             pool = await self._ensure_pool()
 
+            # Phase 1.3b — prefer ciphertext when encryption is enabled.
+            # We select both columns so dual-read works for in-flight rows.
+            select_cols = (
+                "embedding, embedding_ciphertext"
+                if self._enc_enabled
+                else "embedding"
+            )
+
             async with pool.acquire() as conn:
-                # Return centroid (averaged embedding) for verification
                 row = await conn.fetchrow(
-                    """
-                    SELECT embedding
+                    f"""
+                    SELECT {select_cols}
                     FROM face_embeddings
                     WHERE user_id = $1
                       AND enrollment_type = 'CENTROID'
@@ -351,11 +452,10 @@ class PgVectorEmbeddingRepository:
                     """,
                     user_id,
                 )
-                # Fallback to latest individual if no centroid exists
                 if not row:
                     row = await conn.fetchrow(
-                        """
-                        SELECT embedding
+                        f"""
+                        SELECT {select_cols}
                         FROM face_embeddings
                         WHERE user_id = $1
                           AND deleted_at IS NULL
@@ -365,14 +465,49 @@ class PgVectorEmbeddingRepository:
                         user_id,
                     )
 
-            if row:
-                # Convert PostgreSQL vector to numpy array
-                embedding = np.array(row["embedding"], dtype=np.float32)
-                logger.debug(f"Found embedding for user {user_id}")
-                return embedding
-            else:
+            if not row:
                 logger.debug(f"No embedding found for user {user_id}")
                 return None
+
+            # Prefer ciphertext when present.
+            if self._enc_enabled and self._cipher is not None:
+                ct = row["embedding_ciphertext"] if "embedding_ciphertext" in row else None
+                if ct is not None:
+                    try:
+                        return self._decrypt_ciphertext(ct, tenant_id, user_id)
+                    except ValueError:
+                        logger.error(
+                            "find_by_user_id: ciphertext decrypt failed "
+                            "user_id=%s tenant_id=%s",
+                            user_id, tenant_id,
+                        )
+                        if self._enc_strict:
+                            raise
+                        # fall through to plaintext
+
+            # Plaintext fallback (legacy rows). Warn, and refuse in strict
+            # mode so operators notice lingering legacy data.
+            pt = row["embedding"] if "embedding" in row else None
+            if pt is not None:
+                if self._enc_strict:
+                    raise RepositoryError(
+                        operation="find",
+                        reason=(
+                            "Legacy plaintext embedding encountered with "
+                            "FIVUCSAS_EMBEDDING_ENC_STRICT=true. Run "
+                            "migration 0006 before enabling strict mode."
+                        ),
+                    )
+                if self._enc_enabled:
+                    logger.warning(
+                        "legacy.plaintext.read",
+                        extra={"user_id": user_id, "tenant_id": tenant_id},
+                    )
+                embedding = np.array(pt, dtype=np.float32)
+                logger.debug(f"Found embedding for user {user_id}")
+                return embedding
+
+            return None
 
         except Exception as e:
             logger.error(f"Failed to find embedding: {e}", exc_info=True)
@@ -434,6 +569,25 @@ class PgVectorEmbeddingRepository:
             )
             limit = max_limit
 
+        # Phase 1.3b — delegate to the in-memory match service when
+        # encryption is enabled. The plaintext path remains available
+        # during the dual-read rollout window (strict=false).
+        if self._enc_enabled and self._match_service is not None:
+            try:
+                tu = _tenant_uuid(tenant_id)
+                if tu is None:
+                    raise ValueError("tenant_id must be a valid UUID when encryption is enabled")
+                return await self._match_service.search_top_k(
+                    tu, np.asarray(embedding, dtype=np.float32), limit, threshold
+                )
+            except Exception:
+                if self._enc_strict:
+                    raise
+                logger.warning(
+                    "encrypted find_similar failed; falling back to pgvector",
+                    exc_info=True,
+                )
+
         try:
             pool = await self._ensure_pool()
 
@@ -476,6 +630,38 @@ class PgVectorEmbeddingRepository:
             logger.error(f"Failed to search embeddings: {e}", exc_info=True)
             raise RepositoryError(operation="find_similar", reason=str(e))
 
+    # ------------------------------------------------------------------
+    # Phase 1.3b contract — used by EmbeddingMatchService to build matrices.
+    # ------------------------------------------------------------------
+    async def load_active_ciphertexts(self, tenant_id: UUID) -> List[Tuple[str, str]]:
+        """Return ``[(user_id, ciphertext), ...]`` for the tenant's active
+        centroid rows. Intended for consumption by
+        :class:`EmbeddingMatchService`.
+        """
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT user_id, embedding_ciphertext
+                FROM face_embeddings
+                WHERE tenant_id = $1::VARCHAR
+                  AND deleted_at IS NULL
+                  AND (enrollment_type = 'CENTROID' OR enrollment_type IS NULL)
+                  AND embedding_ciphertext IS NOT NULL
+                """,
+                str(tenant_id),
+            )
+        out: List[Tuple[str, str]] = []
+        for row in rows:
+            ct = row["embedding_ciphertext"]
+            if ct is None:
+                continue
+            if isinstance(ct, (bytes, bytearray, memoryview)):
+                out.append((row["user_id"], bytes(ct).decode("ascii")))
+            else:
+                out.append((row["user_id"], str(ct)))
+        return out
+
     async def delete(self, user_id: str, tenant_id: Optional[str] = None) -> bool:
         """Delete embedding by user ID.
 
@@ -515,6 +701,15 @@ class PgVectorEmbeddingRepository:
 
             if deleted_count > 0:
                 logger.info(f"Deleted {deleted_count} embedding(s) for user {user_id}")
+                # Phase 1.3b — drop cached match matrix so the tenant's next
+                # search does not see the deleted enrollment.
+                if self._match_service is not None:
+                    try:
+                        tu = _tenant_uuid(tenant_id)
+                        if tu is not None:
+                            await self._match_service.invalidate(tu)
+                    except Exception:
+                        logger.debug("match cache invalidate failed", exc_info=True)
                 return True
             else:
                 logger.debug(f"No embedding to delete for user {user_id}")
