@@ -1,6 +1,8 @@
 """Active liveness challenge manager."""
 
+import hashlib
 import logging
+import os
 import random
 import time
 import uuid
@@ -61,18 +63,60 @@ class ActiveLivenessManager:
                 from mediapipe.tasks import python
                 from mediapipe.tasks.python import vision
 
-                model_path = Path(__file__).parent.parent.parent.parent / "models" / "face_landmarker.task"
+                # Resolve model path: env override -> default under <repo>/models/.
+                # Windows-specific dev fallback removed (2026-04-24, Phase 0 gesture prereqs).
+                default_model_path = (
+                    Path(__file__).parent.parent.parent.parent / "models" / "face_landmarker.task"
+                )
+                model_path = Path(
+                    os.getenv("FACE_LANDMARKER_MODEL_PATH", str(default_model_path))
+                )
+                # Cross-platform fallback: if the env/default path is absent, try the
+                # repo-relative "models/face_landmarker.task" (useful when cwd != repo root).
                 if not model_path.exists():
-                    alt_paths = [
-                        Path("models/face_landmarker.task"),
-                        Path("C:/Users/hp/Documents/GitHub/Rollingcat-Software/biometric-processor/models/face_landmarker.task"),
-                    ]
-                    for alt in alt_paths:
-                        if alt.exists():
-                            model_path = alt
-                            break
+                    repo_relative = Path("models/face_landmarker.task")
+                    if repo_relative.exists():
+                        model_path = repo_relative
                     else:
-                        raise FileNotFoundError(f"Face landmarker model not found. Expected at: {model_path}")
+                        raise FileNotFoundError(
+                            f"Face landmarker model not found. Expected at: {model_path}. "
+                            "Set FACE_LANDMARKER_MODEL_PATH or place the model under ./models/."
+                        )
+
+                # Optional SHA256 integrity check. Only enforced when the env var is set
+                # (so dev without a hash still works; production MUST set this).
+                expected_face_sha = os.getenv("FACE_LANDMARKER_MODEL_SHA256", "").strip()
+                if expected_face_sha:
+                    actual_face_sha = hashlib.sha256(Path(model_path).read_bytes()).hexdigest()
+                    if actual_face_sha.lower() != expected_face_sha.lower():
+                        raise RuntimeError(
+                            "Face landmarker model SHA256 mismatch: "
+                            f"expected={expected_face_sha}, actual={actual_face_sha}, "
+                            f"path={model_path}"
+                        )
+
+                # Symmetric pattern for the hand landmarker (gesture liveness, Phase 0).
+                # Do NOT load the model here — server-side gesture verification is
+                # landmark-based, not ML-based. This block only validates the asset
+                # when it's present, so ops can rotate it without client re-release.
+                gesture_model_env = os.getenv("GESTURE_HAND_LANDMARKER_MODEL_PATH", "").strip()
+                if gesture_model_env:
+                    gesture_model_path = Path(gesture_model_env)
+                    if gesture_model_path.exists():
+                        expected_gesture_sha = os.getenv(
+                            "GESTURE_HAND_LANDMARKER_MODEL_SHA256", ""
+                        ).strip()
+                        if expected_gesture_sha:
+                            actual_gesture_sha = hashlib.sha256(
+                                gesture_model_path.read_bytes()
+                            ).hexdigest()
+                            if actual_gesture_sha.lower() != expected_gesture_sha.lower():
+                                raise RuntimeError(
+                                    "Hand landmarker model SHA256 mismatch: "
+                                    f"expected={expected_gesture_sha}, "
+                                    f"actual={actual_gesture_sha}, "
+                                    f"path={gesture_model_path}"
+                                )
 
                 base_options = python.BaseOptions(model_asset_path=str(model_path))
                 options = vision.FaceLandmarkerOptions(

@@ -1,0 +1,15 @@
+FIVUCSAS Biometric Processor
+Copyright (c) Rollingcat Software
+
+This product includes software and/or data from third parties under the
+licenses listed below. See docs/LICENSES/ for the full license record for
+each item.
+
+------------------------------------------------------------------------
+
+This product includes models published by Google LLC under Apache License
+2.0 — MediaPipe Hand Landmarker.
+
+  Source:   https://developers.google.com/mediapipe/solutions/vision/hand_landmarker
+  License:  Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+  Record:   docs/LICENSES/mediapipe-hand-landmarker.md
