@@ -14,11 +14,20 @@ from functools import lru_cache
 
 from app.application.services.event_publisher import EventPublisher
 from app.application.services.active_liveness_manager import ActiveLivenessManager
+from app.application.services.active_gesture_liveness_manager import (
+    ActiveGestureLivenessManager,
+)
 from app.application.use_cases.batch_process import BatchEnrollmentUseCase, BatchVerificationUseCase
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
 from app.application.use_cases.generate_puzzle import GeneratePuzzleUseCase
 from app.application.use_cases.process_active_liveness_frame import ProcessActiveLivenessFrameUseCase
+from app.application.use_cases.process_active_gesture_liveness_frame import (
+    ProcessActiveGestureLivenessFrameUseCase,
+)
 from app.application.use_cases.start_active_liveness import StartActiveLivenessUseCase
+from app.application.use_cases.start_active_gesture_liveness import (
+    StartActiveGestureLivenessUseCase,
+)
 from app.application.use_cases.verify_puzzle import VerifyPuzzleUseCase
 
 # Application use cases
@@ -582,6 +591,54 @@ def get_process_active_liveness_frame_use_case() -> ProcessActiveLivenessFrameUs
     )
 
 
+# ============================================================================
+# Active Gesture Liveness (Phase 1, 2026-04-24)
+# ============================================================================
+# Feature-gated: callers should check settings.ACTIVE_GESTURE_LIVENESS_ENABLED
+# before wiring these dependencies into a route — otherwise the factories
+# raise FeatureDisabledError so bugs in the route layer can't accidentally
+# expose the gesture surface.
+
+
+class GestureFeatureDisabledError(RuntimeError):
+    """Raised when a gesture dependency is requested while the feature is off."""
+
+
+@lru_cache()
+def get_active_gesture_liveness_manager() -> ActiveGestureLivenessManager:
+    """Get the gesture liveness manager (singleton).
+
+    Raises:
+        GestureFeatureDisabledError: If ACTIVE_GESTURE_LIVENESS_ENABLED is False.
+    """
+
+    if not settings.ACTIVE_GESTURE_LIVENESS_ENABLED:
+        raise GestureFeatureDisabledError(
+            "Active gesture liveness is disabled "
+            "(set ACTIVE_GESTURE_LIVENESS_ENABLED=true to enable)."
+        )
+    logger.info("Creating ActiveGestureLivenessManager (landmarks-only, server-side)")
+    return ActiveGestureLivenessManager()
+
+
+def get_start_active_gesture_liveness_use_case() -> StartActiveGestureLivenessUseCase:
+    """Factory for :class:`StartActiveGestureLivenessUseCase`."""
+
+    return StartActiveGestureLivenessUseCase(
+        manager=get_active_gesture_liveness_manager(),
+        session_repository=get_active_liveness_session_repository(),
+    )
+
+
+def get_process_active_gesture_liveness_frame_use_case() -> ProcessActiveGestureLivenessFrameUseCase:
+    """Factory for :class:`ProcessActiveGestureLivenessFrameUseCase`."""
+
+    return ProcessActiveGestureLivenessFrameUseCase(
+        manager=get_active_gesture_liveness_manager(),
+        session_repository=get_active_liveness_session_repository(),
+    )
+
+
 def get_detect_card_type_use_case() -> DetectCardTypeUseCase:
     """Get card type detection use case instance.
 
@@ -1058,6 +1115,7 @@ def clear_cache() -> None:
     get_file_storage.cache_clear()
     get_active_liveness_manager.cache_clear()
     get_active_liveness_session_repository.cache_clear()
+    get_active_gesture_liveness_manager.cache_clear()
     get_embedding_repository.cache_clear()
     get_event_bus.cache_clear()
     get_event_handler.cache_clear()
