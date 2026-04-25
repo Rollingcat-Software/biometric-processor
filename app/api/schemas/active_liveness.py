@@ -1,14 +1,23 @@
 """Schemas for active liveness detection with challenge sessions."""
 
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 
 class ChallengeType(str, Enum):
-    """Types of liveness challenges."""
+    """Types of liveness challenges.
 
+    Face-modality values (``BLINK`` … ``RAISE_EYEBROWS``) are scored by
+    ``ActiveLivenessManager`` against MediaPipe face landmarks.
+    Gesture-modality values (``FINGER_COUNT`` … ``HOLD_POSITION``) are scored
+    by ``ActiveGestureLivenessManager`` against client-supplied hand landmarks.
+    Mirror of ``GestureChallengeType`` in ``app.api.schemas.gesture_liveness``;
+    the two enums share string values so ``Challenge.type`` can store either.
+    """
+
+    # Face modality
     BLINK = "blink"
     SMILE = "smile"
     LIGHT = "light"
@@ -16,6 +25,16 @@ class ChallengeType(str, Enum):
     TURN_RIGHT = "turn_right"
     OPEN_MOUTH = "open_mouth"
     RAISE_EYEBROWS = "raise_eyebrows"
+    # Gesture modality (server-side verifies landmarks-only; no ML inference).
+    FINGER_COUNT = "finger_count"
+    SHAPE_TRACE = "shape_trace"
+    WAVE = "wave"
+    HAND_FLIP = "hand_flip"
+    FINGER_TAP = "finger_tap"
+    PINCH = "pinch"
+    PEEK_A_BOO = "peek_a_boo"
+    MATH = "math"
+    HOLD_POSITION = "hold_position"
 
 
 class ChallengeStatus(str, Enum):
@@ -59,9 +78,19 @@ class ActiveLivenessStartRequest(ActiveLivenessConfig):
 
 
 class ActiveLivenessSession(BaseModel):
-    """Active liveness session state."""
+    """Active liveness session state.
+
+    ``modality`` defaults to ``"face"`` for back-compat with the existing
+    face-liveness flow. When ``"gesture"``, the session is scored by
+    ``ActiveGestureLivenessManager`` using client-supplied hand landmarks
+    rather than server-side MediaPipe inference.
+    """
 
     session_id: str = Field(..., description="Unique session ID")
+    modality: Literal["face", "gesture"] = Field(
+        default="face",
+        description="Liveness modality. 'face' = legacy face landmarks; 'gesture' = hand landmarks.",
+    )
     challenges: List[Challenge] = Field(default_factory=list)
     current_challenge_index: int = Field(default=0)
     started_at: float = Field(..., description="Unix timestamp when the session started")
@@ -80,6 +109,15 @@ class ActiveLivenessSession(BaseModel):
     last_ear: float = Field(default=0.3)
     verification_token: Optional[str] = Field(default=None)
     verification_token_expires_at: Optional[float] = Field(default=None)
+    # Gesture-modality working state (ignored when modality == "face").
+    gesture_state: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Per-session scratch state for gesture liveness. Stores wrist "
+            "trajectories, frame counts, palm-normal history, etc. Only "
+            "populated when modality == 'gesture'."
+        ),
+    )
 
 
 class ChallengeResult(BaseModel):
@@ -119,6 +157,16 @@ CHALLENGE_INSTRUCTIONS = {
     ChallengeType.TURN_RIGHT: "Please turn your head to the right",
     ChallengeType.OPEN_MOUTH: "Please open your mouth wide",
     ChallengeType.RAISE_EYEBROWS: "Please raise your eyebrows",
+    # Gesture modality
+    ChallengeType.FINGER_COUNT: "Show the requested number of fingers",
+    ChallengeType.SHAPE_TRACE: "Trace the shape with your index finger",
+    ChallengeType.WAVE: "Wave your hand side to side",
+    ChallengeType.HAND_FLIP: "Flip your hand to show the back and then the palm",
+    ChallengeType.FINGER_TAP: "Tap your index and middle fingertips together",
+    ChallengeType.PINCH: "Pinch your thumb and index finger together",
+    ChallengeType.PEEK_A_BOO: "Cover your face with your hand, then reveal it",
+    ChallengeType.MATH: "Show the number of fingers that answers the question",
+    ChallengeType.HOLD_POSITION: "Hold your hand still in the target position",
 }
 
 
