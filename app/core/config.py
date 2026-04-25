@@ -121,7 +121,7 @@ class Settings(BaseSettings):
             return min(cpu_count, 8)
         return self.ML_THREAD_POOL_SIZE
 
-    def get_liveness_backend(self) -> Literal["enhanced", "texture", "uniface", "optimized"]:
+    def get_liveness_backend(self) -> Literal["enhanced", "texture", "uniface", "optimized", "hybrid"]:
         """Get the effective liveness backend.
 
         LIVENESS_MODE is the canonical configuration source. LIVENESS_BACKEND is
@@ -133,7 +133,7 @@ class Settings(BaseSettings):
         mode_to_backend = {
             "passive": "texture",
             "active": "enhanced",
-            "combined": "uniface" if self.LIVENESS_UNIFACE_DEFAULT_ENABLED else "enhanced",
+            "combined": "hybrid",
         }
         return mode_to_backend[self.LIVENESS_MODE]
 
@@ -171,7 +171,7 @@ class Settings(BaseSettings):
     )
 
     # Liveness Detection Backend
-    LIVENESS_BACKEND: Optional[Literal["enhanced", "texture", "uniface", "optimized"]] = Field(
+    LIVENESS_BACKEND: Optional[Literal["enhanced", "texture", "uniface", "optimized", "hybrid"]] = Field(
         default=None,
         description=(
             "Deprecated compatibility alias for backend selection. "

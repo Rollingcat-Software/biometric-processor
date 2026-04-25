@@ -1,6 +1,6 @@
 """Face detection result entity."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 import numpy as np
@@ -31,6 +31,7 @@ class FaceDetectionResult:
     confidence: float
     antispoof_score: Optional[float] = None
     antispoof_label: Optional[str] = None
+    additional_bounding_boxes: tuple[Tuple[int, int, int, int], ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         """Validate face detection result data."""
@@ -47,6 +48,11 @@ class FaceDetectionResult:
             x, y, w, h = self.bounding_box
             if w <= 0 or h <= 0:
                 raise ValueError(f"Invalid bounding box dimensions: {w}x{h}")
+
+        for bbox in self.additional_bounding_boxes:
+            _, _, w, h = bbox
+            if w <= 0 or h <= 0:
+                raise ValueError(f"Invalid additional bounding box dimensions: {w}x{h}")
 
     def get_face_region(self, image: np.ndarray) -> np.ndarray:
         """Extract face region from image using bounding box.
