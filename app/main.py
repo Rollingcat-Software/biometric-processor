@@ -260,12 +260,6 @@ STATIC_DIR = BASE_DIR / "demo-ui" / "out"
 static_file_service = create_static_file_service(STATIC_DIR)
 
 
-@app.get("/ping", include_in_schema=False)
-async def ping():
-    """Instant health probe for load balancers and uptime monitors."""
-    return {"status": "ok"}
-
-
 # ============================================================================
 # Lightweight Health Probe (no dependency checks -- sub-5ms response)
 # ============================================================================
