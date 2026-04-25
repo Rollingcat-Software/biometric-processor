@@ -174,6 +174,7 @@ class CheckLivenessUseCase:
             "confidence": liveness_result.confidence,
             "backend": settings.get_liveness_backend(),
             "mode": settings.LIVENESS_MODE,
+            "security_profile": settings.get_liveness_security_profile(),
             "threshold": settings.LIVENESS_THRESHOLD,
             "sub_scores": {
                 "texture": liveness_result.details.get("texture"),
@@ -261,6 +262,7 @@ class CheckLivenessUseCase:
                 "threshold": settings.LIVENESS_THRESHOLD,
                 "backend": settings.get_liveness_backend(),
                 "mode": settings.LIVENESS_MODE,
+                "security_profile": settings.get_liveness_security_profile(),
                 "challenge": liveness_result.challenge,
                 "challenge_completed": liveness_result.challenge_completed,
                 "texture_score": liveness_result.details.get("texture"),

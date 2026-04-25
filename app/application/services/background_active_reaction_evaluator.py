@@ -54,6 +54,9 @@ class BackgroundReactionSummary:
     passive_window_score: float
     active_frame_score_mean: float
     active_frame_evidence_mean: float
+    active_score_mapping_mode: str = "standard_sqrt"
+    active_score_standard_mapping: float = 0.0
+    active_score_strict_mapping: float = 0.0
     base_active_trust: float = 0.0
     trust_penalty: float = 0.0
     blink_anomaly_score: float = 0.0
@@ -113,9 +116,22 @@ class BackgroundActiveReactionEvaluator:
     BLINK_RATE_WINDOW_SECONDS = 1.35
     MOTION_WINDOW_SECONDS = 1.25
 
-    def __init__(self, *, decay_seconds: float = 2.4, min_face_size_ratio: float = 0.08) -> None:
+    def __init__(
+        self,
+        *,
+        decay_seconds: float = 2.4,
+        min_face_size_ratio: float = 0.08,
+        security_profile: str = "standard",
+        strict_sigmoid_midpoint: float = 0.62,
+        strict_sigmoid_steepness: float = 12.0,
+        strict_sigmoid_scale: float = 100.0,
+    ) -> None:
         self._decay_seconds = decay_seconds
         self._min_face_size_ratio = min_face_size_ratio
+        self._security_profile = str(security_profile or "standard").lower()
+        self._strict_sigmoid_midpoint = float(strict_sigmoid_midpoint)
+        self._strict_sigmoid_steepness = float(strict_sigmoid_steepness)
+        self._strict_sigmoid_scale = float(strict_sigmoid_scale)
         self._persisted_reaction_evidence = {
             "blink": 0.0,
             "head_turn_left": 0.0,
@@ -160,6 +176,9 @@ class BackgroundActiveReactionEvaluator:
                 combined_active_score=self._active_score_from_evidence(pr),
                 supported_score=passive_window_score, passive_weight=0.88, active_weight=0.12,
                 passive_window_score=passive_window_score, active_frame_score_mean=0.0, active_frame_evidence_mean=0.0,
+                active_score_mapping_mode=self._active_score_mapping_mode(),
+                active_score_standard_mapping=self._standard_active_score_from_evidence(pr),
+                active_score_strict_mapping=self._standard_active_score_from_evidence(pr),
             )
 
         ear_values = [f.ear_current for f in usable_frames if f.ear_current is not None]
@@ -226,6 +245,9 @@ class BackgroundActiveReactionEvaluator:
             passive_window_score=passive_window_score,
             active_frame_score_mean=float(np.mean(frame_active_scores)) if frame_active_scores else 0.0,
             active_frame_evidence_mean=float(np.mean(frame_active_evidence)) if frame_active_evidence else 0.0,
+            active_score_mapping_mode=self._active_score_mapping_mode(),
+            active_score_standard_mapping=self._standard_active_score_from_evidence(combined_active_evidence),
+            active_score_strict_mapping=self._standard_active_score_from_evidence(combined_active_evidence),
             base_active_trust=base_active_trust, trust_penalty=anomaly.trust_penalty,
             blink_anomaly_score=anomaly.blink_anomaly_score, motion_anomaly_score=anomaly.motion_anomaly_score,
             signal_inconsistency_score=anomaly.signal_inconsistency_score, spoof_support_score=anomaly.spoof_support_score,
@@ -247,7 +269,21 @@ class BackgroundActiveReactionEvaluator:
         }
 
     def _active_score_from_evidence(self, active_evidence: float) -> float:
+        return self._standard_active_score_from_evidence(active_evidence)
+
+    def _active_score_mapping_mode(self) -> str:
+        return "standard_sqrt"
+
+    def _standard_active_score_from_evidence(self, active_evidence: float) -> float:
         return min(100.0, max(0.0, 100.0 * float(np.sqrt(max(active_evidence, 0.0)))))
+
+    def _strict_active_score_from_evidence(self, active_evidence: float) -> float:
+        return _normalized_sigmoid_score(
+            active_evidence,
+            midpoint=self._strict_sigmoid_midpoint,
+            steepness=self._strict_sigmoid_steepness,
+            scale=self._strict_sigmoid_scale,
+        )
 
     def _decay_persisted_evidence(self, latest_timestamp: Optional[float]) -> None:
         if latest_timestamp is None:
@@ -560,6 +596,26 @@ def _mean(values: Sequence[Optional[float]]) -> Optional[float]:
 
 def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
+
+
+def _normalized_sigmoid_score(
+    evidence: float,
+    *,
+    midpoint: float,
+    steepness: float,
+    scale: float,
+) -> float:
+    clipped_evidence = _clamp01(evidence)
+
+    def _sigmoid(x: float) -> float:
+        return 1.0 / (1.0 + float(np.exp(-steepness * (x - midpoint))))
+
+    low = _sigmoid(0.0)
+    high = _sigmoid(1.0)
+    if high - low <= 1e-6:
+        return 0.0
+    normalized = (_sigmoid(clipped_evidence) - low) / (high - low)
+    return max(0.0, min(float(scale), float(scale) * normalized))
 
 
 def _longest_run_duration(points: Sequence[tuple[float, Optional[float]]], predicate) -> float:

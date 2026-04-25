@@ -22,6 +22,8 @@ import cv2
 import numpy as np
 from skimage.feature import local_binary_pattern
 
+from app.application.services.cutout_anomaly_detector import CutoutAnomalyDetector
+from app.core.config import get_settings
 from app.domain.entities.liveness_result import LivenessResult
 from app.domain.exceptions.face_errors import FaceNotDetectedError
 from app.domain.exceptions.liveness_errors import LivenessCheckError
@@ -124,6 +126,8 @@ class EnhancedLivenessDetector(ILivenessDetector):
         self._enable_smile = enable_smile_detection
         self._blink_frames_required = blink_frames_required
         self._fft_downsample_size = fft_downsample_size
+        self._settings = get_settings()
+        self._security_profile = "standard"
 
         # PERFORMANCE FIX: Load cascades once at class level
         self._load_cascades_once()
@@ -144,6 +148,7 @@ class EnhancedLivenessDetector(ILivenessDetector):
         self._blink_counter = 0
         self._eyes_closed_frames = 0
         self._previous_eye_count = 2
+        self._cutout_anomaly_detector = CutoutAnomalyDetector()
         self._screen_replay_anti_spoof = ScreenReplayAntiSpoof()
         self._screen_replay_veto_streak = 0
         self._screen_replay_veto_streak_threshold = 3
@@ -155,7 +160,8 @@ class EnhancedLivenessDetector(ILivenessDetector):
             f"blink_detection={enable_blink_detection}, "
             f"smile_detection={enable_smile_detection}, "
             f"fft_downsample_size={fft_downsample_size}, "
-            f"gabor_kernels={len(self._gabor_kernels)} (pre-computed)"
+            f"gabor_kernels={len(self._gabor_kernels)} (pre-computed), "
+            f"security_profile={self._security_profile}"
         )
 
     async def check_liveness(self, image: np.ndarray) -> LivenessResult:
@@ -212,6 +218,7 @@ class EnhancedLivenessDetector(ILivenessDetector):
                         "screen_replay_confident": screen_replay_assessment.confident,
                         "screen_replay_hard_veto": True,
                         "screen_replay_veto_streak": float(self._screen_replay_veto_streak),
+                        "security_profile": self._security_profile,
                     },
                 )
 
@@ -254,13 +261,16 @@ class EnhancedLivenessDetector(ILivenessDetector):
                 h, w = gray.shape[:2]
                 face = (0, 0, w, h)
                 face_roi = gray
+                face_roi_bgr = image
                 face_roi_source = "full_image_fallback"
             else:
                 # Use the largest face
                 face = max(faces, key=lambda rect: rect[2] * rect[3])
                 x, y, w, h = face
                 face_roi = gray[y : y + h, x : x + w]
+                face_roi_bgr = image[y : y + h, x : x + w]
                 face_roi_source = "detected_face"
+            cutout_assessment = self._cutout_anomaly_detector.analyze(face_roi_bgr)
 
             # Active challenges based on configuration
             blink_score = 0.0
@@ -316,10 +326,11 @@ class EnhancedLivenessDetector(ILivenessDetector):
                 active_evidence=active_evidence,
             )
 
-            liveness_score = (
+            base_liveness_score = (
                 passive_score * passive_weight
                 + active_score * active_weight
             )
+            liveness_score = float(base_liveness_score)
 
             # Normalize to 0-100
             liveness_score = min(100.0, max(0.0, liveness_score))
@@ -354,7 +365,7 @@ class EnhancedLivenessDetector(ILivenessDetector):
                 f"Liveness detection complete: score={liveness_score:.2f}, confidence={confidence:.2f}, "
                 f"is_live={is_live}, challenge={challenge_type}, "
                 f"challenge_completed={challenge_completed}, "
-                f"elapsed_ms={elapsed_ms:.0f}"
+                f"elapsed_ms={elapsed_ms:.0f}, security_profile={self._security_profile}"
             )
             logger.debug(f"Liveness detection: {elapsed_ms:.0f}ms (score={liveness_score:.1f})")
 
@@ -371,11 +382,13 @@ class EnhancedLivenessDetector(ILivenessDetector):
                     "blink": blink_score,
                     "smile": smile_score,
                     "passive_score": passive_score,
-                    "base_liveness_score": liveness_score,
+                    "base_liveness_score": base_liveness_score,
+                    "final_liveness_score": liveness_score,
                     "screen_replay_spoof_score": spoof_score,
                     "screen_replay_confident": screen_replay_assessment.confident,
                     "screen_replay_hard_veto": False,
                     "screen_replay_veto_streak": float(self._screen_replay_veto_streak),
+                    "security_profile": self._security_profile,
                     "passive_reliability": passive_reliability,
                     "active_score": active_score,
                     "active_evidence": active_evidence,
@@ -383,6 +396,9 @@ class EnhancedLivenessDetector(ILivenessDetector):
                     "background_active_reaction_detected": challenge_completed,
                     "background_active_score": active_score,
                     "background_active_evidence": active_evidence,
+                    "hole_cutout_risk": cutout_assessment.hole_cutout_risk,
+                    "focal_blur_anomaly_risk": cutout_assessment.focal_blur_anomaly_risk,
+                    "cutout_spoof_support": cutout_assessment.cutout_spoof_support,
                     "skin_coverage": skin_coverage,
                     "quality_score": quality_score,
                     "passive_weight": passive_weight,
@@ -395,6 +411,7 @@ class EnhancedLivenessDetector(ILivenessDetector):
                     "decision_strength": decision_strength,
                     "evidence_sufficiency": evidence_sufficiency,
                     "face_roi_source": face_roi_source,
+                    **cutout_assessment.details,
                     **screen_replay_assessment.details,
                 },
             )
@@ -546,11 +563,15 @@ class EnhancedLivenessDetector(ILivenessDetector):
         if self._enable_blink:
             # In single-frame mode values around 60-65 are still mostly neutral eye
             # visibility, so start evidence later and ramp more gradually.
-            blink_evidence = max(0.0, min(1.0, (blink_score - 68.0) / 24.0))
+            blink_start = 68.0
+            blink_span = 24.0
+            blink_evidence = max(0.0, min(1.0, (blink_score - blink_start) / blink_span))
             evidence_components.append(blink_evidence * 0.55)
         if self._enable_smile:
             # Around 45-55 is still weak/neutral in single-frame mode.
-            smile_evidence = max(0.0, min(1.0, (smile_score - 58.0) / 28.0))
+            smile_start = 58.0
+            smile_span = 28.0
+            smile_evidence = max(0.0, min(1.0, (smile_score - smile_start) / smile_span))
             evidence_components.append(smile_evidence * 0.45)
 
         if not evidence_components:
@@ -615,7 +636,9 @@ class EnhancedLivenessDetector(ILivenessDetector):
         evidence_norm = max(0.0, min(1.0, active_evidence))
         active_cap = 0.18 * evidence_norm
         passive_weight = 0.40 + 0.34 * quality_norm + 0.18 * reliability_norm
-        passive_weight = max(0.82, min(0.98, passive_weight + (0.18 - active_cap)))
+        passive_floor = 0.82
+        passive_bias = 0.18
+        passive_weight = max(passive_floor, min(0.98, passive_weight + (passive_bias - active_cap)))
         active_weight = 1.0 - passive_weight
         return passive_weight, active_weight
 
@@ -870,6 +893,48 @@ class EnhancedLivenessDetector(ILivenessDetector):
             decision_strength,
             evidence_sufficiency,
         )
+
+    def _calculate_strict_spoof_support(
+        self,
+        *,
+        texture_score: float,
+        lbp_score: float,
+        color_score: float,
+        screen_replay_spoof_score: float,
+        screen_replay_details: Optional[dict[str, float]] = None,
+        cutout_spoof_support: float = 0.0,
+    ) -> float:
+        return 0.0
+
+    def _apply_strict_exam_decision_layers(
+        self,
+        *,
+        base_liveness_score: float,
+        strict_spoof_support: float,
+        screen_replay_spoof_score: float,
+        challenge_required: bool,
+        challenge_completed: bool,
+    ) -> dict[str, float]:
+        return {
+            "strict_exam_base_liveness_score": float(base_liveness_score),
+            "strict_exam_replay_risk": 0.0,
+            "strict_exam_replay_penalty": 0.0,
+            "strict_exam_spoof_support_penalty": 0.0,
+            "strict_exam_challenge_penalty": 0.0,
+            "strict_exam_hard_block": 0.0,
+            "strict_exam_layered_score": float(base_liveness_score),
+        }
+
+    def _strict_micro_texture_metrics(self, details: Optional[dict[str, float]]) -> dict[str, float]:
+        return {
+            "strict_exam_moire_risk": 0.0,
+            "strict_exam_moire_fft_risk": 0.0,
+            "strict_exam_gabor_screen_risk": 0.0,
+            "strict_exam_fft_screen_risk": 0.0,
+            "strict_exam_micro_texture_risk": 0.0,
+            "strict_exam_weighted_micro_texture_risk": 0.0,
+            "strict_exam_weighted_moire_risk": 0.0,
+        }
 
     def _detect_blink(self, face_roi: np.ndarray, face_rect: Tuple) -> Tuple[float, bool]:
         """Detect eye blink using Haar cascade eye detection.
@@ -1191,3 +1256,7 @@ class EnhancedLivenessDetector(ILivenessDetector):
         self._eyes_closed_frames = 0
         self._previous_eye_count = 2
         logger.debug("Liveness detector state reset")
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
