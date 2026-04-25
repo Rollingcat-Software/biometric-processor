@@ -121,7 +121,7 @@ class Settings(BaseSettings):
             return min(cpu_count, 8)
         return self.ML_THREAD_POOL_SIZE
 
-    def get_liveness_backend(self) -> Literal["enhanced", "texture", "uniface", "optimized"]:
+    def get_liveness_backend(self) -> Literal["enhanced", "texture", "uniface", "optimized", "hybrid"]:
         """Get the effective liveness backend.
 
         LIVENESS_MODE is the canonical configuration source. LIVENESS_BACKEND is
@@ -133,7 +133,7 @@ class Settings(BaseSettings):
         mode_to_backend = {
             "passive": "texture",
             "active": "enhanced",
-            "combined": "uniface" if self.LIVENESS_UNIFACE_DEFAULT_ENABLED else "enhanced",
+            "combined": "hybrid",
         }
         return mode_to_backend[self.LIVENESS_MODE]
 
@@ -169,9 +169,16 @@ class Settings(BaseSettings):
             "'combined' maps to enhanced multi-modal checks."
         ),
     )
+    LIVENESS_SECURITY_PROFILE: Literal["standard"] = Field(
+        default="standard",
+        description=(
+            "Security posture for liveness decisions. "
+            "'standard' preserves the baseline behavior."
+        ),
+    )
 
     # Liveness Detection Backend
-    LIVENESS_BACKEND: Optional[Literal["enhanced", "texture", "uniface", "optimized"]] = Field(
+    LIVENESS_BACKEND: Optional[Literal["enhanced", "texture", "uniface", "optimized", "hybrid"]] = Field(
         default=None,
         description=(
             "Deprecated compatibility alias for backend selection. "
@@ -181,10 +188,10 @@ class Settings(BaseSettings):
         ),
     )
     LIVENESS_UNIFACE_DEFAULT_ENABLED: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "Feature flag for using UniFace as the default backend for combined "
-            "liveness mode when no explicit LIVENESS_BACKEND override is set."
+            "Feature flag for rolling out UniFace as the default backend for "
+            "combined liveness mode when no explicit LIVENESS_BACKEND override is set."
         ),
     )
     LIVENESS_CALIBRATION_LOG_PATH: str = Field(
@@ -673,6 +680,40 @@ class Settings(BaseSettings):
     def is_development(self) -> bool:
         """Check if running in development."""
         return self.ENVIRONMENT == "development"
+
+    def is_strict_exam_security_profile(self) -> bool:
+        """Return whether strict exam anti-spoof behavior is enabled."""
+        return False
+
+    def get_liveness_security_profile(self) -> str:
+        """Return the configured liveness security profile name."""
+        return "standard"
+
+    def get_strict_sigmoid_config(self) -> dict[str, float]:
+        """Return the normalized sigmoid parameters used by strict liveness scoring."""
+        return {
+            "midpoint": 0.62,
+            "steepness": 12.0,
+            "scale": 100.0,
+        }
+
+    def get_strict_micro_texture_config(self) -> dict[str, float]:
+        """Return strict-mode micro-texture and moire spoof-support weights."""
+        return {
+            "micro_texture_weight": 1.0,
+            "moire_support_weight": 1.0,
+            "cutout_support_weight": 1.0,
+        }
+
+    def get_strict_exam_decision_config(self) -> dict[str, float]:
+        """Return strict-exam decision-layer penalties and escalation thresholds."""
+        return {
+            "replay_penalty_max": 0.0,
+            "spoof_support_penalty_max": 0.0,
+            "challenge_penalty": 0.0,
+            "hard_block_replay_risk": 1.0,
+            "hard_block_spoof_support": 1.0,
+        }
 
     def get_cors_config(self) -> dict:
         """Get CORS configuration.

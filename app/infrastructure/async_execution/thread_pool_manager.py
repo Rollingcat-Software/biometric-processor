@@ -15,6 +15,8 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Any, Callable, TypeVar
 
+from app.domain.exceptions.face_errors import FaceNotDetectedError
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
@@ -115,6 +117,9 @@ class ThreadPoolManager:
         try:
             result = await loop.run_in_executor(self._executor, func, *args)
             return result
+        except FaceNotDetectedError as e:
+            logger.info(f"Thread pool execution returned no-face result: {e}")
+            raise
         except Exception as e:
             logger.error(f"Error in thread pool execution: {e}", exc_info=True)
             raise

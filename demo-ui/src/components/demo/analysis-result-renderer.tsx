@@ -232,10 +232,8 @@ function renderDemographics(result: any) {
 function renderLiveness(result: any) {
   const liveness = result.liveness || result;
   const isLive = liveness.is_live;
-  // API returns liveness_score (0-100), fallback to confidence
-  const score = liveness.liveness_score ?? liveness.confidence ?? 0;
-  // Normalize to 0-1 if score is > 1 (meaning it's 0-100 scale)
-  // formatPercent handles both 0-1 and 0-100 scales automatically
+  const score = liveness.score ?? liveness.liveness_score ?? 0;
+  const confidence = liveness.confidence ?? (score > 1 ? score / 100 : score);
 
   return (
     <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="space-y-4">
@@ -243,11 +241,20 @@ function renderLiveness(result: any) {
         <p className={`text-3xl font-bold ${isLive ? 'text-green-600' : 'text-red-600'}`}>
           {isLive ? '✓ Live Person' : '✗ Spoof Detected'}
         </p>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Liveness Score: {formatPercent(score)}
-        </p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1 rounded-lg border bg-background/60 p-3">
+            <p className="text-xs text-muted-foreground">Liveness Score</p>
+            <p className="font-semibold">{formatPercent(score)}</p>
+            <Progress value={toPercent(score)} className="h-1.5" />
+          </div>
+          <div className="space-y-1 rounded-lg border bg-background/60 p-3">
+            <p className="text-xs text-muted-foreground">Decision Confidence</p>
+            <p className="font-semibold">{formatPercent(confidence)}</p>
+            <Progress value={toPercent(confidence)} className="h-1.5" />
+          </div>
+        </div>
         {liveness.challenge && (
-          <p className="text-xs text-muted-foreground">Challenge: {liveness.challenge}</p>
+          <p className="mt-2 text-xs text-muted-foreground">Challenge: {liveness.challenge}</p>
         )}
         {liveness.method && (
           <p className="text-xs text-muted-foreground">Method: {liveness.method}</p>

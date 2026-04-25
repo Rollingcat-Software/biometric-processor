@@ -12,7 +12,8 @@ interface LivenessRequest {
 // Matches actual backend response
 interface LivenessResponse {
   is_live: boolean;
-  liveness_score: number;
+  score: number;
+  confidence: number;
   challenge: string;
   challenge_completed: boolean;
   message: string;
@@ -21,6 +22,7 @@ interface LivenessResponse {
 // Extended response for UI display
 interface LivenessResult {
   is_live: boolean;
+  score: number;
   confidence: number;
   challenge: string;
   challenge_completed: boolean;
@@ -50,7 +52,8 @@ async function checkLiveness(request: LivenessRequest): Promise<LivenessResult> 
   // Transform to UI-friendly format
   return {
     is_live: data.is_live,
-    confidence: data.liveness_score / 100, // Normalize to 0-1
+    score: data.score,
+    confidence: data.confidence,
     challenge: data.challenge,
     challenge_completed: data.challenge_completed,
     message: data.message,
@@ -58,7 +61,7 @@ async function checkLiveness(request: LivenessRequest): Promise<LivenessResult> 
       {
         name: data.challenge === 'texture' ? 'Texture Analysis' : 'Combined Analysis',
         passed: data.is_live,
-        score: data.liveness_score,
+        score: data.score,
         details: data.message,
       },
     ],

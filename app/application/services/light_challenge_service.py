@@ -25,16 +25,19 @@ class LightChallengeService:
         expected_response_window_ms: int = 500,
         minimum_delay_ms: int = 50,
         min_color_shift: float = 0.05,
+        colors: Optional[Sequence[str]] = None,
     ) -> None:
         self._flash_duration_ms = flash_duration_ms
         self._expected_response_window_ms = expected_response_window_ms
         self._minimum_delay_ms = minimum_delay_ms
         self._min_color_shift = min_color_shift
+        self._colors = tuple(colors or self.COLORS)
 
     def generate_challenge(self) -> dict:
         issued_at = time.time()
         return {
-            "color": random.choice(self.COLORS),
+            "color": random.choice(self._colors),
+            "available_colors": list(self._colors),
             "issued_at": issued_at,
             "expires_at": issued_at + (self._expected_response_window_ms / 1000.0),
             "duration_ms": self._flash_duration_ms,
@@ -108,9 +111,25 @@ class LightChallengeService:
                 baseline = np.asarray(baseline_bgr, dtype=float)
                 target_delta = max(0.0, target_value - baseline[target_index])
                 other_delta = max(0.0, other_value - float(np.mean(baseline[other_indexes])))
-                shift = max(0.0, (target_delta - other_delta) / 255.0)
+                baseline_sum = float(np.sum(baseline) + 1e-6)
+                current_sum = float(np.sum(face_mean) + 1e-6)
+                baseline_target_chroma = float(baseline[target_index] / baseline_sum)
+                current_target_chroma = float(target_value / current_sum)
+                baseline_other_chroma = float(np.mean([baseline[idx] / baseline_sum for idx in other_indexes]))
+                current_other_chroma = float(np.mean([face_mean[idx] / current_sum for idx in other_indexes]))
+                chroma_gain = max(0.0, (current_target_chroma - baseline_target_chroma) - (current_other_chroma - baseline_other_chroma))
+                absolute_gain = max(0.0, (target_delta - other_delta) / 255.0)
+                dominance_gain = max(0.0, target_delta / max(target_delta + other_delta, 1e-6) - 0.45)
+                shift = max(
+                    0.0,
+                    0.45 * absolute_gain
+                    + 0.40 * min(1.0, chroma_gain / 0.08)
+                    + 0.15 * min(1.0, dominance_gain / 0.35),
+                )
             else:
-                shift = max(0.0, (target_value - other_value) / 255.0)
+                raw_gain = max(0.0, (target_value - other_value) / 255.0)
+                dominance = max(0.0, target_value / max(target_value + other_value, 1e-6) - 0.45)
+                shift = max(0.0, 0.75 * raw_gain + 0.25 * min(1.0, dominance / 0.35))
             return float(shift), face_mean.tolist()
 
         brightness = float(np.mean(face_mean))

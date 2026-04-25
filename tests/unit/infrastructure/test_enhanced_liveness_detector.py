@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import pytest
 
+from app.core.config import settings
 from app.domain.exceptions.face_errors import FaceNotDetectedError
 from app.domain.exceptions.liveness_errors import LivenessCheckError
 from app.infrastructure.ml.liveness.enhanced_liveness_detector import EnhancedLivenessDetector
