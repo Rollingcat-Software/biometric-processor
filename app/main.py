@@ -225,7 +225,17 @@ app.include_router(verification_pipeline.router, prefix=API_PREFIX)
 # New feature routes
 app.include_router(quality.router, prefix=API_PREFIX)
 app.include_router(multi_face.router, prefix=API_PREFIX)
-app.include_router(demographics.router, prefix=API_PREFIX)
+# Demographics router is gated behind DEMOGRAPHICS_ROUTER_ENABLED (default off).
+# See FINDINGS_2026-04-25 B2: web-app has zero callers and DeepFace.analyze
+# would lazy-load 4 extra age/gender/race/emotion models (~400 MB) on first hit.
+if settings.DEMOGRAPHICS_ROUTER_ENABLED:
+    app.include_router(demographics.router, prefix=API_PREFIX)
+    logger.info("Demographics router enabled (DEMOGRAPHICS_ROUTER_ENABLED=true)")
+else:
+    logger.info(
+        "Demographics router DISABLED (DEMOGRAPHICS_ROUTER_ENABLED=false). "
+        "Set DEMOGRAPHICS_ROUTER_ENABLED=true to enable /api/v1/demographics/*."
+    )
 app.include_router(landmarks.router, prefix=API_PREFIX)
 app.include_router(comparison.router, prefix=API_PREFIX)
 app.include_router(similarity_matrix.router, prefix=API_PREFIX)

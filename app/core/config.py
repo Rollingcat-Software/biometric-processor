@@ -377,7 +377,21 @@ class Settings(BaseSettings):
         return limits.get(endpoint_type, self.RATE_LIMIT_PER_MINUTE)
 
     # Demographics Analysis
-    DEMOGRAPHICS_ENABLED: bool = Field(default=True)
+    # NOTE (FINDINGS_2026-04-25 B2): the demographics router is OFF by default.
+    # web-app has zero callers for /api/v1/demographics/*, and DeepFace.analyze
+    # would lazy-load 4 extra models (age + gender + race + emotion, ~400 MB
+    # resident on CPU box) the first time it is hit.  Hetzner CX43 is at 94%
+    # memory; we don't want a stray demo client to swing it into OOM.  Operators
+    # who actually need demographics must opt in via DEMOGRAPHICS_ROUTER_ENABLED=true.
+    DEMOGRAPHICS_ROUTER_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enable /api/v1/demographics/* routes. Off by default — frontend "
+            "doesn't call this; loading age/gender/race/emotion models wastes "
+            "~400 MB."
+        ),
+    )
+    DEMOGRAPHICS_ENABLED: bool = Field(default=True)  # legacy flag, retained for back-compat
     DEMOGRAPHICS_INCLUDE_RACE: bool = Field(default=False)  # Privacy consideration
     DEMOGRAPHICS_INCLUDE_EMOTION: bool = Field(default=True)
 
