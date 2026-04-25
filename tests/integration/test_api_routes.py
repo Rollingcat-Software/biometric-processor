@@ -646,7 +646,7 @@ class TestActiveLivenessEndpoint:
 
         response = client.post(
             "/api/v1/liveness/active/frame",
-            data={"session_id": "session-123"},
+            data={"session_id": "session-123", "frame_timestamp": "1710000000.125"},
             files={"image": test_image_file},
         )
 
@@ -657,6 +657,27 @@ class TestActiveLivenessEndpoint:
         assert data["detection"]["detected"] is True
         assert data["challenges_completed"] == 1
         assert data["current_challenge"]["type"] == "smile"
+
+    def test_process_active_liveness_frame_forwards_frame_timestamp(
+        self,
+        client,
+        mock_process_active_liveness_frame_use_case,
+        mock_file_storage,
+        test_image_file,
+    ):
+        """Test active liveness frame forwards client timestamp."""
+        app.dependency_overrides[get_process_active_liveness_frame_use_case] = lambda: mock_process_active_liveness_frame_use_case
+        app.dependency_overrides[get_file_storage] = lambda: mock_file_storage
+
+        response = client.post(
+            "/api/v1/liveness/active/frame",
+            data={"session_id": "session-123", "frame_timestamp": "1710000000.125"},
+            files={"image": test_image_file},
+        )
+
+        assert response.status_code == 200
+        call_kwargs = mock_process_active_liveness_frame_use_case.execute.call_args.kwargs
+        assert call_kwargs["frame_timestamp"] == 1710000000.125
 
     def test_process_active_liveness_frame_invalid_session(
         self,
@@ -676,7 +697,7 @@ class TestActiveLivenessEndpoint:
 
         response = client.post(
             "/api/v1/liveness/active/frame",
-            data={"session_id": "missing-session"},
+            data={"session_id": "missing-session", "frame_timestamp": "1710000000.125"},
             files={"image": test_image_file},
         )
 
@@ -689,12 +710,22 @@ class TestActiveLivenessEndpoint:
 
         response = client.post(
             "/api/v1/liveness/active/frame",
-            data={"session_id": "session-123"},
+            data={"session_id": "session-123", "frame_timestamp": "1710000000.125"},
             files={"image": text_file},
         )
 
         assert response.status_code == 400
         assert "image" in response.json()["detail"].lower()
+
+    def test_process_active_liveness_frame_requires_frame_timestamp(self, client, test_image_file):
+        """Test active liveness frame requires frame timestamp."""
+        response = client.post(
+            "/api/v1/liveness/active/frame",
+            data={"session_id": "session-123"},
+            files={"image": test_image_file},
+        )
+
+        assert response.status_code == 422
 
     def test_process_active_liveness_frame_completed_session(
         self,
@@ -725,7 +756,7 @@ class TestActiveLivenessEndpoint:
 
         response = client.post(
             "/api/v1/liveness/active/frame",
-            data={"session_id": "session-123"},
+            data={"session_id": "session-123", "frame_timestamp": "1710000000.125"},
             files={"image": test_image_file},
         )
 

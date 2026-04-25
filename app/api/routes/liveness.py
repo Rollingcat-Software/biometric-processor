@@ -113,6 +113,7 @@ async def start_active_liveness(
 @router.post("/liveness/active/frame", response_model=ActiveLivenessResponse, status_code=200)
 async def process_active_liveness_frame(
     session_id: str = Form(..., description="Active liveness session ID"),
+    frame_timestamp: float = Form(..., description="Client frame capture time as Unix seconds or milliseconds"),
     image: UploadFile = File(..., description="Frame image file"),
     use_case: ProcessActiveLivenessFrameUseCase = Depends(get_process_active_liveness_frame_use_case),
     storage: IFileStorage = Depends(get_file_storage),
@@ -132,11 +133,17 @@ async def process_active_liveness_frame(
             await storage.cleanup(image_path)
             raise HTTPException(status_code=400, detail=str(exc))
 
-        return await use_case.execute(session_id=session_id, image_path=image_path)
+        return await use_case.execute(
+            session_id=session_id,
+            image_path=image_path,
+            frame_timestamp=frame_timestamp,
+        )
     except ActiveLivenessSessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ActiveLivenessSessionExpiredError as exc:
         raise HTTPException(status_code=410, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     finally:
         if image_path:
             await storage.cleanup(image_path)

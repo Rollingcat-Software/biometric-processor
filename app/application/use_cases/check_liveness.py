@@ -1,5 +1,6 @@
 """Liveness check use case."""
 
+import json
 import logging
 from dataclasses import replace
 
@@ -11,8 +12,10 @@ from app.domain.interfaces.face_detector import IFaceDetector
 from app.domain.interfaces.liveness_detector import ILivenessDetector
 
 logger = logging.getLogger(__name__)
+calibration_logger = logging.getLogger("liveness_calibration")
 settings = get_settings()
 DEEPFACE_VETO_CONFIDENCE_THRESHOLD = 0.85
+FACE_CROP_BLUR_THRESHOLD = 50.0
 
 
 class CheckLivenessUseCase:
@@ -76,6 +79,18 @@ class CheckLivenessUseCase:
         # Step 3: Perform liveness check
         logger.debug("Step 2/2: Checking liveness...")
         face_region = detection.get_face_region(image)
+        gray_face = cv2.cvtColor(face_region, cv2.COLOR_BGR2GRAY)
+        blur_score = float(cv2.Laplacian(gray_face, cv2.CV_64F).var())
+
+        if blur_score < FACE_CROP_BLUR_THRESHOLD:
+            logger.warning(
+                "low_quality_crop",
+                extra={
+                    "blur_score": blur_score,
+                    "blur_threshold": FACE_CROP_BLUR_THRESHOLD,
+                },
+            )
+
         liveness_result = await self._liveness_detector.check_liveness(face_region)
 
         antispoof_score = detection.antispoof_score
@@ -95,6 +110,7 @@ class CheckLivenessUseCase:
             )
             updated_details = {
                 **liveness_result.details,
+                "blur_score": blur_score,
                 "antispoof_score": antispoof_score,
                 "antispoof_label": antispoof_label,
                 "deepface_veto_applied": True,
@@ -109,11 +125,44 @@ class CheckLivenessUseCase:
                 liveness_result,
                 details={
                     **liveness_result.details,
+                    "blur_score": blur_score,
                     "antispoof_score": antispoof_score,
                     "antispoof_label": antispoof_label,
                     "deepface_veto_applied": False,
                 },
             )
+
+        calibration_payload = {
+            "event": "liveness_calibration",
+            "score": liveness_result.score,
+            "is_live": liveness_result.is_live,
+            "confidence": liveness_result.confidence,
+            "backend": settings.get_liveness_backend(),
+            "mode": settings.LIVENESS_MODE,
+            "threshold": settings.LIVENESS_THRESHOLD,
+            "sub_scores": {
+                "texture": liveness_result.details.get("texture"),
+                "lbp": liveness_result.details.get("lbp"),
+                "color": liveness_result.details.get("color"),
+                "blink": liveness_result.details.get("blink"),
+                "smile": liveness_result.details.get("smile"),
+                "passive_score": liveness_result.details.get("passive_score"),
+                "active_score": liveness_result.details.get("active_score"),
+                "antispoof": liveness_result.details.get("antispoof_score"),
+            },
+            "face_roi_source": liveness_result.details.get("face_roi_source"),
+            "blur_score": liveness_result.details.get("blur_score"),
+        }
+
+        calibration_logger.info(
+            "liveness_calibration",
+            extra={
+                "event_type": "liveness_calibration",
+                "payload": calibration_payload,
+            },
+        )
+
+        logger.info(json.dumps(calibration_payload))
 
         logger.info(
             "liveness_check",
@@ -140,6 +189,8 @@ class CheckLivenessUseCase:
                 "deepface_veto_applied": liveness_result.details.get("deepface_veto_applied"),
                 "antispoof_threshold": settings.ANTI_SPOOFING_THRESHOLD,
                 "face_detection_confidence": detection.confidence,
+                "blur_score": liveness_result.details.get("blur_score"),
+                "blur_threshold": FACE_CROP_BLUR_THRESHOLD,
             },
         )
 

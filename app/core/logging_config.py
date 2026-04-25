@@ -69,6 +69,8 @@ class StructuredFormatter(logging.Formatter):
             log_data["duration_ms"] = record.duration_ms
         if hasattr(record, 'event_type'):
             log_data["event_type"] = record.event_type
+        if hasattr(record, 'payload') and isinstance(record.payload, dict):
+            log_data.update(record.payload)
 
         return json.dumps(log_data)
 
@@ -204,6 +206,11 @@ LOGGING_CONFIG = {
             "queue": None,  # Will be set in setup_logging()
             "filters": ["correlation_id"],
         },
+        "calibration_queue": {
+            "class": "logging.handlers.QueueHandler",
+            "queue": None,  # Will be set in setup_logging()
+            "filters": ["correlation_id"],
+        },
     },
     "loggers": {
         "": {  # Root logger
@@ -223,6 +230,11 @@ LOGGING_CONFIG = {
         },
         "fastapi": {
             "handlers": ["console", "file_queue"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "liveness_calibration": {
+            "handlers": ["calibration_queue"],
             "level": "INFO",
             "propagate": False,
         },
@@ -253,16 +265,21 @@ def setup_logging():
 
     # Create logs directory if it doesn't exist
     os.makedirs("logs", exist_ok=True)
+    calibration_log_dir = os.path.dirname(settings.LIVENESS_CALIBRATION_LOG_PATH)
+    if calibration_log_dir:
+        os.makedirs(calibration_log_dir, exist_ok=True)
 
     # Create log queues (unbounded for reliability)
     file_queue = queue.Queue(-1)  # -1 = unbounded
     security_queue = queue.Queue(-1)
     error_queue = queue.Queue(-1)
+    calibration_queue = queue.Queue(-1)
 
     # Update config with queue instances
     LOGGING_CONFIG["handlers"]["file_queue"]["queue"] = file_queue
     LOGGING_CONFIG["handlers"]["security_queue"]["queue"] = security_queue
     LOGGING_CONFIG["handlers"]["error_queue"]["queue"] = error_queue
+    LOGGING_CONFIG["handlers"]["calibration_queue"]["queue"] = calibration_queue
 
     # Apply logging configuration
     logging.config.dictConfig(LOGGING_CONFIG)
@@ -298,6 +315,15 @@ def setup_logging():
     error_handler.setFormatter(structured_formatter)
     error_handler.addFilter(correlation_filter)
 
+    calibration_handler = logging.handlers.RotatingFileHandler(
+        filename=settings.LIVENESS_CALIBRATION_LOG_PATH,
+        maxBytes=10485760,  # 10MB
+        backupCount=10,
+    )
+    calibration_handler.setLevel(logging.INFO)
+    calibration_handler.setFormatter(structured_formatter)
+    calibration_handler.addFilter(correlation_filter)
+
     # Create QueueListeners to process log records in separate threads
     # Each listener handles file I/O operations off the main event loop
     file_listener = logging.handlers.QueueListener(
@@ -318,14 +344,21 @@ def setup_logging():
         respect_handler_level=True
     )
 
+    calibration_listener = logging.handlers.QueueListener(
+        calibration_queue,
+        calibration_handler,
+        respect_handler_level=True
+    )
+
     # Start all queue listener threads
     file_listener.start()
     security_listener.start()
     error_listener.start()
+    calibration_listener.start()
 
     # Store listeners for cleanup
     global _queue_listener
-    _queue_listener = (file_listener, security_listener, error_listener)
+    _queue_listener = (file_listener, security_listener, error_listener, calibration_listener)
 
     # Register cleanup handler to stop listeners on shutdown
     atexit.register(_shutdown_logging)

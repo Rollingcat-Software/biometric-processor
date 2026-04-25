@@ -11,9 +11,9 @@ class ChallengeType(str, Enum):
 
     BLINK = "blink"
     SMILE = "smile"
+    LIGHT = "light"
     TURN_LEFT = "turn_left"
     TURN_RIGHT = "turn_right"
-    NOD = "nod"
     OPEN_MOUTH = "open_mouth"
     RAISE_EYEBROWS = "raise_eyebrows"
 
@@ -33,6 +33,7 @@ class Challenge(BaseModel):
 
     type: ChallengeType = Field(..., description="Type of challenge")
     instruction: str = Field(..., description="Human-readable instruction")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Challenge-specific payload for the client")
     status: ChallengeStatus = Field(default=ChallengeStatus.PENDING)
     timeout_seconds: float = Field(default=5.0, description="Time to complete challenge")
     attempts: int = Field(default=0, description="Number of attempts")
@@ -73,8 +74,12 @@ class ActiveLivenessSession(BaseModel):
     overall_score: float = Field(default=0.0)
     baseline_ear: Optional[float] = Field(default=None)
     baseline_mar: Optional[float] = Field(default=None)
+    last_face_mean_bgr: Optional[List[float]] = Field(default=None)
+    light_baseline_captured: bool = Field(default=False)
     blink_detected: bool = Field(default=False)
     last_ear: float = Field(default=0.3)
+    verification_token: Optional[str] = Field(default=None)
+    verification_token_expires_at: Optional[float] = Field(default=None)
 
 
 class ChallengeResult(BaseModel):
@@ -102,14 +107,16 @@ class ActiveLivenessResponse(BaseModel):
     overall_score: float = Field(default=0.0)
     instruction: str = Field(default="", description="Current instruction to display")
     feedback: str = Field(default="", description="Feedback on user's action")
+    verification_token: Optional[str] = Field(default=None, description="Short-lived token returned after successful verification")
+    verification_token_expires_at: Optional[float] = Field(default=None, description="Unix timestamp when verification token expires")
 
 
 CHALLENGE_INSTRUCTIONS = {
     ChallengeType.BLINK: "Please blink your eyes",
     ChallengeType.SMILE: "Please smile",
+    ChallengeType.LIGHT: "Wait for the screen flash and keep looking at the camera",
     ChallengeType.TURN_LEFT: "Please turn your head to the left",
     ChallengeType.TURN_RIGHT: "Please turn your head to the right",
-    ChallengeType.NOD: "Please nod your head",
     ChallengeType.OPEN_MOUTH: "Please open your mouth wide",
     ChallengeType.RAISE_EYEBROWS: "Please raise your eyebrows",
 }
