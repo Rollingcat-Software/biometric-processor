@@ -19,6 +19,7 @@ import numpy as np
 
 from app.domain.entities.liveness_result import LivenessResult
 from app.domain.interfaces.liveness_detector import ILivenessDetector
+from app.infrastructure.ml.liveness.moire_pattern_analysis import analyze_moire_pattern, build_default_moire_gabor_kernels
 
 logger = logging.getLogger(__name__)
 
@@ -93,17 +94,7 @@ class OptimizedTextureLivenessDetector(ILivenessDetector):
         self._fft_downsample_size = fft_downsample_size
 
         # Pre-compute Gabor kernels (4 orientations)
-        self._gabor_kernels: List[np.ndarray] = [
-            cv2.getGaborKernel(
-                ksize=self._GABOR_KSIZE,
-                sigma=self._GABOR_SIGMA,
-                theta=theta,
-                lambd=self._GABOR_LAMBDA,
-                gamma=self._GABOR_GAMMA,
-                psi=self._GABOR_PSI,
-            )
-            for theta in self._GABOR_THETAS
-        ]
+        self._gabor_kernels: List[np.ndarray] = build_default_moire_gabor_kernels()
 
         # Score weights
         self._weights = {
@@ -166,7 +157,7 @@ class OptimizedTextureLivenessDetector(ILivenessDetector):
         texture_score = self._calculate_texture_score(gray)
         color_score = self._calculate_color_score(hsv)
         frequency_score = self._calculate_frequency_score(gray_small)
-        moire_score = self._calculate_moire_score(gray)
+        moire_score = self._calculate_moire_score_shared(gray)
 
         # Combine scores with weights
         combined_score = (
@@ -330,6 +321,10 @@ class OptimizedTextureLivenessDetector(ILivenessDetector):
 
         return score
 
+    def _calculate_moire_score_shared(self, gray: np.ndarray) -> float:
+        """Shared moire scoring backed by the extracted moire analysis helper."""
+        return float(analyze_moire_pattern(gray, gabor_kernels=self._gabor_kernels)["moire_score"])
+
     def detect_sync(
         self,
         image: np.ndarray,
@@ -354,7 +349,7 @@ class OptimizedTextureLivenessDetector(ILivenessDetector):
         texture_score = self._calculate_texture_score(gray)
         color_score = self._calculate_color_score(hsv)
         frequency_score = self._calculate_frequency_score(gray_small)
-        moire_score = self._calculate_moire_score(gray)
+        moire_score = self._calculate_moire_score_shared(gray)
 
         combined_score = (
             texture_score * self._weights["texture"]

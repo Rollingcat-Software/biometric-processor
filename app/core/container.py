@@ -553,6 +553,7 @@ def get_check_liveness_use_case() -> CheckLivenessUseCase:
     return CheckLivenessUseCase(
         detector=get_face_detector(),
         liveness_detector=get_liveness_detector(),
+        landmark_detector=get_landmark_detector(),
     )
 
 

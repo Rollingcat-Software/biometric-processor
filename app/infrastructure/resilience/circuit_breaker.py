@@ -9,6 +9,8 @@ from typing import Callable, Generic, Optional, TypeVar
 
 from prometheus_client import Counter, Gauge
 
+from app.domain.exceptions.face_errors import FaceNotDetectedError
+
 logger = logging.getLogger(__name__)
 
 
@@ -230,7 +232,12 @@ class CircuitBreaker(Generic[T]):
 
 # Pre-configured circuit breakers for ML components
 FACE_DETECTOR_BREAKER = CircuitBreaker(
-    CircuitBreakerConfig(failure_threshold=5, success_threshold=2, timeout_seconds=30.0),
+    CircuitBreakerConfig(
+        failure_threshold=5,
+        success_threshold=2,
+        timeout_seconds=30.0,
+        excluded_exceptions=(FaceNotDetectedError,),
+    ),
     name="face_detector",
 )
 
