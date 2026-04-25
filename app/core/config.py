@@ -1,11 +1,36 @@
 """Application configuration with Pydantic validation."""
 
+import logging
 import os
 from pathlib import Path
 from typing import List, Literal, Optional
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
+
+_logger = logging.getLogger(__name__)
+
+# Backends/models that effectively require a GPU on commodity CPU boxes
+# (e.g. Hetzner CX43). These fall in two tiers:
+#   HARD: refuse to boot under default config — operator must consciously
+#         opt in via ALLOW_HEAVY_ML=true on a GPU host.
+#   SOFT: warn-only. Production currently runs Facenet512 on CPU (CX43) and
+#         it is stable, just slower. Hard-failing would break prod boot.
+HEAVY_DETECTION_BACKENDS_HARD: frozenset = frozenset({
+    "retinaface",
+    "yolov8",
+    "yolov11n",
+    "yolov11s",
+    "yolov12n",
+})
+HEAVY_RECOGNITION_MODELS_HARD: frozenset = frozenset({
+    "ArcFace",
+    "VGG-Face",
+    "GhostFaceNet",
+})
+HEAVY_RECOGNITION_MODELS_SOFT: frozenset = frozenset({
+    "Facenet512",
+})
 
 # Repo root resolved once for default model paths (biometric-processor/).
 _REPO_ROOT = Path(__file__).parent.parent.parent
@@ -74,6 +99,20 @@ class Settings(BaseSettings):
     ] = Field(default="Facenet")
 
     MODEL_DEVICE: Literal["cpu", "cuda"] = Field(default="cpu")
+
+    # Startup safety gate for GPU-needing ML choices.
+    # Default False so a CPU-only host (e.g. Hetzner CX43) cannot accidentally
+    # be launched with retinaface / yolo* / ArcFace / VGG-Face / GhostFaceNet
+    # backends that are unusably slow without a GPU. Operators on a GPU host
+    # must explicitly set ALLOW_HEAVY_ML=true.
+    ALLOW_HEAVY_ML: bool = Field(
+        default=False,
+        description=(
+            "Set to True only on a host with a CUDA-capable GPU. When False "
+            "(default), startup will refuse heavy detection/recognition models "
+            "that need GPU for sane latency."
+        ),
+    )
 
     # Anti-Spoofing (DeepFace 0.0.98+ built-in)
     ANTI_SPOOFING_ENABLED: bool = Field(
@@ -659,6 +698,56 @@ class Settings(BaseSettings):
         if v <= warning:
             raise ValueError("critical threshold must be greater than warning threshold")
         return v
+
+    @model_validator(mode="after")
+    def validate_ml_cpu_safety(self) -> "Settings":
+        """Refuse to boot with GPU-needing ML choices on a CPU-only host.
+
+        Addresses FINDINGS_2026-04-25 B1. Splits heavy backends/models into:
+          - HARD-fail (raise ValueError): retinaface, yolo*, ArcFace,
+            VGG-Face, GhostFaceNet — unusable without a GPU.
+          - SOFT-warn (log only): Facenet512 — technically CPU-runnable but
+            slow; production currently runs this config on CX43, so we must
+            not crash boot.
+
+        The check is bypassed entirely when ALLOW_HEAVY_ML=True, which the
+        operator should set only on a GPU host.
+        """
+        if self.ALLOW_HEAVY_ML:
+            return self
+
+        backend = self.FACE_DETECTION_BACKEND
+        model = self.FACE_RECOGNITION_MODEL
+
+        if backend in HEAVY_DETECTION_BACKENDS_HARD:
+            raise ValueError(
+                f"FACE_DETECTION_BACKEND='{backend}' requires a GPU for "
+                f"acceptable latency on this server. Either pick a "
+                f"CPU-friendly backend (e.g. 'opencv', 'ssd', 'mediapipe', "
+                f"'centerface') or set ALLOW_HEAVY_ML=true if this host has "
+                f"a CUDA-capable GPU."
+            )
+
+        if model in HEAVY_RECOGNITION_MODELS_HARD:
+            raise ValueError(
+                f"FACE_RECOGNITION_MODEL='{model}' requires a GPU for "
+                f"acceptable latency on this server. Either pick a "
+                f"CPU-friendly model (e.g. 'Facenet', 'OpenFace', 'SFace', "
+                f"'Dlib') or set ALLOW_HEAVY_ML=true if this host has a "
+                f"CUDA-capable GPU."
+            )
+
+        if model in HEAVY_RECOGNITION_MODELS_SOFT:
+            _logger.warning(
+                "FACE_RECOGNITION_MODEL='%s' is CPU-runnable but noticeably "
+                "slower than 'Facenet'. Boot continues because production "
+                "currently uses this config. Set ALLOW_HEAVY_ML=true to "
+                "silence this warning on a GPU host, or switch to 'Facenet' "
+                "for a CPU-friendly default.",
+                model,
+            )
+
+        return self
 
     model_config = {
         "env_file": ".env",
