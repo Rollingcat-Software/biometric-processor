@@ -1,5 +1,10 @@
 # Changelog - Biometric Processor
 
+## [Unreleased]
+
+### Docs — 2026-04-26 (iOS / macOS scope dropped — no-op for this repo)
+- Parent FIVUCSAS scope updated 2026-04-26 to permanently drop iOS / iPadOS / macOS (no Apple hardware available). This repo's `README.md`, `ROADMAP.md`, and `CHANGELOG.md` had no forward-looking iOS/macOS content; macOS-as-developer-environment install instructions for Redis and PostgreSQL in `README.md` are unaffected. No code or config changes required.
+
 ## [2026-04-19] Audit remediation
 
 Remediation for findings from `docs/audits/AUDIT_2026-04-19.md` (Audit 2 — ML
