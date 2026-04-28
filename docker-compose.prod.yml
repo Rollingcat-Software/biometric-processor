@@ -49,7 +49,13 @@ services:
       ANTI_SPOOFING_ENABLED: "true"
       ANTI_SPOOFING_THRESHOLD: "0.5"
       LIVENESS_UNIFACE_DEFAULT_ENABLED: "True"
-      LIVENESS_BACKEND: hybrid
+      # Passive deep-learning liveness only (UniFace MiniFASNet). 'hybrid'
+      # combines this with EnhancedLivenessDetector which expects an active
+      # blink+smile challenge — appropriate for /enroll, but /verify uses
+      # a single still capture with no active prompts, so the combined
+      # detector vetoed every legit user with challenge_completed=False.
+      LIVENESS_MODE: passive
+      LIVENESS_BACKEND: uniface
       # UniFace MiniFASNet caches its ONNX weights under ~/.uniface/models by
       # default. Container HOME=/nonexistent and rootfs is read_only:true, so
       # point the cache at a writable named volume to persist across restarts.
