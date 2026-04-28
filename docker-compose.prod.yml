@@ -50,6 +50,11 @@ services:
       ANTI_SPOOFING_THRESHOLD: "0.5"
       LIVENESS_UNIFACE_DEFAULT_ENABLED: "True"
       LIVENESS_BACKEND: hybrid
+      # UniFace MiniFASNet caches its ONNX weights under ~/.uniface/models by
+      # default. Container HOME=/nonexistent and rootfs is read_only:true, so
+      # point the cache at a writable named volume to persist across restarts.
+      UNIFACE_CACHE_DIR: /app/uniface-cache
+      HOME: /tmp
       ASYNC_ML_ENABLED: true
       ML_THREAD_POOL_SIZE: 2
       EMBEDDING_CACHE_ENABLED: true
@@ -89,6 +94,7 @@ services:
     volumes:
       - biometric_uploads:/app/uploads
       - biometric_models:/tmp/.deepface
+      - biometric_uniface:/app/uniface-cache
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.biometric-processor.rule=Host(`bio.fivucsas.com`)"
@@ -119,4 +125,6 @@ volumes:
   biometric_uploads:
     driver: local
   biometric_models:
+    driver: local
+  biometric_uniface:
     driver: local
