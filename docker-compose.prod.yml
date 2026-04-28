@@ -44,8 +44,12 @@ services:
       REDIS_MAX_CONNECTIONS: 20
 
       # ML Configuration — CPU-optimized, lightweight
-      FACE_DETECTION_BACKEND: opencv
+      FACE_DETECTION_BACKEND: centerface
       FACE_RECOGNITION_MODEL: Facenet512
+      ANTI_SPOOFING_ENABLED: "true"
+      ANTI_SPOOFING_THRESHOLD: "0.5"
+      LIVENESS_UNIFACE_DEFAULT_ENABLED: "True"
+      LIVENESS_BACKEND: hybrid
       ASYNC_ML_ENABLED: true
       ML_THREAD_POOL_SIZE: 2
       EMBEDDING_CACHE_ENABLED: true
