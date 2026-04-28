@@ -1,10 +1,12 @@
 """Face verification use case."""
 
 import logging
+from datetime import datetime
 from typing import Optional
 
 import cv2
 
+from app.core.config import settings
 from app.domain.entities.verification_result import VerificationResult
 from app.domain.exceptions.face_errors import PoorImageQualityError
 from app.domain.exceptions.verification_errors import EmbeddingNotFoundError
@@ -139,8 +141,24 @@ class VerifyFaceUseCase:
         logger.debug("Step 6/6: Calculating similarity...")
         distance = self._similarity_calculator.calculate(new_embedding, stored_embedding)
 
-        # Step 7: Verify against threshold
+        # Step 7: Determine threshold — use adaptive (lenient) threshold for aged embeddings
         threshold = self._similarity_calculator.get_threshold()
+        try:
+            if hasattr(self._repository, "find_created_at"):
+                created_at = await self._repository.find_created_at(user_id, tenant_id)
+                if created_at is not None:
+                    days = (datetime.utcnow() - created_at).days
+                    aged_threshold_days = int(settings.VERIFICATION_THRESHOLD_AGED_YEARS * 365)
+                    if days > aged_threshold_days:
+                        threshold = settings.VERIFICATION_THRESHOLD_AGED
+                        logger.info(
+                            f"Adaptive threshold applied: embedding_age={days}d "
+                            f"(>{aged_threshold_days}d), threshold={threshold} "
+                            f"(was {self._similarity_calculator.get_threshold()})"
+                        )
+        except Exception as _threshold_err:
+            logger.warning(f"Adaptive threshold lookup failed, using default: {_threshold_err}")
+
         verified = distance < threshold
         confidence = self._similarity_calculator.get_confidence(distance)
 

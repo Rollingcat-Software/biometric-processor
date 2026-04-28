@@ -132,6 +132,28 @@ class Settings(BaseSettings):
     LIVENESS_THRESHOLD: float = Field(default=70.0, ge=0.0, le=100.0)
     QUALITY_THRESHOLD: float = Field(default=70.0, ge=0.0, le=100.0)
 
+    # Adaptive verification threshold for aged embeddings (Faz 3-1)
+    # When the stored embedding is older than VERIFICATION_THRESHOLD_AGED_YEARS,
+    # a more lenient threshold is used to account for natural appearance changes.
+    VERIFICATION_THRESHOLD_AGED_YEARS: float = Field(
+        default=2.0,
+        ge=0.0,
+        description=(
+            "Enrollment age in years after which the lenient threshold is applied. "
+            "E.g. 2.0 means embeddings older than 2 years get a relaxed threshold."
+        ),
+    )
+    VERIFICATION_THRESHOLD_AGED: float = Field(
+        default=0.38,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Cosine-distance threshold applied when embedding age exceeds "
+            "VERIFICATION_THRESHOLD_AGED_YEARS. Lower than the default (0.45) "
+            "to be more lenient with aged embeddings."
+        ),
+    )
+
     # ML Model Timeouts (prevents hung requests)
     ML_MODEL_TIMEOUT_SECONDS: int = Field(default=30, ge=5, le=120, description="Timeout for ML model operations")
 

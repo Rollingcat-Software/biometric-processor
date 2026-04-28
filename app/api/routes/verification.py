@@ -6,8 +6,10 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 
 from app.api.schemas.verification import VerificationResponse
+from app.application.use_cases.check_liveness import CheckLivenessUseCase
 from app.application.use_cases.verify_face import VerifyFaceUseCase
 from app.core.container import (
+    get_check_liveness_use_case,
     get_client_embedding_observation_repository,
     get_file_storage,
     get_verify_face_use_case,
@@ -40,6 +42,7 @@ async def verify_face(
     session_id: Optional[str] = Form(None, description="Optional session identifier"),
     device_platform: Optional[str] = Form(None, description="Optional device platform ('web', 'android', ...)"),
     use_case: VerifyFaceUseCase = Depends(get_verify_face_use_case),
+    liveness_use_case: CheckLivenessUseCase = Depends(get_check_liveness_use_case),
     storage: IFileStorage = Depends(get_file_storage),
     observation_repo: ClientEmbeddingObservationRepository = Depends(
         get_client_embedding_observation_repository
@@ -97,6 +100,28 @@ async def verify_face(
             logger.warning(f"File type validation failed: {str(e)}")
             await storage.cleanup(image_path)
             raise HTTPException(status_code=400, detail=str(e))
+
+        # Liveness check — use a slightly more lenient minimum score (0.4) for
+        # verification vs enrollment (default threshold 0.5).  The use case uses
+        # LIVENESS_THRESHOLD from settings for the is_live decision, so we only
+        # add a floor here: if the score is below 0.4 we reject even if
+        # is_live happened to be True (e.g. a very marginal borderline case).
+        VERIFY_MIN_LIVENESS_SCORE = 0.4
+        liveness_result = await liveness_use_case.execute(image_path=image_path)
+        if not liveness_result.is_live or liveness_result.score < VERIFY_MIN_LIVENESS_SCORE:
+            logger.warning(
+                f"Verification rejected — liveness check failed: "
+                f"user_id={user_id}, is_live={liveness_result.is_live}, "
+                f"score={liveness_result.score:.2f}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_code": "LIVENESS_FAILED",
+                    "message": "Liveness check failed",
+                    "score": liveness_result.score,
+                },
+            )
 
         # Execute verification use case
         try:

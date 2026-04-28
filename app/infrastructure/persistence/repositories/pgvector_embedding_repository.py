@@ -17,6 +17,7 @@ Performance:
 """
 
 import logging
+from datetime import datetime
 from typing import List, Optional, Tuple
 
 import asyncpg
@@ -799,6 +800,71 @@ class PgVectorEmbeddingRepository:
         except Exception as e:
             logger.error(f"Get all by tenant failed: {e}", exc_info=True)
             raise RepositoryError(operation="get_all_by_tenant", reason=str(e))
+
+    async def find_created_at(
+        self, user_id: str, tenant_id: Optional[str] = None
+    ) -> Optional[datetime]:
+        """Return the creation timestamp of the stored embedding for a user.
+
+        Used by :class:`VerifyFaceUseCase` to apply the adaptive age-based
+        verification threshold (Faz 3-1).
+
+        Prefers the CENTROID row (most representative); falls back to the
+        latest INDIVIDUAL row if no centroid exists yet.
+
+        Args:
+            user_id: User identifier.
+            tenant_id: Optional tenant identifier.
+
+        Returns:
+            :class:`datetime` of the earliest relevant enrollment row,
+            or ``None`` if the user has no embeddings.
+        """
+        try:
+            pool = await self._ensure_pool()
+
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT created_at
+                    FROM face_embeddings
+                    WHERE user_id = $1
+                      AND enrollment_type = 'CENTROID'
+                      AND deleted_at IS NULL
+                    LIMIT 1
+                    """,
+                    user_id,
+                )
+                if not row:
+                    row = await conn.fetchrow(
+                        """
+                        SELECT created_at
+                        FROM face_embeddings
+                        WHERE user_id = $1
+                          AND deleted_at IS NULL
+                        ORDER BY created_at ASC
+                        LIMIT 1
+                        """,
+                        user_id,
+                    )
+
+            if row:
+                created_at = row["created_at"]
+                # asyncpg returns timezone-aware datetimes; strip tz info so
+                # arithmetic with datetime.utcnow() (naïve) stays consistent.
+                if hasattr(created_at, "tzinfo") and created_at.tzinfo is not None:
+                    import pytz as _pytz
+                    try:
+                        created_at = created_at.astimezone(_pytz.utc).replace(tzinfo=None)
+                    except Exception:
+                        created_at = created_at.replace(tzinfo=None)
+                return created_at
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to fetch created_at for user {user_id}: {e}", exc_info=True)
+            return None
 
     async def get_pool_stats(self) -> dict:
         """Get connection pool statistics for monitoring.

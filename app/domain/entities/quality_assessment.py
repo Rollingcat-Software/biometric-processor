@@ -1,7 +1,7 @@
 """Quality assessment entity."""
 
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 @dataclass(frozen=True)
@@ -17,6 +17,9 @@ class QualityAssessment:
         lighting_score: Lighting quality score (mean brightness)
         face_size: Face size in pixels (minimum dimension)
         is_acceptable: Whether quality meets minimum threshold
+        yaw: Estimated head yaw angle in degrees (None if landmarks unavailable)
+        pitch: Estimated head pitch angle in degrees (None if landmarks unavailable)
+        pose_acceptable: Whether head pose is within acceptable range (None if unavailable)
 
     Quality Guidelines:
         - score 0-40: Poor (reject)
@@ -32,6 +35,9 @@ class QualityAssessment:
     lighting_score: float
     face_size: int
     is_acceptable: bool
+    yaw: Optional[float] = None
+    pitch: Optional[float] = None
+    pose_acceptable: Optional[bool] = None
 
     def __post_init__(self) -> None:
         """Validate quality assessment data."""
@@ -105,4 +111,7 @@ class QualityAssessment:
             "is_acceptable": self.is_acceptable,
             "quality_level": self.get_quality_level(),
             "issues": self.get_issues(),
+            "yaw": self.yaw,
+            "pitch": self.pitch,
+            "pose_acceptable": self.pose_acceptable,
         }

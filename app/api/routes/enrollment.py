@@ -7,11 +7,13 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, HTT
 
 from app.api.schemas.enrollment import EnrollmentResponse
 from app.api.schemas.multi_image_enrollment import MultiImageEnrollmentResponse
+from app.application.use_cases.check_liveness import CheckLivenessUseCase
 from app.application.use_cases.delete_enrollment import DeleteEnrollmentUseCase
 from app.application.use_cases.enroll_face import EnrollFaceUseCase
 from app.application.use_cases.enroll_multi_image import EnrollMultiImageUseCase
 from app.core.config import settings
 from app.core.container import (
+    get_check_liveness_use_case,
     get_client_embedding_observation_repository,
     get_delete_enrollment_use_case,
     get_enroll_face_use_case,
@@ -44,6 +46,7 @@ async def enroll_face(
     session_id: Optional[str] = Form(None, description="Optional session identifier"),
     device_platform: Optional[str] = Form(None, description="Optional device platform ('web', 'android', ...)"),
     use_case: EnrollFaceUseCase = Depends(get_enroll_face_use_case),
+    liveness_use_case: CheckLivenessUseCase = Depends(get_check_liveness_use_case),
     storage: IFileStorage = Depends(get_file_storage),
     idempotency_store: IdempotencyStore = Depends(get_idempotency_store),
     observation_repo: ClientEmbeddingObservationRepository = Depends(
@@ -128,6 +131,22 @@ async def enroll_face(
             await storage.cleanup(image_path)  # Clean up invalid file immediately
             raise HTTPException(status_code=400, detail=str(e))
 
+        # Liveness check — must pass before we commit the embedding to the DB
+        liveness_result = await liveness_use_case.execute(image_path=image_path)
+        if not liveness_result.is_live:
+            logger.warning(
+                f"Enrollment rejected — liveness check failed: "
+                f"user_id={user_id}, score={liveness_result.score:.2f}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_code": "LIVENESS_FAILED",
+                    "message": "Liveness check failed",
+                    "score": liveness_result.score,
+                },
+            )
+
         # Execute enrollment use case
         result = await use_case.execute(user_id=user_id, image_path=image_path, tenant_id=tenant_id)
 
@@ -137,7 +156,7 @@ async def enroll_face(
             quality_score=result.quality_score,
             message="Face enrolled successfully",
             embedding_dimension=result.get_embedding_dimension(),
-            liveness_score=1.0,  # Placeholder - actual liveness check would need anti-spoofing model
+            liveness_score=liveness_result.score,
         )
 
         # Store response for idempotency if key provided
