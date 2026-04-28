@@ -101,21 +101,15 @@ services:
       - biometric_uploads:/app/uploads
       - biometric_models:/tmp/.deepface
       - biometric_uniface:/app/uniface-cache
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.biometric-processor.rule=Host(`bio.fivucsas.com`)"
-      - "traefik.http.routers.biometric-processor.entrypoints=websecure"
-      - "traefik.http.routers.biometric-processor.tls.certresolver=letsencrypt"
-      # bio.fivucsas.com is NOT meant to be a public endpoint — identity-core-
-      # api proxies to biometric-api on the internal docker network. Lock the
-      # public Traefik route to admin source IPs and rate-limit, mirroring
-      # api.fivucsas.com. Closes audit-ops 2026-04-28 P0 finding.
-      - "traefik.http.routers.biometric-processor.middlewares=admin-whitelist@file,rate-limit@file,secure-headers@file"
-      - "traefik.http.services.biometric-processor.loadbalancer.server.port=8001"
-      - "traefik.docker.network=proxy"
+    # No Traefik labels by design (CLAUDE.md: "Internal only — No public
+    # Traefik route. bio.fivucsas.com is NOT publicly accessible"). The only
+    # caller is identity-core-api, which reaches us at http://biometric-api:8001
+    # over the shared `backend` docker network. The earlier 2026-04-28 P0
+    # finding ("public exposure without middlewares") is closed by *removing*
+    # the public router rather than middleware-gating it. To debug from
+    # outside, port-forward via `docker exec` or set up a one-off SSH tunnel.
     networks:
       - backend
-      - proxy
     deploy:
       resources:
         limits:
@@ -128,8 +122,6 @@ services:
 
 networks:
   backend:
-    external: true
-  proxy:
     external: true
 
 volumes:
