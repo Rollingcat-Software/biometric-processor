@@ -77,6 +77,14 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE: int = Field(
         default=10 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024
     )  # 1KB to 50MB
+    # MAX_UPLOAD_SIZE: hard cap enforced by the request_size_guard middleware in
+    # app/main.py BEFORE the body is buffered in RAM and BEFORE API-key auth.
+    # Defaults to 10 MB (matches docker-compose.prod.yml MAX_UPLOAD_SIZE=10485760).
+    # Audit ref: AUDIT_2026-04-28_EDGE.md row 10 (Edge-P2 #10) — 100 MB upload
+    # reaching validate_image_file ate CX43 RAM.
+    MAX_UPLOAD_SIZE: int = Field(
+        default=10 * 1024 * 1024, ge=1024, le=100 * 1024 * 1024
+    )  # 1KB to 100MB; default 10MB
     ALLOWED_IMAGE_FORMATS: List[str] = Field(default=["jpg", "jpeg", "png"])
 
     # ML Model Settings

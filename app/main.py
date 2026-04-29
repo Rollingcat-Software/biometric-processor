@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from PIL import Image
 
 # Defense-in-depth: cap decompressed pixels to ~50 MP to block decompression bombs.
-# RequestSizeLimitMiddleware caps wire bytes; this caps post-decode RAM.
+# request_size_guard caps wire bytes; this caps post-decode RAM.
 Image.MAX_IMAGE_PIXELS = 50_000_000
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -28,7 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.middleware.api_key_auth import APIKeyAuthMiddleware
 from app.api.middleware.error_handler import setup_exception_handlers
 from app.api.middleware.rate_limit import RateLimitMiddleware
-from app.api.middleware.security import InputSanitizationMiddleware, RequestSizeLimitMiddleware
+from app.api.middleware.security import InputSanitizationMiddleware
 from app.api.middleware.security_headers import SecurityHeadersMiddleware
 from app.api.routes import batch, enrollment, health, liveness, search, verification, card_type_router
 from app.api.routes import quality, multi_face, demographics, landmarks, comparison, similarity_matrix, embeddings_io, webhooks
@@ -158,13 +158,13 @@ if settings.RATE_LIMIT_ENABLED:
 
 # API Key Authentication is applied via @app.middleware("http") below
 # (add_middleware ordering issues with FastAPI — using decorator instead)
-
-# Request Size Limiting (prevents DoS via large payloads)
-app.add_middleware(
-    RequestSizeLimitMiddleware,
-    max_content_length=settings.MAX_FILE_SIZE,  # Uses configured max file size
-)
-logger.info(f"Request size limit middleware enabled (max={settings.MAX_FILE_SIZE} bytes)")
+#
+# NOTE: The Request Size Guard is registered AFTER the API-key middleware via
+# @app.middleware("http") (see bottom of this section) so it executes FIRST in
+# the request path. We must reject 100 MB uploads BEFORE buffering the body and
+# BEFORE the auth check — an unauthenticated client should still be 413'd
+# without burning CX43 RAM (16 GB shared across all services).
+# Audit ref: AUDIT_2026-04-28_EDGE.md row 10 (Edge-P2 #10).
 
 # Input Sanitization (SQL injection, XSS, path traversal detection)
 app.add_middleware(
@@ -202,6 +202,65 @@ if settings.API_KEY_ENABLED and settings.API_KEY_REQUIRE_AUTH:
         return await call_next(request)
 
     logger.info("API key authentication enabled via @app.middleware")
+
+# ============================================================================
+# Request Size Guard (registered LAST so it runs FIRST — before API key auth)
+# ============================================================================
+# Reject oversized uploads via Content-Length BEFORE the body is buffered in
+# RAM and BEFORE the API-key check (denying a 100 MB unauthenticated upload
+# should not require holding 100 MB in memory first).
+#
+# In FastAPI/Starlette the middleware stack is built in REVERSE order of
+# registration: the LAST-registered middleware becomes the OUTERMOST wrapper
+# and therefore runs FIRST. Registering this decorator after the API-key block
+# above guarantees that ordering. Verified by integration test
+# tests/integration/test_request_size_limit.py.
+#
+# Edge case: chunked transfer encoding has no Content-Length header. Such
+# requests bypass this guard; Starlette buffers the stream into memory.
+# Acceptable because the upstream Traefik/NGINX hop terminates chunked uploads
+# and we control all clients (identity-core-api uses requests.post with files=
+# which always sets Content-Length). For depth, the per-route validate_image_file
+# magic-byte check still runs after.
+#
+# Audit ref: AUDIT_2026-04-28_EDGE.md row 10 (Edge-P2 #10) — 100 MB upload
+# reaching validate_image_file before rejection ate CX43 RAM (16 GB shared).
+
+_MAX_UPLOAD_SIZE = settings.MAX_UPLOAD_SIZE
+
+
+@app.middleware("http")
+async def request_size_guard(request, call_next):
+    """Reject requests whose Content-Length exceeds MAX_UPLOAD_SIZE with 413."""
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            length = int(content_length)
+        except ValueError:
+            length = None
+        if length is not None and length > _MAX_UPLOAD_SIZE:
+            from fastapi.responses import JSONResponse as _JR
+            logger.warning(
+                f"Request rejected: Content-Length {length} > MAX_UPLOAD_SIZE "
+                f"{_MAX_UPLOAD_SIZE} (path={request.url.path})"
+            )
+            return _JR(
+                status_code=413,
+                content={
+                    "error_code": "PAYLOAD_TOO_LARGE",
+                    "message": (
+                        f"Request body exceeds maximum size of "
+                        f"{_MAX_UPLOAD_SIZE} bytes"
+                    ),
+                },
+            )
+    return await call_next(request)
+
+
+logger.info(
+    f"Request size guard enabled (max={_MAX_UPLOAD_SIZE} bytes, "
+    f"runs before API key auth)"
+)
 
 # ============================================================================
 # API Routes
