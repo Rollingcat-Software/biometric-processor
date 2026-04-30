@@ -90,6 +90,29 @@ async def lifespan(app: FastAPI):
     initialize_dependencies()
     logger.info("Dependencies initialized")
 
+    # P6.9 #4: validate liveness model SHA256 pins at startup so corrupt or
+    # tampered assets are rejected BEFORE the service starts serving traffic.
+    # Previously the check was lazy (first liveness request) — that meant
+    # bad assets on a freshly-deployed container would only surface when a
+    # user hit the endpoint.
+    try:
+        from app.application.services.active_liveness_manager import (
+            verify_liveness_model_assets,
+        )
+
+        verify_liveness_model_assets()
+    except RuntimeError:
+        # SHA mismatch — refuse to start the service.
+        logger.exception("Liveness model asset verification FAILED at startup")
+        raise
+    except Exception:
+        # Defensive: any other error (e.g. unexpected IO) is logged but
+        # doesn't crash boot — the lazy check still gates the first request.
+        logger.exception(
+            "Liveness model asset verification raised non-fatal error; "
+            "lazy startup will still validate on first request."
+        )
+
     yield
 
     # Shutdown

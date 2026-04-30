@@ -12,6 +12,128 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
+logger = logging.getLogger(__name__)
+
+
+def _stream_sha256(path: Path, chunk_size: int = 65536) -> str:
+    """Compute SHA256 of ``path`` by reading ``chunk_size``-byte blocks.
+
+    Avoids loading the full model into RAM as a ``bytes`` object — for the
+    7.5 MB face_landmarker.task this trims a transient ~7.5 MB allocation,
+    and matters more for any future larger asset.
+    """
+
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(chunk_size), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def verify_liveness_model_assets() -> None:
+    """Validate face/hand landmarker SHA256 pins at startup.
+
+    Called from the FastAPI lifespan hook so corrupt or tampered model
+    assets are caught before the service starts serving requests, instead
+    of failing on the first liveness call. Mirrors the lazy check in
+    :meth:`ActiveLivenessManager._get_face_landmarker` but covers both
+    assets and emits explicit log lines per asset.
+
+    Behaviour:
+    - If ``FACE_LANDMARKER_MODEL_SHA256`` is set, the face model file is
+      streamed and its digest compared. Mismatch raises ``RuntimeError``.
+    - If the env var is unset and the asset exists, a WARNING is logged
+      so production deployments remember to pin it (see CLAUDE.md / P6.9).
+    - The hand landmarker is optional. If the path is set and points to
+      an existing file, its digest is verified when the env pin is set;
+      otherwise a WARNING is logged.
+
+    Failures here intentionally raise — a corrupt model is a hard stop.
+    """
+
+    # --- Face landmarker -------------------------------------------------
+    # Mirrors the lazy-load path in ActiveLivenessManager._get_face_landmarker:
+    # active_liveness_manager.py -> services -> application -> app -> <repo>.
+    default_face_path = (
+        Path(__file__).resolve().parent.parent.parent.parent
+        / "models"
+        / "face_landmarker.task"
+    )
+    face_model_path = Path(
+        os.getenv("FACE_LANDMARKER_MODEL_PATH", str(default_face_path))
+    )
+    if not face_model_path.exists():
+        # Cross-platform fallback (matches _get_face_landmarker).
+        repo_relative = Path("models/face_landmarker.task")
+        if repo_relative.exists():
+            face_model_path = repo_relative
+
+    expected_face_sha = os.getenv("FACE_LANDMARKER_MODEL_SHA256", "").strip()
+    if face_model_path.exists():
+        if expected_face_sha:
+            actual_face_sha = _stream_sha256(face_model_path)
+            if actual_face_sha.lower() != expected_face_sha.lower():
+                raise RuntimeError(
+                    "Face landmarker model SHA256 mismatch at startup: "
+                    f"expected={expected_face_sha}, actual={actual_face_sha}, "
+                    f"path={face_model_path}"
+                )
+            logger.info(
+                "Face landmarker SHA256 verified at startup (path=%s)",
+                face_model_path,
+            )
+        else:
+            logger.warning(
+                "FACE_LANDMARKER_MODEL_SHA256 is unset; skipping integrity "
+                "check for %s. Set this env var in .env.prod so a tampered "
+                "or corrupt model file is rejected at startup.",
+                face_model_path,
+            )
+    else:
+        # No model file at all — likely a CI/dev image without ML assets.
+        # Don't raise here so unit-test images still boot; the lazy path in
+        # _get_face_landmarker will raise if a request actually needs it.
+        logger.warning(
+            "Face landmarker model not found at startup (path=%s). "
+            "Active face liveness will fail at first request.",
+            face_model_path,
+        )
+
+    # --- Hand landmarker (gesture liveness, optional) --------------------
+    gesture_model_env = os.getenv("GESTURE_HAND_LANDMARKER_MODEL_PATH", "").strip()
+    if gesture_model_env:
+        gesture_model_path = Path(gesture_model_env)
+        if gesture_model_path.exists():
+            expected_gesture_sha = os.getenv(
+                "GESTURE_HAND_LANDMARKER_MODEL_SHA256", ""
+            ).strip()
+            if expected_gesture_sha:
+                actual_gesture_sha = _stream_sha256(gesture_model_path)
+                if actual_gesture_sha.lower() != expected_gesture_sha.lower():
+                    raise RuntimeError(
+                        "Hand landmarker model SHA256 mismatch at startup: "
+                        f"expected={expected_gesture_sha}, "
+                        f"actual={actual_gesture_sha}, "
+                        f"path={gesture_model_path}"
+                    )
+                logger.info(
+                    "Hand landmarker SHA256 verified at startup (path=%s)",
+                    gesture_model_path,
+                )
+            else:
+                logger.warning(
+                    "GESTURE_HAND_LANDMARKER_MODEL_SHA256 is unset; skipping "
+                    "integrity check for %s.",
+                    gesture_model_path,
+                )
+        else:
+            logger.warning(
+                "Hand landmarker model file missing (path=%s). Gesture "
+                "liveness static asset endpoint will return 404 until "
+                "deployed.",
+                gesture_model_path,
+            )
+
 from app.api.schemas.active_liveness import (
     ActiveLivenessConfig,
     ActiveLivenessResponse,
@@ -24,8 +146,6 @@ from app.api.schemas.active_liveness import (
 )
 from app.application.services.active_liveness_token_service import ActiveLivenessTokenService
 from app.application.services.light_challenge_service import LightChallengeService
-
-logger = logging.getLogger(__name__)
 
 LEFT_EYE_INDICES = [362, 385, 387, 263, 373, 380]
 RIGHT_EYE_INDICES = [33, 160, 158, 133, 153, 144]
@@ -91,15 +211,26 @@ class ActiveLivenessManager:
 
                 # Optional SHA256 integrity check. Only enforced when the env var is set
                 # (so dev without a hash still works; production MUST set this).
+                # NOTE: production now also runs verify_liveness_model_assets() at
+                # startup (see app/main.py lifespan). This lazy block is kept as a
+                # belt-and-braces check for hot-rotated assets between restarts.
                 expected_face_sha = os.getenv("FACE_LANDMARKER_MODEL_SHA256", "").strip()
                 if expected_face_sha:
-                    actual_face_sha = hashlib.sha256(Path(model_path).read_bytes()).hexdigest()
+                    actual_face_sha = _stream_sha256(Path(model_path))
                     if actual_face_sha.lower() != expected_face_sha.lower():
                         raise RuntimeError(
                             "Face landmarker model SHA256 mismatch: "
                             f"expected={expected_face_sha}, actual={actual_face_sha}, "
                             f"path={model_path}"
                         )
+                else:
+                    # P6.9: docstring of FACE_LANDMARKER_MODEL_SHA256 promises a
+                    # warning when unset. Emit it so the lazy path matches the
+                    # startup hook's behaviour.
+                    logger.warning(
+                        "FACE_LANDMARKER_MODEL_SHA256 is unset; loading "
+                        "face_landmarker.task without integrity check."
+                    )
 
                 # Symmetric pattern for the hand landmarker (gesture liveness, Phase 0).
                 # Do NOT load the model here — server-side gesture verification is
@@ -113,9 +244,7 @@ class ActiveLivenessManager:
                             "GESTURE_HAND_LANDMARKER_MODEL_SHA256", ""
                         ).strip()
                         if expected_gesture_sha:
-                            actual_gesture_sha = hashlib.sha256(
-                                gesture_model_path.read_bytes()
-                            ).hexdigest()
+                            actual_gesture_sha = _stream_sha256(gesture_model_path)
                             if actual_gesture_sha.lower() != expected_gesture_sha.lower():
                                 raise RuntimeError(
                                     "Hand landmarker model SHA256 mismatch: "
@@ -123,6 +252,16 @@ class ActiveLivenessManager:
                                     f"actual={actual_gesture_sha}, "
                                     f"path={gesture_model_path}"
                                 )
+                    else:
+                        # P6.9 #2: was previously a silent skip. Log so ops
+                        # notice a missing asset (the static-asset endpoint
+                        # would return 404 without it).
+                        logger.warning(
+                            "Hand landmarker model file missing at %s. "
+                            "Set GESTURE_HAND_LANDMARKER_MODEL_PATH or deploy "
+                            "the asset to enable gesture liveness static delivery.",
+                            gesture_model_path,
+                        )
 
                 base_options = python.BaseOptions(model_asset_path=str(model_path))
                 options = vision.FaceLandmarkerOptions(
