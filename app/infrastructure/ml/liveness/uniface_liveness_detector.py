@@ -14,6 +14,7 @@ Follows the same ILivenessDetector protocol as other implementations
 (Liskov Substitution Principle / Open-Closed Principle).
 """
 
+import asyncio
 import logging
 from typing import Any, Optional
 
@@ -116,7 +117,10 @@ class UniFaceLivenessDetector(ILivenessDetector):
             # The model returns a list of predictions per detected face
             h, w = image_rgb.shape[:2]
             bbox = [0, 0, w, h]
-            raw_prediction = self._model.predict(image_rgb, bbox)
+            # P2.11: ONNX inference is CPU-bound — offload off the event loop
+            raw_prediction = await asyncio.to_thread(
+                self._model.predict, image_rgb, bbox
+            )
             predictions = self._normalize_predictions(raw_prediction)
 
             if not predictions:

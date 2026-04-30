@@ -1,5 +1,6 @@
 """Face verification use case."""
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
@@ -87,8 +88,8 @@ class VerifyFaceUseCase:
         """
         logger.info(f"Starting face verification for user_id={user_id}, tenant_id={tenant_id}")
 
-        # Step 1: Load image
-        image = cv2.imread(image_path)
+        # Step 1: Load image (P2.11: offload blocking decode + disk I/O off the event loop)
+        image = await asyncio.to_thread(cv2.imread, image_path)
         if image is None:
             raise ValueError(f"Failed to load image: {image_path}")
 
