@@ -32,6 +32,17 @@ class ActiveLivenessSessionNotFoundError(Exception):
 class ActiveLivenessSessionExpiredError(Exception):
     """Raised when an active liveness session has expired."""
 
+
+class InvalidModalityError(Exception):
+    """Raised when a session's modality does not match the use case.
+
+    Specifically, when the gesture frame endpoint is called with a session
+    whose ``modality != "gesture"`` (e.g. a face-modality session opened via
+    ``/liveness/active/start``). This is a 400-class error — the session
+    exists but the caller is sending it to the wrong endpoint.
+    """
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,9 +69,14 @@ class ProcessActiveGestureLivenessFrameUseCase:
                     "Active gesture liveness session has expired"
                 )
 
+            # P6.9 #5: explicit modality guard. Previously a face-modality
+            # session masqueraded as "not found" (404) here; surface the
+            # mismatch as an actionable 400 so callers can correct the
+            # endpoint they're hitting.
             if session.modality != "gesture":
-                raise ActiveLivenessSessionNotFoundError(
-                    "Session is not a gesture liveness session"
+                raise InvalidModalityError(
+                    f"Session modality is '{session.modality}', expected 'gesture'. "
+                    "Use /liveness/active/frame for face-modality sessions."
                 )
 
             if session.is_complete:
@@ -88,4 +104,5 @@ __all__ = [
     "ProcessActiveGestureLivenessFrameUseCase",
     "ActiveLivenessSessionExpiredError",
     "ActiveLivenessSessionNotFoundError",
+    "InvalidModalityError",
 ]

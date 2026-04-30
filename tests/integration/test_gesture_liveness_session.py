@@ -262,6 +262,56 @@ class TestSessionFlow:
         )
         assert r.status_code == 404
 
+    def test_410_gone_for_expired_session(self, client, enabled_gesture_backend):
+        """P6.9 #7: expired sessions must surface as HTTP 410, not 404 or 500.
+
+        Forces expiry by setting expires_at into the past, then submits a
+        frame to the gesture endpoint. The 410 path is wired in
+        app/api/routes/liveness.py via GestureSessionExpiredError.
+        """
+
+        start = client.post(
+            "/api/v1/liveness/active/gesture/start",
+            json={
+                "num_challenges": 1,
+                "required_gesture_challenges": ["hold_position"],
+                "challenge_timeout": 10.0,
+                "session_timeout_seconds": 60.0,
+                "randomize": False,
+            },
+        ).json()
+        session_id = start["session_id"]
+
+        # Reach into the in-memory repo to expire this session deterministically.
+        from app.core import container
+
+        repo = container.get_active_liveness_session_repository()
+        # The repo's internal store keys vary; iterate and force-mutate.
+        # InMemoryActiveLivenessSessionRepository exposes ._sessions; we use
+        # its public mutate() to keep the test honest.
+        async def _expire(session):
+            session.expires_at = 0.0  # epoch -> always in the past
+            return session
+
+        import asyncio
+
+        asyncio.get_event_loop().run_until_complete(repo.mutate(session_id, _expire))
+
+        r = client.post(
+            "/api/v1/liveness/active/gesture/frame",
+            json={
+                "session_id": session_id,
+                "payload": {
+                    "frame_time_ms": 0,
+                    "landmarks_right": _open_hand(),
+                    "landmarks_left": None,
+                    "tremor_variance": 0.01,
+                    "brightness_std": 0.5,
+                },
+            },
+        )
+        assert r.status_code == 410, r.text
+
     def test_rejects_zero_tremor(self, client, enabled_gesture_backend):
         start = client.post(
             "/api/v1/liveness/active/gesture/start",

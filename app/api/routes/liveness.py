@@ -17,6 +17,7 @@ from app.application.services.active_gesture_liveness_manager import (
 from app.application.use_cases.process_active_gesture_liveness_frame import (
     ActiveLivenessSessionExpiredError as GestureSessionExpiredError,
     ActiveLivenessSessionNotFoundError as GestureSessionNotFoundError,
+    InvalidModalityError as GestureInvalidModalityError,
     ProcessActiveGestureLivenessFrameUseCase,
 )
 from app.application.use_cases.process_active_liveness_frame import (
@@ -220,6 +221,8 @@ async def process_active_gesture_liveness_frame(
         return await use_case.execute(session_id=session_id, payload=payload)
     except GestureSessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except GestureInvalidModalityError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except GestureSessionExpiredError as exc:
         raise HTTPException(status_code=410, detail=str(exc))
 
