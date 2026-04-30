@@ -37,7 +37,7 @@ from app.api.routes import proctor
 from app.api.routes import proctor_ws
 from app.api.routes import admin
 from app.api.routes import live_analysis
-from app.api.routes import fingerprint, voice
+from app.api.routes import voice
 from app.api.routes import puzzle
 from app.core.config import settings
 from app.core.container import initialize_dependencies, shutdown_dependencies
@@ -313,8 +313,10 @@ app.include_router(live_analysis.router, prefix=API_PREFIX)
 # Admin routes
 app.include_router(admin.router, prefix=API_PREFIX)
 
-# Fingerprint routes (501 Not Implemented -- use WebAuthn) and Voice routes (Resemblyzer)
-app.include_router(fingerprint.router, prefix=API_PREFIX)
+# Voice routes (Resemblyzer 256-dim speaker embeddings).
+# Fingerprint server-side modality removed (P1.4): the SHA-256 hash placeholder
+# was never a real biometric. Platform fingerprint authentication is delivered
+# via WebAuthn (FIDO2) in identity-core-api, which is unrelated to this service.
 app.include_router(voice.router, prefix=API_PREFIX)
 
 # ============================================================================

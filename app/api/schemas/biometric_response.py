@@ -1,4 +1,4 @@
-"""Shared biometric response schema for voice and fingerprint endpoints."""
+"""Shared biometric response schema for voice endpoints (and other future modalities)."""
 
 from typing import Optional
 
@@ -6,9 +6,11 @@ from pydantic import BaseModel
 
 
 class BiometricResponse(BaseModel):
-    """Unified response model for voice and fingerprint biometric operations.
+    """Unified response model for voice biometric operations.
 
-    Used by both voice.py and fingerprint.py routes to avoid duplication.
+    Originally shared with fingerprint endpoints, which were removed in P1.4
+    (SHA-256 hash placeholder was not a real biometric — platform fingerprint
+    is now provided exclusively via WebAuthn in identity-core-api).
     """
 
     success: bool

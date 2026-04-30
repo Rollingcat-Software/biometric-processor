@@ -48,8 +48,7 @@ pytest tests/unit/ -v           # Unit tests only
 - Routes: `enrollment.py`, `verification.py`, `search.py`, `liveness.py`, `quality.py`, etc.
 - **Voice**: enroll, verify, search, delete — Resemblyzer 256-dim speaker embeddings, centroid-based
 - Routes: `voice.py`, repo: `pgvector_voice_repository.py`, embedder: `speaker_embedder.py`
-- **Fingerprint**: enroll, verify, delete — SHA-256 hash-based 256-dim embeddings, centroid-based
-- Routes: `fingerprint.py`, repo: `pgvector_fingerprint_repository.py`, embedder: `hash_embedder.py`
+- **Fingerprint**: removed (P1.4) — server-side fingerprint biometric processing was a SHA-256 hash placeholder, never a real biometric. Platform fingerprint authentication is delivered via WebAuthn (FIDO2) in identity-core-api, not through this service.
 
 ### Verification Pipeline (Phase 8B/8C, 2026-03-28):
 - **Document scan** — YOLO-based document detection and classification
