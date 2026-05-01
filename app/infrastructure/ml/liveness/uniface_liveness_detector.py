@@ -119,6 +119,38 @@ class UniFaceLivenessDetector(ILivenessDetector):
                 logger.error(f"Failed to load MiniFASNet model: {e}", exc_info=True)
                 raise LivenessCheckError(f"Failed to initialize MiniFASNet: {e}")
 
+    def warm_model_sync(self) -> None:
+        """Synchronously preload the MiniFASNet model on this detector instance.
+
+        Intended for application startup (`initialize_dependencies`) before
+        the asyncio event loop is running. By loading the model directly onto
+        `self._model`, the same long-lived detector instance returned by
+        `get_liveness_detector()` skips the lazy-load on the first
+        `check_liveness()` call.
+
+        Copilot post-merge round 5 (PR #63): the previous warm-up created a
+        throw-away MiniFASNet, which only helped if `uniface` cached global
+        state — it did NOT prepopulate the per-instance `self._model`.
+
+        Raises:
+            LivenessCheckError: If uniface is not installed or model fails to load.
+        """
+        if self._model is not None:
+            return
+        try:
+            from uniface.spoofing import MiniFASNet
+            self._model = MiniFASNet()
+            logger.info("UniFace MiniFASNet model pre-loaded (sync warm-up)")
+        except ImportError as e:
+            logger.error(f"uniface package not installed: {e}")
+            raise LivenessCheckError(
+                "uniface package is required for UniFace liveness detection. "
+                "Install it with: pip install 'uniface>=3.0.0'"
+            )
+        except Exception as e:
+            logger.error(f"Failed to pre-load MiniFASNet model: {e}", exc_info=True)
+            raise LivenessCheckError(f"Failed to initialize MiniFASNet: {e}")
+
     async def check_liveness(self, image: np.ndarray) -> LivenessResult:
         """Check if image shows a live person using MiniFASNet.
 

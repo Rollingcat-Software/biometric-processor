@@ -128,10 +128,13 @@ class CheckLivenessUseCase:
         t0 = time.perf_counter()
         liveness_result = await self._liveness_detector.check_liveness(face_region)
         liveness_ms = (time.perf_counter() - t0) * 1000
-        total_ms = (time.perf_counter() - t_start) * 1000
+        # Copilot post-merge round 5: rename `total` to `total_until_liveness`
+        # because there is still substantial work after this point (signal-metrics,
+        # DeepFace veto, calibration payload). True end-to-end is logged at return.
+        total_until_liveness_ms = (time.perf_counter() - t_start) * 1000
         logger.info(
             f"face/liveness: decode={decode_ms:.0f}ms detect={detect_ms:.0f}ms "
-            f"liveness={liveness_ms:.0f}ms total={total_ms:.0f}ms "
+            f"liveness={liveness_ms:.0f}ms total_until_liveness={total_until_liveness_ms:.0f}ms "
             f"backend={settings.get_liveness_backend()}"
         )
         signal_metrics = extract_face_signal_metrics(
@@ -312,11 +315,13 @@ class CheckLivenessUseCase:
             },
         )
 
+        total_ms = (time.perf_counter() - t_start) * 1000
         logger.info(
             f"Liveness check completed: "
             f"is_live={liveness_result.is_live}, "
             f"score={liveness_result.score:.1f}, "
-            f"challenge={liveness_result.challenge}"
+            f"challenge={liveness_result.challenge}, "
+            f"total={total_ms:.0f}ms"
         )
 
         return liveness_result
