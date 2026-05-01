@@ -1,6 +1,5 @@
 """Image quality assessment implementation."""
 
-import asyncio
 import logging
 
 import cv2
@@ -54,7 +53,9 @@ class QualityAssessor:
 
         P2.11: The full quality pipeline (cv2 ops + MediaPipe FaceMesh pose
         estimation) is CPU-bound. We delegate to a synchronous worker that runs
-        in the default thread executor so the FastAPI event loop stays free.
+        on the project's shared ThreadPoolManager so ML_THREAD_POOL_SIZE is
+        honored (Copilot post-merge PR #57: previously asyncio.to_thread used
+        the event loop's default executor, which ignores our pool sizing).
 
         Args:
             face_image: Face image as numpy array (H, W, C)
@@ -62,7 +63,10 @@ class QualityAssessor:
         Returns:
             QualityAssessment with quality metrics
         """
-        return await asyncio.to_thread(self._assess_sync, face_image)
+        # Local import to avoid a circular module-load between
+        # app.core.container and infrastructure.ml.quality at import time.
+        from app.core.container import get_thread_pool
+        return await get_thread_pool().run_blocking(self._assess_sync, face_image)
 
     def _assess_sync(self, face_image: np.ndarray) -> QualityAssessment:
         """Synchronous quality assessment (executed off the event loop).
