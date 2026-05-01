@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -88,10 +89,19 @@ class VerifyFaceUseCase:
         """
         logger.info(f"Starting face verification for user_id={user_id}, tenant_id={tenant_id}")
 
+        # USER-BUG-7 (2026-05-01): per-stage timing so future cold-start
+        # regressions are diagnosable from the logs without extra tooling.
+        # All durations are wall-clock milliseconds; the final `total` line
+        # is what surfaces in slow-verify reports.
+        stage_ms: dict[str, float] = {}
+        t_start = time.perf_counter()
+
         # Step 1: Load image (P2.11: offload blocking decode + disk I/O off the event loop)
+        t0 = time.perf_counter()
         image = await asyncio.to_thread(cv2.imread, image_path)
         if image is None:
             raise ValueError(f"Failed to load image: {image_path}")
+        stage_ms["decode"] = (time.perf_counter() - t0) * 1000
 
         # Step 2: Detect face
         # Client pre-crops to 224×224 — detection only as fallback.
@@ -99,7 +109,9 @@ class VerifyFaceUseCase:
         # is fast (<10ms) because there is only one face region covering most of
         # the frame. Full-frame detection (640×480+) previously cost 200-730ms.
         logger.debug("Step 1/5: Detecting face...")
+        t0 = time.perf_counter()
         detection = await self._detector.detect(image)
+        stage_ms["detect"] = (time.perf_counter() - t0) * 1000
 
         # Step 3: Extract face region
         logger.debug("Step 2/6: Extracting face region...")
@@ -108,7 +120,9 @@ class VerifyFaceUseCase:
         # Step 4: Quality gate (reject poor images before expensive comparison)
         if self._quality_assessor is not None:
             logger.debug("Step 3/6: Assessing image quality...")
+            t0 = time.perf_counter()
             quality = await self._quality_assessor.assess(face_region)
+            stage_ms["quality"] = (time.perf_counter() - t0) * 1000
 
             if quality.score < self.VERIFICATION_QUALITY_THRESHOLD:
                 issues = quality.get_issues(
@@ -128,11 +142,15 @@ class VerifyFaceUseCase:
 
         # Step 5: Extract embedding from new image
         logger.debug("Step 4/6: Extracting embedding...")
+        t0 = time.perf_counter()
         new_embedding = await self._extractor.extract(face_region)
+        stage_ms["embed"] = (time.perf_counter() - t0) * 1000
 
         # Step 6: Retrieve stored embedding
         logger.debug("Step 5/6: Retrieving stored embedding...")
+        t0 = time.perf_counter()
         stored_embedding = await self._repository.find_by_user_id(user_id, tenant_id)
+        stage_ms["fetch"] = (time.perf_counter() - t0) * 1000
 
         if stored_embedding is None:
             logger.warning(f"No embedding found for user_id={user_id}")
@@ -163,11 +181,12 @@ class VerifyFaceUseCase:
         verified = distance < threshold
         confidence = self._similarity_calculator.get_confidence(distance)
 
+        total_ms = (time.perf_counter() - t_start) * 1000
+        timing_summary = " ".join(f"{k}={v:.0f}ms" for k, v in stage_ms.items())
         logger.info(
-            f"Verification completed: user_id={user_id}, "
-            f"verified={verified}, "
-            f"distance={distance:.4f}, "
-            f"confidence={confidence:.4f}, "
+            f"face/verify: {timing_summary} total={total_ms:.0f}ms "
+            f"user_id={user_id} verified={verified} "
+            f"distance={distance:.4f} confidence={confidence:.4f} "
             f"threshold={threshold}"
         )
 

@@ -922,6 +922,27 @@ def initialize_dependencies() -> None:
     get_similarity_calculator()
     get_liveness_detector()
 
+    # USER-BUG-7 (2026-05-01): UniFace MiniFASNet is lazy-loaded on first
+    # /verify request via UniFaceLivenessDetector._ensure_model_loaded().
+    # That puts a ~1-2 s ONNX session-init cost on the user's first face
+    # verify after a deploy / container restart. Warm it here at startup
+    # so the cost is paid once by the operator, never by an end user.
+    # Failures are non-fatal — verification still works, just slower
+    # on the first call.
+    if settings.get_liveness_backend() in ("uniface", "hybrid"):
+        try:
+            logger.info("Pre-loading UniFace MiniFASNet (anti-spoof)...")
+            from uniface.spoofing import MiniFASNet  # noqa: WPS433
+            MiniFASNet()
+            logger.info("UniFace MiniFASNet pre-loaded")
+        except ImportError:
+            logger.warning(
+                "uniface package not installed — skipping MiniFASNet warm-up. "
+                "First /verify call will pay the cold-start cost."
+            )
+        except Exception as e:  # pragma: no cover — defensive only
+            logger.warning(f"UniFace warm-up failed (non-fatal): {e}")
+
     # Pre-load voice model (numba-free MFCC+torch embedder)
     logger.info("Pre-loading speaker embedder...")
     get_speaker_embedder()

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 from dataclasses import replace
 from typing import Any
 
@@ -91,14 +92,21 @@ class CheckLivenessUseCase:
         """
         logger.info("Starting liveness check")
 
+        # USER-BUG-7 (2026-05-01): per-stage timing for slow-verify reports.
+        t_start = time.perf_counter()
+
         # Step 1: Load image (P2.11: offload blocking decode + disk I/O off the event loop)
+        t0 = time.perf_counter()
         image = await asyncio.to_thread(cv2.imread, image_path)
         if image is None:
             raise ValueError(f"Failed to load image: {image_path}")
+        decode_ms = (time.perf_counter() - t0) * 1000
 
         # Step 2: Detect face (to ensure there's a face before liveness check)
         logger.debug("Step 1/2: Detecting face...")
+        t0 = time.perf_counter()
         detection = await self._detector.detect(image)
+        detect_ms = (time.perf_counter() - t0) * 1000
 
         logger.debug(f"Face detected with confidence: {detection.confidence:.2f}")
 
@@ -117,7 +125,15 @@ class CheckLivenessUseCase:
                 },
             )
 
+        t0 = time.perf_counter()
         liveness_result = await self._liveness_detector.check_liveness(face_region)
+        liveness_ms = (time.perf_counter() - t0) * 1000
+        total_ms = (time.perf_counter() - t_start) * 1000
+        logger.info(
+            f"face/liveness: decode={decode_ms:.0f}ms detect={detect_ms:.0f}ms "
+            f"liveness={liveness_ms:.0f}ms total={total_ms:.0f}ms "
+            f"backend={settings.get_liveness_backend()}"
+        )
         signal_metrics = extract_face_signal_metrics(
             face_region_bgr=face_region,
             landmark_detector=self._landmark_detector,
