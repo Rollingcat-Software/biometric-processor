@@ -15,7 +15,7 @@ from typing import Any, Awaitable, Callable, Protocol, TypeVar
 T = TypeVar("T")
 
 
-class ThreadPoolExecutorPort(Protocol):
+class IThreadPoolExecutorPort(Protocol):
     """Awaitable run_blocking-style executor port.
 
     Concrete implementations include `ThreadPoolManager` (production,

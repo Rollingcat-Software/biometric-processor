@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 
 from app.domain.entities.quality_assessment import QualityAssessment
-from app.domain.interfaces.thread_pool_executor import ThreadPoolExecutorPort
+from app.domain.interfaces.thread_pool_executor import IThreadPoolExecutorPort
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class QualityAssessor:
         blur_threshold: float = 100.0,
         min_face_size: int = 80,
         quality_threshold: float = 70.0,
-        thread_pool: Optional[ThreadPoolExecutorPort] = None,
+        thread_pool: Optional[IThreadPoolExecutorPort] = None,
     ) -> None:
         """Initialize quality assessor.
 
