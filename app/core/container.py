@@ -78,10 +78,6 @@ from app.infrastructure.storage.local_file_storage import LocalFileStorage
 from app.infrastructure.async_execution.thread_pool_manager import ThreadPoolManager
 from app.infrastructure.ml.voice.speaker_embedder import SpeakerEmbedder
 from app.infrastructure.persistence.repositories.pgvector_voice_repository import PgVectorVoiceRepository
-# Fingerprint infrastructure is retained for potential future use but
-# endpoints return 501 (WebAuthn is the production path).
-from app.infrastructure.ml.fingerprint.hash_embedder import FingerprintHashEmbedder
-from app.infrastructure.persistence.repositories.pgvector_fingerprint_repository import PgVectorFingerprintRepository
 from app.infrastructure.persistence.client_embedding_observation_repository import (
     ClientEmbeddingObservationRepository,
 )
@@ -859,40 +855,11 @@ def get_voice_repository() -> PgVectorVoiceRepository:
 
 
 # ============================================================================
-# Fingerprint Biometric Dependencies
+# Fingerprint server-side biometric dependencies REMOVED (P1.4).
+# The SHA-256 hash placeholder was never a real biometric. Platform fingerprint
+# authentication is delivered via WebAuthn (FIDO2) in identity-core-api, not
+# through this service.
 # ============================================================================
-
-
-@lru_cache()
-def get_fingerprint_embedder() -> FingerprintHashEmbedder:
-    """Get fingerprint embedder instance (singleton).
-
-    Returns:
-        FingerprintHashEmbedder using SHA-256 hash-based embedding (256-dim)
-    """
-    logger.info("Creating fingerprint embedder (hash-based)")
-    return FingerprintHashEmbedder()
-
-
-@lru_cache()
-def get_fingerprint_repository() -> PgVectorFingerprintRepository:
-    """Get fingerprint embedding repository instance (singleton).
-
-    Returns:
-        PgVectorFingerprintRepository for fingerprint enrollment storage
-    """
-    if not settings.DATABASE_URL:
-        raise ValueError(
-            "DATABASE_URL must be set for fingerprint enrollment storage."
-        )
-
-    logger.info("Creating fingerprint embedding repository (pgvector, dim=256)")
-    return PgVectorFingerprintRepository(
-        database_url=settings.DATABASE_URL,
-        pool_min_size=2,
-        pool_max_size=5,
-        embedding_dimension=256,
-    )
 
 
 # ============================================================================
@@ -1022,16 +989,6 @@ async def shutdown_dependencies(wait: bool = True) -> None:
     except Exception as e:
         logger.error(f"Error closing voice repository: {e}", exc_info=True)
 
-    # Close fingerprint repository connection pool
-    try:
-        fingerprint_repo = get_fingerprint_repository()
-        if hasattr(fingerprint_repo, 'close'):
-            logger.info("Closing fingerprint repository connection pool...")
-            await fingerprint_repo.close()
-            logger.info("Fingerprint repository connection pool closed")
-    except Exception as e:
-        logger.error(f"Error closing fingerprint repository: {e}", exc_info=True)
-
     # Close active liveness session repository
     try:
         active_liveness_repository = get_active_liveness_session_repository()
@@ -1125,6 +1082,4 @@ def clear_cache() -> None:
     get_puzzle_spot_check_liveness_detector.cache_clear()
     get_speaker_embedder.cache_clear()
     get_voice_repository.cache_clear()
-    get_fingerprint_embedder.cache_clear()
-    get_fingerprint_repository.cache_clear()
     get_client_embedding_observation_repository.cache_clear()

@@ -13,7 +13,6 @@ Biometric Processor is the AI/ML microservice for the **FIVUCSAS** biometric ide
 
 - **Face** — enroll, verify, search, liveness, quality, demographics, landmarks, comparison (DeepFace / MediaPipe / YOLO)
 - **Voice** — enroll, verify (MFCC + Torch speaker embeddings; Resemblyzer removed due to numba conflict)
-- **Fingerprint** — enroll, verify via WebAuthn FIDO2 assertion (no standalone sensor — platform authenticators only)
 - **Verification pipeline** — YOLO-based document detection + TD1/TD3 MRZ parser + Tesseract TC Kimlik OCR + selfie-to-document cosine matching + server-authoritative liveness verdict
 - **Client-side ML observations** — `client_embedding_observations` table (log-only per D2 design lock; never trusted for auth)
 
@@ -1024,7 +1023,7 @@ pre-commit install
 |---|---|---|---|---|---|
 | Face | POST /enroll | POST /verify | N/A | Working | Full DeepFace implementation |
 | Voice | POST /voice/enroll | POST /voice/verify | DELETE /voice/{id} | Working | Resemblyzer 256-dim embeddings |
-| Fingerprint | POST /fingerprint/enroll | POST /fingerprint/verify | DELETE /fingerprint/{id} | Working | SHA-256 hash-based embeddings |
+| Fingerprint | (removed P1.4) | (removed P1.4) | (removed P1.4) | Removed | SHA-256 placeholder was not a real biometric. Use WebAuthn (FIDO2) in identity-core-api for platform fingerprint auth. |
 | Iris | N/A | N/A | N/A | Not implemented | No endpoints |
 
 ## Roadmap
@@ -1035,7 +1034,7 @@ pre-commit install
 | Sprint 3 | Liveness & Batch Processing | Complete |
 | Sprint 4 | PostgreSQL + pgvector | Complete |
 | Sprint 5 | Docker, Redis, CI/CD | Complete |
-| Sprint 6 | Fingerprint biometric processing | Complete |
+| Sprint 6 | Fingerprint biometric processing | Removed P1.4 (SHA-256 placeholder, not a real biometric) |
 | Sprint 7 | Voice biometric processing (Resemblyzer) | Complete |
 | Sprint 8 | Verification pipeline (document scan, MRZ, OCR) | Complete |
 
