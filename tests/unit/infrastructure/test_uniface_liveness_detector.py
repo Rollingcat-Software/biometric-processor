@@ -40,30 +40,24 @@ async def test_concurrent_ensure_model_loaded_constructs_once(monkeypatch):
     # so the test does not require the real `uniface` package on PYTHONPATH.
     fake_spoofing = types.ModuleType("uniface.spoofing")
 
-    async def _slow_construct():
-        # Simulate a real model-load latency (~50ms) so concurrent callers
-        # genuinely overlap inside the lock-protected section.
-        await asyncio.sleep(0.05)
-        return _fake_model_factory()
-
-    # The detector calls `MiniFASNet()` synchronously inside the locked
-    # section. We can't make that async, so we substitute a callable that
-    # blocks briefly to widen the race window.
-    def _blocking_construct():
-        # tiny synchronous sleep — `time.sleep` on an event loop is bad in
-        # general but here it widens the window for the bug to manifest if
-        # the lock were ever removed.
-        import time
-        time.sleep(0.02)
-        return _fake_model_factory()
-
-    fake_spoofing.MiniFASNet = _blocking_construct
+    fake_spoofing.MiniFASNet = _fake_model_factory
     monkeypatch.setitem(sys.modules, "uniface", types.ModuleType("uniface"))
     monkeypatch.setitem(sys.modules, "uniface.spoofing", fake_spoofing)
 
     detector = UniFaceLivenessDetector(liveness_threshold=70.0)
 
-    # Fire 5 concurrent first-callers.
+    # Fire 5 concurrent first-callers. Each call hits `await self._lock`
+    # before touching `self._model`, so the lock + double-checked-loading
+    # path serialises the 5 coroutines: only the first one observes
+    # `_model is None` and constructs; the other 4 wake on the released
+    # lock and short-circuit on the non-None re-check.
+    #
+    # Note on test scope: this asserts the LOCK guard. We intentionally
+    # don't try to "widen the race window" with `time.sleep` inside the
+    # synchronous MiniFASNet() factory — that sleep would block the event
+    # loop and prove nothing about the asyncio.Lock semantics under test.
+    # The lock is what matters, and gather + lock + non-None re-check
+    # together guarantee call_count == 1.
     results = await asyncio.gather(
         *(detector._ensure_model_loaded() for _ in range(5))
     )
