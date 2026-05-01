@@ -12,7 +12,7 @@ Biometric Processor is the AI/ML microservice for the **FIVUCSAS** biometric ide
 **Scope:**
 
 - **Face** — enroll, verify, search, liveness, quality, demographics, landmarks, comparison (DeepFace / MediaPipe / YOLO)
-- **Voice** — enroll, verify (MFCC + Torch speaker embeddings; Resemblyzer removed due to numba conflict)
+- **Voice** — enroll, verify (Resemblyzer GE2E 256-dim speaker embeddings, centroid-based; librosa pinned to 0.9.2 to avoid the numba/Python 3.12 import-time crash)
 - **Verification pipeline** — YOLO-based document detection + TD1/TD3 MRZ parser + Tesseract TC Kimlik OCR + selfie-to-document cosine matching + server-authoritative liveness verdict
 - **Client-side ML observations** — `client_embedding_observations` table (log-only per D2 design lock; never trusted for auth)
 
