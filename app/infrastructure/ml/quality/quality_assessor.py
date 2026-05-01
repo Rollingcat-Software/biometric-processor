@@ -1,5 +1,6 @@
 """Image quality assessment implementation."""
 
+import asyncio
 import logging
 
 import cv2
@@ -49,13 +50,22 @@ class QualityAssessor:
         )
 
     async def assess(self, face_image: np.ndarray) -> QualityAssessment:
-        """Assess the quality of a face image.
+        """Assess the quality of a face image (async wrapper).
+
+        P2.11: The full quality pipeline (cv2 ops + MediaPipe FaceMesh pose
+        estimation) is CPU-bound. We delegate to a synchronous worker that runs
+        in the default thread executor so the FastAPI event loop stays free.
 
         Args:
             face_image: Face image as numpy array (H, W, C)
 
         Returns:
             QualityAssessment with quality metrics
+        """
+        return await asyncio.to_thread(self._assess_sync, face_image)
+
+    def _assess_sync(self, face_image: np.ndarray) -> QualityAssessment:
+        """Synchronous quality assessment (executed off the event loop).
 
         Note:
             Quality score is calculated as weighted average of:

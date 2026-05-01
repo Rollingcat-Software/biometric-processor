@@ -1,5 +1,6 @@
 """Liveness check use case."""
 
+import asyncio
 import json
 import logging
 from dataclasses import replace
@@ -90,8 +91,8 @@ class CheckLivenessUseCase:
         """
         logger.info("Starting liveness check")
 
-        # Step 1: Load image
-        image = cv2.imread(image_path)
+        # Step 1: Load image (P2.11: offload blocking decode + disk I/O off the event loop)
+        image = await asyncio.to_thread(cv2.imread, image_path)
         if image is None:
             raise ValueError(f"Failed to load image: {image_path}")
 
