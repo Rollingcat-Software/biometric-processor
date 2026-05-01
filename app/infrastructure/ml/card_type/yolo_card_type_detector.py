@@ -51,11 +51,17 @@ _CARD_TYPE_KEYWORDS: dict[str, list[str]] = {
     ],
 }
 
-# Pairs that are commonly confused — OCR validation triggers for these
-_CONFUSABLE_PAIRS: set[frozenset[str]] = {
-    frozenset({"ogrenci_karti", "akademisyen_karti"}),
-    frozenset({"tc_kimlik", "ehliyet"}),
-}
+# NOTE: a `_CONFUSABLE_PAIRS` constant used to live here, gating OCR
+# validation to a small whitelist of confusable card-type pairs. OCR is
+# now run on every detection (see `_ocr_validate` below), so the pair
+# whitelist is gone.
+
+# Sentinel values returned by `_ocr_validate` to signal that no OCR
+# keyword evidence backs the YOLO class. Both should be treated identically
+# by the borderline-reject path. `OCR_UNAVAILABLE` is reported when the
+# OCR step itself failed (Tesseract missing/timeout); `NO_EVIDENCE` is
+# reported when OCR ran but produced no matching keywords.
+_OCR_NO_EVIDENCE: frozenset[str] = frozenset({"no_evidence", "ocr_unavailable"})
 
 # Default model path relative to this file.
 # best_fp16.onnx (FP16 ONNX, 50MB) is used instead of best.onnx (FP32, 103MB).
@@ -99,6 +105,7 @@ class YOLOCardTypeDetector(ICardTypeDetector):
     - ehliyet: Driver's License
     - pasaport: Passport
     - ogrenci_karti: Student Card
+    - akademisyen_karti: Academic Staff Card
     """
 
     def __init__(
@@ -176,9 +183,7 @@ class YOLOCardTypeDetector(ICardTypeDetector):
         # Per USER-BUG-2 the small dataset can hand back a confidently-wrong
         # class for any pair; OCR keyword evidence (when text is legible) is
         # a more reliable disambiguator than the YOLO confidence alone.
-        corrected_name, ocr_evidence = self._ocr_validate(
-            image, class_name, confidence
-        )
+        corrected_name, ocr_evidence = self._ocr_validate(image, class_name)
         if corrected_name != class_name:
             logger.info(
                 f"OCR corrected card type: {class_name} -> {corrected_name} "
@@ -192,10 +197,13 @@ class YOLOCardTypeDetector(ICardTypeDetector):
                     break
 
         # Reject borderline calls. If YOLO confidence is below 0.75 AND OCR
-        # produced no supporting evidence for the class, the call is likely
-        # a guess — return detected=False so the UI prompts manual select
-        # rather than committing to the wrong class.
-        if confidence < 0.75 and ocr_evidence == "no_evidence":
+        # produced no supporting evidence for the class (either no keyword
+        # hits OR OCR itself was unavailable), the call is likely a guess —
+        # return detected=False so the UI prompts manual select rather than
+        # committing to the wrong class. Both `no_evidence` and
+        # `ocr_unavailable` are treated identically per the `_ocr_validate`
+        # docstring.
+        if confidence < 0.75 and ocr_evidence in _OCR_NO_EVIDENCE:
             logger.info(
                 f"Rejecting borderline detection: class={class_name}, "
                 f"confidence={confidence:.2f}, OCR found no supporting keywords"
@@ -215,7 +223,7 @@ class YOLOCardTypeDetector(ICardTypeDetector):
         )
 
     def _ocr_validate(
-        self, image: np.ndarray, yolo_class: str, confidence: float
+        self, image: np.ndarray, yolo_class: str
     ) -> tuple[str, str]:
         """Use OCR to validate or correct the YOLO classification.
 
