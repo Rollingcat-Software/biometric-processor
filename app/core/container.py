@@ -929,19 +929,42 @@ def initialize_dependencies() -> None:
     # so the cost is paid once by the operator, never by an end user.
     # Failures are non-fatal — verification still works, just slower
     # on the first call.
-    if settings.get_liveness_backend() in ("uniface", "hybrid"):
+    # Copilot post-merge round 5 (PR #63):
+    # - Warm the *same* long-lived detector instance returned by
+    #   `get_liveness_detector()` rather than constructing a throw-away
+    #   MiniFASNet, so the per-instance `self._model` is loaded before any
+    #   user traffic arrives.
+    # - Log skipped backends so operators can confirm the skip was intentional.
+    # - Use `exc_info=True` to keep traceback visible while staying non-fatal.
+    _liveness_backend = settings.get_liveness_backend()
+    if _liveness_backend in ("uniface", "hybrid"):
         try:
-            logger.info("Pre-loading UniFace MiniFASNet (anti-spoof)...")
-            from uniface.spoofing import MiniFASNet  # noqa: WPS433
-            MiniFASNet()
-            logger.info("UniFace MiniFASNet pre-loaded")
+            logger.info("Pre-loading UniFace MiniFASNet on cached liveness detector...")
+            liveness_detector = get_liveness_detector()
+            warm_hook = getattr(liveness_detector, "warm_model_sync", None)
+            if callable(warm_hook):
+                warm_hook()
+                logger.info("UniFace MiniFASNet pre-loaded")
+            else:
+                logger.info(
+                    "Liveness detector does not expose UniFace warm-up hook; "
+                    "skipping explicit MiniFASNet pre-load."
+                )
         except ImportError:
             logger.warning(
                 "uniface package not installed — skipping MiniFASNet warm-up. "
                 "First /verify call will pay the cold-start cost."
             )
         except Exception as e:  # pragma: no cover — defensive only
-            logger.warning(f"UniFace warm-up failed (non-fatal): {e}")
+            logger.warning(
+                f"UniFace warm-up failed (non-fatal): {e}",
+                exc_info=True,
+            )
+    else:
+        logger.info(
+            f"Liveness backend '{_liveness_backend}' does not require UniFace warm-up; "
+            f"skipping MiniFASNet pre-load."
+        )
 
     # Pre-load voice model (numba-free MFCC+torch embedder)
     logger.info("Pre-loading speaker embedder...")
