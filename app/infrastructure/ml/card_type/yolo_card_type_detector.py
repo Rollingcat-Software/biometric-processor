@@ -104,13 +104,17 @@ class YOLOCardTypeDetector(ICardTypeDetector):
     def __init__(
         self,
         model_path: Optional[str] = None,
-        confidence_threshold: float = 0.5,
+        confidence_threshold: float = 0.65,
     ) -> None:
         """Initialize YOLO card type detector.
 
         Args:
             model_path: Path to YOLO model weights. Uses default if not provided.
-            confidence_threshold: Minimum confidence for detection (0.0 to 1.0)
+            confidence_threshold: Minimum confidence for detection (0.0 to 1.0).
+                Default raised to 0.65 (was 0.5) per USER-BUG-2 — the small
+                training dataset means confidence in [0.5, 0.65] frequently
+                produced confidently-wrong calls. Borderline calls now fall
+                through to "not detected" so the UI can prompt manual select.
         """
         self._model_path = model_path or str(DEFAULT_MODEL_PATH)
         self._confidence_threshold = confidence_threshold
@@ -168,12 +172,17 @@ class YOLOCardTypeDetector(ICardTypeDetector):
         confidence = float(best_box.conf[0])
         class_name = model.names[class_id]
 
-        # Check if the detected class is in a confusable pair — validate with OCR
-        corrected_name = self._ocr_validate(image, class_name, confidence)
+        # Always run OCR validation — not only for confusable pairs.
+        # Per USER-BUG-2 the small dataset can hand back a confidently-wrong
+        # class for any pair; OCR keyword evidence (when text is legible) is
+        # a more reliable disambiguator than the YOLO confidence alone.
+        corrected_name, ocr_evidence = self._ocr_validate(
+            image, class_name, confidence
+        )
         if corrected_name != class_name:
             logger.info(
                 f"OCR corrected card type: {class_name} -> {corrected_name} "
-                f"(YOLO confidence={confidence:.2f})"
+                f"(YOLO confidence={confidence:.2f}, OCR evidence={ocr_evidence})"
             )
             class_name = corrected_name
             # Find corrected class_id
@@ -182,8 +191,20 @@ class YOLOCardTypeDetector(ICardTypeDetector):
                     class_id = cid
                     break
 
+        # Reject borderline calls. If YOLO confidence is below 0.75 AND OCR
+        # produced no supporting evidence for the class, the call is likely
+        # a guess — return detected=False so the UI prompts manual select
+        # rather than committing to the wrong class.
+        if confidence < 0.75 and ocr_evidence == "no_evidence":
+            logger.info(
+                f"Rejecting borderline detection: class={class_name}, "
+                f"confidence={confidence:.2f}, OCR found no supporting keywords"
+            )
+            return CardTypeResult(detected=False)
+
         logger.info(
-            f"Card detected: {class_name} (id={class_id}, confidence={confidence:.2f})"
+            f"Card detected: {class_name} (id={class_id}, confidence={confidence:.2f}, "
+            f"OCR evidence={ocr_evidence})"
         )
 
         return CardTypeResult(
@@ -195,23 +216,21 @@ class YOLOCardTypeDetector(ICardTypeDetector):
 
     def _ocr_validate(
         self, image: np.ndarray, yolo_class: str, confidence: float
-    ) -> str:
-        """Use OCR to validate or correct YOLO classification for confusable pairs.
+    ) -> tuple[str, str]:
+        """Use OCR to validate or correct the YOLO classification.
 
-        Only runs when the YOLO prediction is in a known confusable pair
-        (e.g. tc_kimlik/ehliyet, ogrenci_karti/akademisyen_karti).
-        Returns corrected class name or the original if OCR can't determine.
+        Runs OCR on every detection (not just confusable pairs). When the
+        OCR text contains keywords that point to a different supported
+        class than YOLO's pick, returns the OCR-preferred class. Otherwise
+        returns the YOLO class.
+
+        Returns:
+            (chosen_class, evidence) — evidence is one of:
+              * "self"          → OCR keywords match the YOLO class
+              * "switched_to_X" → OCR keywords for X dominated; class was switched
+              * "no_evidence"   → OCR ran but no class accumulated keyword hits
+              * "ocr_unavailable" → OCR step itself failed (treated as no_evidence)
         """
-        # Find if yolo_class belongs to a confusable pair
-        confusable_partner: Optional[str] = None
-        for pair in _CONFUSABLE_PAIRS:
-            if yolo_class in pair:
-                confusable_partner = next(iter(pair - frozenset({yolo_class})))
-                break
-
-        if confusable_partner is None:
-            return yolo_class
-
         # Run OCR on the image
         try:
             import pytesseract
@@ -221,30 +240,43 @@ class YOLOCardTypeDetector(ICardTypeDetector):
             ).upper()
         except Exception as e:
             logger.debug(f"OCR validation skipped: {e}")
-            return yolo_class
+            return yolo_class, "ocr_unavailable"
 
         if not raw_text.strip():
-            return yolo_class
+            return yolo_class, "no_evidence"
 
-        # Count keyword matches for both the YOLO class and its confusable partner
+        # Count keyword matches for every supported class
         def count_matches(card_type: str) -> int:
             patterns = _CARD_TYPE_KEYWORDS.get(card_type, [])
             return sum(1 for p in patterns if re.search(p, raw_text, re.IGNORECASE))
 
-        yolo_matches = count_matches(yolo_class)
-        partner_matches = count_matches(confusable_partner)
+        scores = {
+            cls: count_matches(cls) for cls in _CARD_TYPE_KEYWORDS.keys()
+        }
+
+        if all(s == 0 for s in scores.values()):
+            return yolo_class, "no_evidence"
+
+        # Best OCR-supported class
+        best_class, best_score = max(scores.items(), key=lambda kv: kv[1])
+        yolo_score = scores.get(yolo_class, 0)
 
         logger.debug(
-            f"OCR validation: yolo={yolo_class}({yolo_matches} matches), "
-            f"partner={confusable_partner}({partner_matches} matches), "
+            f"OCR validation: yolo={yolo_class}(score={yolo_score}), "
+            f"best={best_class}(score={best_score}), all={scores}, "
             f"text_preview={raw_text[:100]!r}"
         )
 
-        # Only override if the partner has strictly more keyword matches
-        if partner_matches > yolo_matches:
-            return confusable_partner
+        # Only override if OCR strictly prefers a different class.
+        # Equality keeps YOLO's pick — single-keyword ties shouldn't flip
+        # a confident bbox-based call.
+        if best_score > yolo_score:
+            return best_class, f"switched_to_{best_class}"
 
-        return yolo_class
+        if yolo_score > 0:
+            return yolo_class, "self"
+
+        return yolo_class, "no_evidence"
 
     def get_supported_card_types(self) -> list[str]:
         """Get list of card types this detector can identify.
@@ -252,7 +284,7 @@ class YOLOCardTypeDetector(ICardTypeDetector):
         Returns:
             List of supported card type names
         """
-        return ["tc_kimlik", "ehliyet", "pasaport", "ogrenci_karti"]
+        return ["tc_kimlik", "ehliyet", "pasaport", "ogrenci_karti", "akademisyen_karti"]
 
     def get_confidence_threshold(self) -> float:
         """Get the minimum confidence threshold for detection.
