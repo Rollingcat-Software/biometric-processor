@@ -16,7 +16,7 @@ Follows the same ILivenessDetector protocol as other implementations
 
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import cv2
 import numpy as np
@@ -24,6 +24,12 @@ import numpy as np
 from app.domain.entities.liveness_result import LivenessResult
 from app.domain.exceptions.liveness_errors import LivenessCheckError
 from app.domain.interfaces.liveness_detector import ILivenessDetector
+
+if TYPE_CHECKING:
+    # Type-only import: keeps graceful-degradation behavior at runtime
+    # (uniface may not be installed) while letting static analysers see the
+    # real .predict() signature on self._model.
+    from uniface.spoofing import MiniFASNet
 
 logger = logging.getLogger(__name__)
 
@@ -54,15 +60,25 @@ class UniFaceLivenessDetector(ILivenessDetector):
                 Scores above this threshold are considered live.
         """
         self._liveness_threshold = liveness_threshold
-        self._model: Optional[object] = None
+        self._model: Optional["MiniFASNet"] = None
+        # Per-instance async lock guarding lazy model construction. Multiple
+        # concurrent check_liveness() coroutines (each offloading via
+        # asyncio.to_thread) would otherwise race in _ensure_model_loaded
+        # and instantiate MiniFASNet twice (Copilot post-merge PR #57).
+        self._model_lock: asyncio.Lock = asyncio.Lock()
 
         logger.info(
             f"UniFaceLivenessDetector initialized: "
             f"liveness_threshold={liveness_threshold}"
         )
 
-    def _ensure_model_loaded(self) -> None:
-        """Lazy-load the MiniFASNet model on first use.
+    async def _ensure_model_loaded(self) -> None:
+        """Lazy-load the MiniFASNet model on first use (async, thread-safe).
+
+        Uses canonical double-checked locking: an unlocked fast-path read
+        when the model is already loaded, then a lock-protected re-check
+        before construction so only one coroutine ever instantiates the
+        model.
 
         This avoids importing uniface at module level, which allows
         the application to start even if uniface is not installed
@@ -71,22 +87,29 @@ class UniFaceLivenessDetector(ILivenessDetector):
         Raises:
             LivenessCheckError: If uniface is not installed or model fails to load
         """
+        # Fast path — already loaded, no lock needed
         if self._model is not None:
             return
 
-        try:
-            from uniface.spoofing import MiniFASNet
-            self._model = MiniFASNet()
-            logger.info("UniFace MiniFASNet model loaded successfully")
-        except ImportError as e:
-            logger.error(f"uniface package not installed: {e}")
-            raise LivenessCheckError(
-                "uniface package is required for UniFace liveness detection. "
-                "Install it with: pip install uniface>=0.1.0"
-            )
-        except Exception as e:
-            logger.error(f"Failed to load MiniFASNet model: {e}", exc_info=True)
-            raise LivenessCheckError(f"Failed to initialize MiniFASNet: {e}")
+        async with self._model_lock:
+            # Re-check after acquiring the lock: another coroutine may have
+            # finished loading while we were awaiting the lock.
+            if self._model is not None:
+                return
+
+            try:
+                from uniface.spoofing import MiniFASNet
+                self._model = MiniFASNet()
+                logger.info("UniFace MiniFASNet model loaded successfully")
+            except ImportError as e:
+                logger.error(f"uniface package not installed: {e}")
+                raise LivenessCheckError(
+                    "uniface package is required for UniFace liveness detection. "
+                    "Install it with: pip install uniface>=0.1.0"
+                )
+            except Exception as e:
+                logger.error(f"Failed to load MiniFASNet model: {e}", exc_info=True)
+                raise LivenessCheckError(f"Failed to initialize MiniFASNet: {e}")
 
     async def check_liveness(self, image: np.ndarray) -> LivenessResult:
         """Check if image shows a live person using MiniFASNet.
@@ -107,8 +130,8 @@ class UniFaceLivenessDetector(ILivenessDetector):
             if image is None or image.size == 0:
                 raise LivenessCheckError("Invalid input image")
 
-            # Ensure model is loaded
-            self._ensure_model_loaded()
+            # Ensure model is loaded (async, thread-safe lazy init)
+            await self._ensure_model_loaded()
 
             # Convert BGR to RGB (UniFace expects RGB)
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -118,7 +141,10 @@ class UniFaceLivenessDetector(ILivenessDetector):
             h, w = image_rgb.shape[:2]
             bbox = [0, 0, w, h]
             # P2.11: ONNX inference is CPU-bound — offload off the event loop
-            raw_prediction = await asyncio.to_thread(
+            # via the project's shared ThreadPoolManager so ML_THREAD_POOL_SIZE
+            # is honored (was asyncio.to_thread, which uses the default executor).
+            from app.core.container import get_thread_pool
+            raw_prediction = await get_thread_pool().run_blocking(
                 self._model.predict, image_rgb, bbox
             )
             predictions = self._normalize_predictions(raw_prediction)
