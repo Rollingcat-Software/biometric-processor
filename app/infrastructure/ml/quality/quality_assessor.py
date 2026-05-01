@@ -1,11 +1,13 @@
 """Image quality assessment implementation."""
 
 import logging
+from typing import Optional
 
 import cv2
 import numpy as np
 
 from app.domain.entities.quality_assessment import QualityAssessment
+from app.domain.interfaces.thread_pool_executor import ThreadPoolExecutorPort
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,7 @@ class QualityAssessor:
         blur_threshold: float = 100.0,
         min_face_size: int = 80,
         quality_threshold: float = 70.0,
+        thread_pool: Optional[ThreadPoolExecutorPort] = None,
     ) -> None:
         """Initialize quality assessor.
 
@@ -36,10 +39,18 @@ class QualityAssessor:
             blur_threshold: Minimum acceptable blur score (Laplacian variance)
             min_face_size: Minimum acceptable face size in pixels
             quality_threshold: Minimum overall quality score (0-100)
+            thread_pool: Executor port used to offload the blocking quality
+                pipeline off the event loop. Injected by the DI container in
+                production (see `app.core.container.get_quality_assessor`).
+                If omitted, `assess(...)` falls back to the project's default
+                container-resolved pool — a deferred lookup kept only as a
+                last-resort safety net so existing call sites without DI
+                continue to work.
         """
         self._blur_threshold = blur_threshold
         self._min_face_size = min_face_size
         self._quality_threshold = quality_threshold
+        self._thread_pool = thread_pool
 
         logger.info(
             f"Initialized QualityAssessor: "
@@ -63,10 +74,15 @@ class QualityAssessor:
         Returns:
             QualityAssessment with quality metrics
         """
-        # Local import to avoid a circular module-load between
-        # app.core.container and infrastructure.ml.quality at import time.
-        from app.core.container import get_thread_pool
-        return await get_thread_pool().run_blocking(self._assess_sync, face_image)
+        pool = self._thread_pool
+        if pool is None:
+            # Safety net for legacy callers that constructed QualityAssessor
+            # without injecting a pool. Prefer injection — see __init__ docs.
+            # Local import keeps a static infrastructure→container coupling
+            # out of the import graph (Copilot post-merge finding on PR #59).
+            from app.core.container import get_thread_pool
+            pool = get_thread_pool()
+        return await pool.run_blocking(self._assess_sync, face_image)
 
     def _assess_sync(self, face_image: np.ndarray) -> QualityAssessment:
         """Synchronous quality assessment (executed off the event loop).

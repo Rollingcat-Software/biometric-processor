@@ -160,6 +160,10 @@ def get_quality_assessor() -> IQualityAssessor:
         blur_threshold=settings.BLUR_THRESHOLD,
         min_face_size=settings.MIN_FACE_SIZE,
         quality_threshold=settings.QUALITY_THRESHOLD,
+        # P2.11: inject the shared pool explicitly instead of re-resolving
+        # `get_thread_pool` from inside the assessor — keeps infrastructure
+        # decoupled from the container (Copilot post-merge PR #59).
+        thread_pool=get_thread_pool(),
     )
 
 
