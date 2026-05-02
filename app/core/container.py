@@ -41,6 +41,7 @@ from app.core.config import settings
 from app.domain.interfaces.card_type_detector import ICardTypeDetector
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
+from app.domain.exceptions.liveness_errors import LivenessCheckError
 from app.domain.interfaces.event_bus import IEventBus
 from app.domain.interfaces.active_liveness_session_repository import IActiveLivenessSessionRepository
 
@@ -929,17 +930,27 @@ def initialize_dependencies() -> None:
     # so the cost is paid once by the operator, never by an end user.
     # Failures are non-fatal — verification still works, just slower
     # on the first call.
-    # Copilot post-merge round 5 (PR #63):
-    # - Warm the *same* long-lived detector instance returned by
-    #   `get_liveness_detector()` rather than constructing a throw-away
-    #   MiniFASNet, so the per-instance `self._model` is loaded before any
-    #   user traffic arrives.
-    # - Log skipped backends so operators can confirm the skip was intentional.
-    # - Use `exc_info=True` to keep traceback visible while staying non-fatal.
+    # Copilot post-merge round 8 (PR #64):
+    # - `get_liveness_detector()` is intentionally NOT cached (the
+    #   enhanced/hybrid detectors keep per-session blink state which must
+    #   not leak across requests). The fix lives one layer down:
+    #   `UniFaceLivenessDetector` resolves MiniFASNet through a
+    #   module-level `lru_cache` (`_get_shared_minifasnet`), so warming
+    #   any single instance primes the shared ONNX session for every
+    #   later instance — including the inner detector inside
+    #   `HybridLivenessDetector`.
+    # - `warm_model_sync()` already wraps `ImportError` in
+    #   `LivenessCheckError`, so the outer `except ImportError` was
+    #   unreachable. We catch `LivenessCheckError` instead and walk
+    #   `__cause__` to keep the operator-facing log accurate.
+    # - HybridLivenessDetector now exposes its own `warm_model_sync()`
+    #   forwarding to the inner UniFace, so hybrid mode actually warms.
     _liveness_backend = settings.get_liveness_backend()
     if _liveness_backend in ("uniface", "hybrid"):
         try:
-            logger.info("Pre-loading UniFace MiniFASNet on cached liveness detector...")
+            logger.info(
+                "Pre-loading UniFace MiniFASNet (process-wide shared ONNX session)..."
+            )
             liveness_detector = get_liveness_detector()
             warm_hook = getattr(liveness_detector, "warm_model_sync", None)
             if callable(warm_hook):
@@ -950,11 +961,21 @@ def initialize_dependencies() -> None:
                     "Liveness detector does not expose UniFace warm-up hook; "
                     "skipping explicit MiniFASNet pre-load."
                 )
-        except ImportError:
-            logger.warning(
-                "uniface package not installed — skipping MiniFASNet warm-up. "
-                "First /verify call will pay the cold-start cost."
-            )
+        except LivenessCheckError as e:
+            # `warm_model_sync()` wraps the underlying failure in
+            # LivenessCheckError. Walk `__cause__` to recover the original
+            # exception class so the operator-facing log is accurate.
+            cause = e.__cause__
+            if isinstance(cause, ImportError):
+                logger.warning(
+                    "uniface package not installed — skipping MiniFASNet warm-up. "
+                    "First /verify call will pay the cold-start cost."
+                )
+            else:
+                logger.warning(
+                    f"UniFace warm-up failed (non-fatal): {e}",
+                    exc_info=True,
+                )
         except Exception as e:  # pragma: no cover — defensive only
             logger.warning(
                 f"UniFace warm-up failed (non-fatal): {e}",
