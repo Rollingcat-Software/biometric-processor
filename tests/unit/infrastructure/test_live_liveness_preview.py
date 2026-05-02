@@ -21,16 +21,45 @@ from app.application.services.preview_biometric_puzzle import (
     PreviewPuzzleSummary,
 )
 from app.core.config import Settings
+from app.domain.entities.face_detection import FaceDetectionResult
+from app.domain.entities.liveness_result import LivenessResult
 from app.domain.entities.puzzle import Puzzle, PuzzleDifficulty, PuzzleStep
 from app.infrastructure.ml.liveness.critical_region_visibility_gate import CriticalRegionVisibilityGate
 from app.infrastructure.ml.liveness.moire_pattern_analysis import analyze_moire_pattern
 from app.tools.live_liveness_preview import (
     FrameMetrics,
+    LivenessPreviewFrameProcessor,
     TemporalLivenessAggregator,
     _is_device_replay_spoof_detected,
 )
 
 _TEST_VISIBILITY_GATE = CriticalRegionVisibilityGate()
+
+
+class _StaticFaceDetector:
+    def __init__(self, result: FaceDetectionResult) -> None:
+        self.result = result
+        self.calls = 0
+
+    async def detect(self, image):
+        self.calls += 1
+        return self.result
+
+
+class _StaticLivenessDetector:
+    def __init__(self, result: LivenessResult) -> None:
+        self.result = result
+        self.calls = 0
+
+    async def check_liveness(self, image):
+        self.calls += 1
+        return self.result
+
+    def get_challenge_type(self) -> str:
+        return "blink"
+
+    def get_liveness_threshold(self) -> float:
+        return 80.0
 
 
 def _preview_face_frame(*, occlude_lower_face: bool = False) -> np.ndarray:
@@ -146,6 +175,92 @@ def _frame_metrics(*, raw_score: float, confidence: float, is_live: bool = True,
             **_critical_visibility_details(frame),
         },
     )
+
+
+def test_preview_processor_returns_no_face_when_detector_finds_no_bbox():
+    settings = Settings(_env_file=None, JWT_ENABLED=False)
+    face_detector = _StaticFaceDetector(
+        FaceDetectionResult(found=False, bounding_box=None, landmarks=None, confidence=0.0)
+    )
+    liveness_detector = _StaticLivenessDetector(
+        LivenessResult(is_live=True, score=91.0, challenge="blink", challenge_completed=True, confidence=0.91)
+    )
+    processor = LivenessPreviewFrameProcessor(
+        face_detector=face_detector,
+        liveness_detector=liveness_detector,
+        landmark_detector=None,
+        settings=settings,
+    )
+
+    result = processor.process_frame(_preview_face_frame())
+
+    assert result.face_detected is False
+    assert result.raw_score == 0.0
+    assert result.passive_score == 0.0
+    assert result.active_score == 0.0
+    assert result.details["face_usability_reason"] == "no_face_detected"
+    assert result.details["liveness_skipped_due_to_face_usability"] == 1.0
+    assert liveness_detector.calls == 0
+
+
+def test_preview_processor_skips_liveness_when_critical_region_is_occluded():
+    settings = Settings(_env_file=None, JWT_ENABLED=False)
+    face_detector = _StaticFaceDetector(
+        FaceDetectionResult(found=True, bounding_box=(20, 20, 120, 120), landmarks=None, confidence=0.95)
+    )
+    liveness_detector = _StaticLivenessDetector(
+        LivenessResult(is_live=True, score=91.0, challenge="blink", challenge_completed=True, confidence=0.91)
+    )
+    landmark_detector = Mock()
+    processor = LivenessPreviewFrameProcessor(
+        face_detector=face_detector,
+        liveness_detector=liveness_detector,
+        landmark_detector=landmark_detector,
+        settings=settings,
+    )
+
+    result = processor.process_frame(_preview_face_frame(occlude_lower_face=True))
+
+    assert result.face_detected is False
+    assert result.raw_score == 0.0
+    assert result.passive_score == 0.0
+    assert result.active_score == 0.0
+    assert result.details["face_usable"] == 0.0
+    assert result.details["face_usability_reason"] == "critical_face_region_occluded"
+    assert result.details["liveness_skipped_due_to_face_usability"] == 1.0
+    assert liveness_detector.calls == 0
+    assert landmark_detector.detect.call_count == 0
+
+
+def test_preview_processor_requires_clear_frames_before_resuming_after_occlusion():
+    settings = Settings(_env_file=None, JWT_ENABLED=False)
+    face_detector = _StaticFaceDetector(
+        FaceDetectionResult(found=True, bounding_box=(20, 20, 120, 120), landmarks=None, confidence=0.95)
+    )
+    liveness_detector = _StaticLivenessDetector(
+        LivenessResult(is_live=True, score=91.0, challenge="blink", challenge_completed=True, confidence=0.91)
+    )
+    processor = LivenessPreviewFrameProcessor(
+        face_detector=face_detector,
+        liveness_detector=liveness_detector,
+        landmark_detector=None,
+        settings=settings,
+    )
+
+    blocked = processor.process_frame(_preview_face_frame(occlude_lower_face=True))
+    recover_1 = processor.process_frame(_preview_face_frame())
+    recover_2 = processor.process_frame(_preview_face_frame())
+    recovered = processor.process_frame(_preview_face_frame())
+
+    assert blocked.details["face_usability_reason"] == "critical_face_region_occluded"
+    assert recover_1.details["face_usability_reason"] == "recovering_face_usability"
+    assert recover_2.details["face_usability_reason"] == "recovering_face_usability"
+    assert recover_1.face_detected is False
+    assert recover_2.face_detected is False
+    assert recovered.face_detected is True
+    assert recovered.details["face_usable"] == 1.0
+    assert recovered.details["liveness_skipped_due_to_face_usability"] == 0.0
+    assert liveness_detector.calls == 1
 
 
 def test_temporal_liveness_aggregator_updates_ema_and_variance():
@@ -1637,13 +1752,12 @@ def test_temporal_liveness_aggregator_warm_recovers_after_brief_face_loss():
     assert result.decision_state != "NO_FACE"
 
 
-def test_critical_region_occlusion_transitions_clear_to_temp_to_persistent_to_recovering_to_clear():
+def test_critical_region_occlusion_override_marks_blocked_frames_as_no_face():
     aggregator = TemporalLivenessAggregator(
         window_seconds=2.0,
         baseline_seconds=0.5,
         max_entries=20,
         ema_alpha=0.3,
-        occlusion_no_face_threshold=8,
     )
 
     visible = _frame_metrics(raw_score=92.0, confidence=0.88, timestamp=1.0)
@@ -1669,65 +1783,33 @@ def test_critical_region_occlusion_transitions_clear_to_temp_to_persistent_to_re
     assert result.original_status_before_occ_gate in {"LIVE", "INSUFFICIENT_EVIDENCE"}
     assert result.decision_state == result.final_status_after_occ_gate
 
-    temp_result = None
-    persistent_result = None
-    for index in range(8):
-        temp_result = aggregator.add(
-            FrameMetrics(
-                **{
-                    **visible.__dict__,
-                    "timestamp": 1.8 + index * 0.1,
-                    "details": {
-                        **visible.details,
-                        **_force_occluded_critical_details(),
-                    },
-                }
-            )
+    blocked_result = aggregator.add(
+        FrameMetrics(
+            **{
+                **visible.__dict__,
+                "timestamp": 1.8,
+                "details": {
+                    **visible.details,
+                    **_force_occluded_critical_details(),
+                    "face_usable": 0.0,
+                    "face_usability_reason": "critical_face_region_occluded",
+                    "face_usability_state": "OCCLUDED_CONFIRMED",
+                    "face_usability_blocked": 1.0,
+                    "liveness_skipped_due_to_face_usability": 1.0,
+                },
+            }
         )
-        if index == 1:
-            assert temp_result.decision_state == "INSUFFICIENT_EVIDENCE"
-            assert temp_result.critical_occ_reason == "critical_region_temporarily_occluded"
-        persistent_result = temp_result
+    )
 
-    assert persistent_result is not None
-    assert persistent_result.decision_state == "NO_FACE"
-    assert persistent_result.critical_occ_reason == "critical_region_persistently_occluded"
-    assert persistent_result.original_status_before_occ_gate != persistent_result.final_status_after_occ_gate
-
-    recovering_result = None
-    for index in range(3):
-        recovering_result = aggregator.add(
-            FrameMetrics(
-                **{
-                    **visible.__dict__,
-                    "timestamp": 2.7 + index * 0.1,
-                }
-            )
-        )
-
-    assert recovering_result is not None
-    assert recovering_result.decision_state == "INSUFFICIENT_EVIDENCE"
-    assert recovering_result.critical_occ_reason == "recovering_after_critical_region_occlusion"
-
-    cleared_result = None
-    for index in range(2):
-        cleared_result = aggregator.add(
-            FrameMetrics(
-                **{
-                    **visible.__dict__,
-                    "timestamp": 3.05 + index * 0.1,
-                }
-            )
-        )
-
-    assert cleared_result is not None
-    assert cleared_result.critical_occ is False
-    assert cleared_result.critical_occ_state == "CLEAR"
-    assert cleared_result.critical_occ_reason == "-"
-    assert cleared_result.decision_state == cleared_result.original_status_before_occ_gate
+    assert blocked_result.decision_state == "NO_FACE"
+    assert blocked_result.face_usable is False
+    assert blocked_result.face_usability_reason == "critical_face_region_occluded"
+    assert blocked_result.face_usability_blocked is True
+    assert blocked_result.liveness_skipped_due_to_face_usability is True
+    assert blocked_result.original_status_before_occ_gate != blocked_result.final_status_after_occ_gate
 
 
-def test_critical_region_occlusion_does_not_stop_liveness_score_computation():
+def test_critical_region_occlusion_skips_liveness_scores_in_debug_aggregate():
     aggregator = TemporalLivenessAggregator(
         window_seconds=2.0,
         baseline_seconds=0.5,
@@ -1741,9 +1823,17 @@ def test_critical_region_occlusion_does_not_stop_liveness_score_computation():
             FrameMetrics(
                 **{
                     **_frame_metrics(raw_score=89.0, confidence=0.86, timestamp=1.0 + index * 0.1).__dict__,
+                    "raw_score": 0.0,
+                    "passive_score": 0.0,
+                    "active_score": 0.0,
                     "details": {
                         **_frame_metrics(raw_score=89.0, confidence=0.86, timestamp=1.0).__dict__["details"],
                         **_force_occluded_critical_details(),
+                        "face_usable": 0.0,
+                        "face_usability_reason": "critical_face_region_occluded",
+                        "face_usability_state": "OCCLUDED_CONFIRMED",
+                        "face_usability_blocked": 1.0,
+                        "liveness_skipped_due_to_face_usability": 1.0,
                         "smile": 48.0,
                     },
                 }
@@ -1752,10 +1842,10 @@ def test_critical_region_occlusion_does_not_stop_liveness_score_computation():
 
     assert result is not None
     assert result.critical_occ is True
-    assert result.smoothed_score > 0.0
-    assert result.passive_window_score > 0.0
-    assert result.final_active_score > 0.0
-    assert result.original_status_before_occ_gate in {"LIVE", "INSUFFICIENT_EVIDENCE", "SPOOF"}
+    assert result.decision_state == "NO_FACE"
+    assert result.liveness_skipped_due_to_face_usability is True
+    assert result.passive_window_score == 0.0
+    assert result.final_active_score == 0.0
 
 
 def test_critical_region_gate_does_not_use_landmark_visibility_score_alone():
@@ -1852,4 +1942,3 @@ def test_start_dev_liveness_preview_if_disabled(monkeypatch):
     monkeypatch.setattr(type(main_module.settings), "should_run_dev_liveness_preview", lambda self: False)
 
     assert main_module._start_dev_liveness_preview_if_enabled() is None
-

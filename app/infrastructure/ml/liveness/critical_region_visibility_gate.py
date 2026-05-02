@@ -103,10 +103,11 @@ class CriticalRegionVisibilityGate:
                 reason="no_face_bbox_unavailable",
             )
 
+        # Use only cheek patches for baseline — forehead is covered by headscarves/hats
+        # and corrupts the baseline Lab color, causing all skin regions to score low.
         baseline_patches = [
             patch
             for patch in (
-                _region_patch(face_roi, _BASELINE_RATIOS["forehead"]),
                 _region_patch(face_roi, _BASELINE_RATIOS["left_cheek"]),
                 _region_patch(face_roi, _BASELINE_RATIOS["right_cheek"]),
             )
@@ -132,6 +133,7 @@ class CriticalRegionVisibilityGate:
                 patch=patch,
                 baseline=baseline,
                 hand_overlap_signal=hand_overlap_signal,
+                region_name=region_name,
             )
             visibility_scores[region_name] = score
             weight = _DEFAULT_REGION_WEIGHTS[region_name]
@@ -339,6 +341,7 @@ def _visibility_score(
     patch: np.ndarray,
     baseline: dict[str, float],
     hand_overlap_signal: Optional[float],
+    region_name: str = "",
 ) -> float:
     if patch.size == 0:
         return 0.0
@@ -364,6 +367,23 @@ def _visibility_score(
         + 0.24 * edge_score
         + 0.18 * skin_score
     )
+
+    # Dark non-skin cover: brightness well below baseline AND no skin color match.
+    # Texture/edge from a partial-occlusion boundary inflate scores artificially,
+    # so we cap visibility when the patch is clearly both dim and non-skin-colored.
+    if brightness < baseline["brightness"] * 0.55 and skin_score < 0.05:
+        visibility = min(visibility, 0.35)
+
+    if region_name == "mouth":
+        # Lips are always redder than surrounding cheek skin in the Lab a* channel.
+        # A hand or object covering the mouth shows the same redness as the cheek
+        # baseline (delta ≈ 0), while real lips read at least 5+ units above baseline.
+        # The generic skin_score is counterproductive here — it rewards a hand (same
+        # skin as baseline) more than visible lips (which are distinctly redder).
+        lip_redness_delta = lab_a - baseline["lab_a"]
+        if lip_redness_delta < 5.0:
+            visibility = min(visibility, 0.45)
+
     if hand_overlap_signal is not None:
         visibility *= max(0.0, min(1.0, 1.0 - hand_overlap_signal))
     return max(0.0, min(1.0, float(visibility)))
@@ -440,7 +460,7 @@ def _apply_preview_heuristics(
                 occluded_regions.append(region_name)
         occlusion_score = max(occlusion_score, 0.28 + 0.60 * severity)
 
-    return occluded_regions, visibility_scores, max(0.0, min(1.0, occlusion_score))
+    return occluded_regions, visibility_scores, occlusion_score
 
 
 def _coerce_float(value: object) -> Optional[float]:

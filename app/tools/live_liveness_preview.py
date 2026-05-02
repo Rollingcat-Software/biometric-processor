@@ -39,11 +39,7 @@ from app.domain.exceptions.liveness_errors import LivenessCheckError
 from app.domain.interfaces.face_detector import IFaceDetector
 from app.domain.interfaces.landmark_detector import ILandmarkDetector
 from app.domain.interfaces.liveness_detector import ILivenessDetector
-from app.infrastructure.ml.liveness.critical_region_visibility_gate import (
-    CriticalRegionVisibilityGate,
-    CriticalRegionVisibilityResult,
-    CriticalRegionVisibilityTracker,
-)
+from app.infrastructure.ml.liveness.face_usability_gate import FaceUsabilityGate
 
 logger = logging.getLogger(__name__)
 PREVIEW_SECURITY_PROFILE = "standard"
@@ -117,12 +113,18 @@ class AggregatedMetrics:
     critical_occ: bool
     critical_occ_score: float
     critical_occ_regions: tuple[str, ...]
+    critical_region_visibility: dict[str, float]
     critical_occ_streak: int
     critical_clear_streak: int
     critical_occ_state: str
     critical_occ_reason: str
+    face_usable: bool
+    face_usability_reason: str
+    face_usability_state: str
+    face_usability_blocked: bool
     original_status_before_occ_gate: str
     final_status_after_occ_gate: str
+    liveness_skipped_due_to_face_usability: bool
     warm_recovery: bool
     low_quality: bool
     sufficient_evidence: bool
@@ -266,10 +268,6 @@ class TemporalLivenessAggregator:
         self._face_loss_reset_seconds = face_loss_reset_seconds
         self._min_trusted_face_size_ratio = min_trusted_face_size_ratio
         self._settings = get_settings()
-        self._critical_region_visibility_gate = CriticalRegionVisibilityGate()
-        self._critical_region_visibility_tracker = CriticalRegionVisibilityTracker(
-            persistent_occlusion_frames=occlusion_no_face_threshold,
-        )
         self._background_reaction_evaluator = BackgroundActiveReactionEvaluator(
             decay_seconds=active_decay_seconds,
             min_face_size_ratio=min_trusted_face_size_ratio,
@@ -332,27 +330,39 @@ class TemporalLivenessAggregator:
         live_count = sum(1 for item in effective_entries if item.is_live)
         face_present_ratio = sum(1 for item in effective_entries if item.face_detected) / max(len(effective_entries), 1)
         consecutive_no_face_frames = _count_consecutive_no_face(recent_entries)
-        critical_visibility_state = self._critical_region_visibility_tracker.state
-        frame_visibility_state = replace(
-            critical_visibility_state,
-            is_critical_occluded=False,
-            override_status=None,
-            override_reason="-",
+        critical_occ = bool(_maybe_float(metrics.details.get("critical_occ")) or 0.0)
+        critical_occ_score = float(_maybe_float(metrics.details.get("critical_occ_score")) or 0.0)
+        critical_occ_regions = tuple(metrics.details.get("critical_occ_regions") or ())
+        critical_region_visibility = {
+            region_name: float(_maybe_float(metrics.details.get(f"critical_vis_{region_name}")) or 0.0)
+            for region_name in ("left_eye", "right_eye", "nose", "mouth", "lower_face")
+        }
+        critical_occ_streak = int(_maybe_float(metrics.details.get("critical_occ_streak")) or 0.0)
+        critical_clear_streak = int(_maybe_float(metrics.details.get("critical_clear_streak")) or 0.0)
+        face_usable_raw = _maybe_float(metrics.details.get("face_usable"))
+        face_usable = bool(face_usable_raw) if face_usable_raw is not None else (metrics.face_detected and not critical_occ)
+        face_usability_reason = str(
+            metrics.details.get("face_usability_reason")
+            or ("critical_face_region_occluded" if critical_occ else ("face_usable" if face_usable else "no_face_detected"))
         )
-        if metrics.face_detected and not metrics.held_from_previous:
-            critical_visibility = CriticalRegionVisibilityResult(
-                is_critical_occluded=bool(_maybe_float(metrics.details.get("critical_occ")) or 0.0),
-                occlusion_score=float(_maybe_float(metrics.details.get("critical_occ_score")) or 0.0),
-                occluded_regions=tuple(metrics.details.get("critical_occ_regions") or ()),
-                visibility_scores={
-                    region_name: float(_maybe_float(metrics.details.get(f"critical_vis_{region_name}")) or 0.0)
-                    for region_name in ("left_eye", "right_eye", "nose", "mouth", "lower_face")
-                },
-                reason=str(metrics.details.get("critical_occ_reason") or "-"),
-            )
-            critical_visibility_state = self._critical_region_visibility_tracker.update(critical_visibility)
-            frame_visibility_state = critical_visibility_state
-        consecutive_occluded_frames = critical_visibility_state.occlusion_streak
+        face_usability_state = str(
+            metrics.details.get("face_usability_state")
+            or ("OCCLUDED_CONFIRMED" if critical_occ else ("CLEAR" if face_usable else "NO_FACE"))
+        )
+        face_usability_blocked = bool(_maybe_float(metrics.details.get("face_usability_blocked")) or 0.0)
+        if "face_usability_blocked" not in metrics.details:
+            face_usability_blocked = critical_occ or not face_usable
+        critical_occ_state = str(metrics.details.get("critical_occ_state") or face_usability_state)
+        critical_occ_reason = str(metrics.details.get("critical_occ_reason") or face_usability_reason)
+        liveness_skipped_due_to_face_usability = bool(
+            _maybe_float(metrics.details.get("liveness_skipped_due_to_face_usability")) or 0.0
+        )
+        usability_reason_recent = face_usability_reason in {
+            "critical_face_region_occluded",
+            "recovering_face_usability",
+            "no_face_detected",
+        }
+        consecutive_occluded_frames = critical_occ_streak
         warm_recovery = _is_warm_recovery_candidate(
             recent_entries=recent_entries,
             current_frame=metrics,
@@ -449,7 +459,19 @@ class TemporalLivenessAggregator:
         debug_decision_summary.update(
             self._apply_critical_region_visibility_override(
                 original_status=str(debug_decision_summary["debug_decision_state"]),
-                visibility_state=frame_visibility_state,
+                face_usable=face_usable,
+                face_usability_reason=face_usability_reason,
+                face_usability_state=face_usability_state,
+                face_usability_blocked=face_usability_blocked,
+                critical_occ=critical_occ,
+                critical_occ_score=critical_occ_score,
+                critical_occ_regions=critical_occ_regions,
+                critical_region_visibility=critical_region_visibility,
+                critical_occ_streak=critical_occ_streak,
+                critical_clear_streak=critical_clear_streak,
+                critical_occ_state=critical_occ_state,
+                critical_occ_reason=critical_occ_reason,
+                liveness_skipped_due_to_face_usability=liveness_skipped_due_to_face_usability,
             )
         )
         temporal_signal_summary.update(debug_decision_summary)
@@ -555,7 +577,6 @@ class TemporalLivenessAggregator:
         self._last_debug_decision_state = None
         self._no_face_live_cooldown_frames = 0
         self._stable_live_hold_frames = 0
-        self._critical_region_visibility_tracker.reset()
 
     def start_puzzle_session(self) -> Optional[PreviewPuzzleSummary]:
         """Start a preview puzzle session using the configured defaults."""
@@ -823,6 +844,13 @@ class TemporalLivenessAggregator:
             suspicion_reasons.append("DETECTOR_MISS_FACE_LIKELY_PRESENT")
         if bool(_maybe_float(metrics.details.get("critical_occ")) or 0.0):
             suspicion_reasons.append("FACE_OCCLUDED")
+        face_usability_blocked = bool(_maybe_float(metrics.details.get("face_usability_blocked")) or 0.0)
+        face_usability_reason = str(metrics.details.get("face_usability_reason") or "-")
+        usability_reason_recent = face_usability_reason in {
+            "critical_face_region_occluded",
+            "recovering_face_usability",
+            "no_face_detected",
+        }
 
         no_face_due_to_missing_current = (
             not metrics.face_detected
@@ -961,20 +989,38 @@ class TemporalLivenessAggregator:
         self,
         *,
         original_status: str,
-        visibility_state: Any,
+        face_usable: bool,
+        face_usability_reason: str,
+        face_usability_state: str,
+        face_usability_blocked: bool,
+        critical_occ: bool,
+        critical_occ_score: float,
+        critical_occ_regions: tuple[str, ...],
+        critical_region_visibility: dict[str, float],
+        critical_occ_streak: int,
+        critical_clear_streak: int,
+        critical_occ_state: str,
+        critical_occ_reason: str,
+        liveness_skipped_due_to_face_usability: bool,
     ) -> dict[str, Any]:
-        final_status = visibility_state.override_status or original_status
+        final_status = "NO_FACE" if face_usability_blocked or not face_usable else original_status
         return {
-            "critical_occ": visibility_state.is_critical_occluded,
-            "critical_occ_score": visibility_state.last_occlusion_score,
-            "critical_occ_regions": visibility_state.last_occluded_regions,
-            "critical_occ_streak": visibility_state.occlusion_streak,
-            "critical_clear_streak": visibility_state.clear_streak,
-            "critical_occ_state": visibility_state.state_name,
-            "critical_occ_reason": visibility_state.override_reason,
+            "face_usable": face_usable,
+            "face_usability_reason": face_usability_reason,
+            "face_usability_state": face_usability_state,
+            "face_usability_blocked": face_usability_blocked,
+            "critical_occ": critical_occ,
+            "critical_occ_score": critical_occ_score,
+            "critical_occ_regions": critical_occ_regions,
+            "critical_region_visibility": critical_region_visibility,
+            "critical_occ_streak": critical_occ_streak,
+            "critical_clear_streak": critical_clear_streak,
+            "critical_occ_state": critical_occ_state,
+            "critical_occ_reason": critical_occ_reason,
             "original_status_before_occ_gate": original_status,
             "final_status_after_occ_gate": final_status,
             "debug_decision_state": final_status,
+            "liveness_skipped_due_to_face_usability": liveness_skipped_due_to_face_usability,
         }
 
     def _update_debug_state(self, decision_state: str) -> None:
@@ -1017,7 +1063,7 @@ class LivenessPreviewFrameProcessor:
         self._last_successful_face_metrics: Optional[FrameMetrics] = None
         self._last_successful_bbox_cleared_reason = "-"
         self._consecutive_face_seen_frames = 0
-        self._critical_region_visibility_gate = CriticalRegionVisibilityGate()
+        self._face_usability_gate = FaceUsabilityGate()
         self._device_spoof_risk_evaluator = DeviceSpoofRiskEvaluator(
             enable_flash_replay=settings.DEV_LIVENESS_PREVIEW_FLASH_REPLAY_ENABLED,
             flash_interval_seconds=settings.DEV_LIVENESS_PREVIEW_FLASH_INTERVAL_SECONDS,
@@ -1055,24 +1101,31 @@ class LivenessPreviewFrameProcessor:
             if should_detect:
                 detection = asyncio.run(self._face_detector.detect(inference_frame))
                 if not detection.found or detection.bounding_box is None:
-                    if self._should_reuse_cached_box_on_miss():
-                        reused_face_detection = True
-                        bounding_box = self._cached_bounding_box
-                        additional_bounding_boxes = self._cached_additional_bounding_boxes
-                    else:
-                        self._cached_bounding_box = None
-                        self._cached_additional_bounding_boxes = ()
-                        self._cached_face_signal_metrics = None
-                        self._cached_liveness_result = None
-                        profiling["face_detection_ms"] = (time.perf_counter() - detection_started) * 1000.0
-                        return self._error_metrics(
-                            brightness=brightness,
-                            blur_score=None,
-                            face_detected=False,
-                            error="No face detected",
-                            profiling=profiling,
-                            inference_scale=inference_scale,
-                        )
+                    self._cached_bounding_box = None
+                    self._cached_additional_bounding_boxes = ()
+                    self._cached_face_signal_metrics = None
+                    self._cached_liveness_result = None
+                    profiling["face_detection_ms"] = (time.perf_counter() - detection_started) * 1000.0
+                    return self._error_metrics(
+                        brightness=brightness,
+                        blur_score=None,
+                        face_detected=False,
+                        error="No face detected",
+                        profiling=profiling,
+                        inference_scale=inference_scale,
+                        extra_details=self._face_usability_details(
+                            face_usable=False,
+                            face_usability_reason="no_face_detected",
+                            face_usability_state="NO_FACE",
+                            face_usability_blocked=True,
+                            critical_occ=False,
+                            critical_occ_score=0.0,
+                            critical_occ_regions=(),
+                            critical_region_visibility={},
+                            liveness_skipped_due_to_face_usability=True,
+                            preview_bbox=None,
+                        ),
+                    )
                 else:
                     bounding_box = self._expand_bounding_box(
                         self._scale_bounding_box(detection.bounding_box, inference_scale, frame.shape),
@@ -1119,6 +1172,18 @@ class LivenessPreviewFrameProcessor:
                 error="No face detected",
                 profiling=profiling,
                 inference_scale=inference_scale,
+                extra_details=self._face_usability_details(
+                    face_usable=False,
+                    face_usability_reason="no_face_detected",
+                    face_usability_state="NO_FACE",
+                    face_usability_blocked=True,
+                    critical_occ=False,
+                    critical_occ_score=0.0,
+                    critical_occ_regions=(),
+                    critical_region_visibility={},
+                    liveness_skipped_due_to_face_usability=True,
+                    preview_bbox=None,
+                ),
             )
 
         face_region = self._crop_face_region(frame, bounding_box)
@@ -1134,6 +1199,18 @@ class LivenessPreviewFrameProcessor:
                 error="No face detected",
                 profiling=profiling,
                 inference_scale=inference_scale,
+                extra_details=self._face_usability_details(
+                    face_usable=False,
+                    face_usability_reason="no_face_detected",
+                    face_usability_state="NO_FACE",
+                    face_usability_blocked=True,
+                    critical_occ=False,
+                    critical_occ_score=0.0,
+                    critical_occ_regions=(),
+                    critical_region_visibility={},
+                    liveness_skipped_due_to_face_usability=True,
+                    preview_bbox=None,
+                ),
             )
 
         blur_started = time.perf_counter()
@@ -1143,6 +1220,45 @@ class LivenessPreviewFrameProcessor:
         _, _, face_width, face_height = bounding_box
         frame_height, frame_width = frame.shape[:2]
         face_size_ratio = (face_width * face_height) / max(frame_width * frame_height, 1)
+        preview_lower_face_texture = self._compute_lower_face_texture(face_region)
+        usability_started = time.perf_counter()
+        face_usability = self._face_usability_gate.evaluate(
+            frame=frame,
+            face_bbox=bounding_box,
+            preview_details={
+                "preview_bbox_x": float(bounding_box[0]),
+                "preview_bbox_y": float(bounding_box[1]),
+                "preview_bbox_w": float(bounding_box[2]),
+                "preview_bbox_h": float(bounding_box[3]),
+                "preview_lower_face_texture": preview_lower_face_texture,
+            },
+            blur_score=blur_score,
+        )
+        profiling["face_usability_ms"] = (time.perf_counter() - usability_started) * 1000.0
+        if not face_usability.usable:
+            self._cached_face_signal_metrics = None
+            self._cached_liveness_result = None
+            self._consecutive_face_seen_frames = 0
+            return self._error_metrics(
+                brightness=face_region_brightness,
+                blur_score=blur_score,
+                face_detected=False,
+                error="Please keep your full face visible.",
+                profiling=profiling,
+                inference_scale=inference_scale,
+                extra_details=self._face_usability_details(
+                    face_usable=face_usability.usable,
+                    face_usability_reason=face_usability.reason,
+                    face_usability_state=face_usability.state,
+                    face_usability_blocked=face_usability.blocked,
+                    critical_occ=face_usability.occluded,
+                    critical_occ_score=face_usability.occlusion_score,
+                    critical_occ_regions=face_usability.occluded_regions,
+                    critical_region_visibility=face_usability.visibility_scores,
+                    liveness_skipped_due_to_face_usability=True,
+                    preview_bbox=bounding_box,
+                ),
+            )
         landmark_started = time.perf_counter()
         should_extract_landmarks = (
             self._cached_face_signal_metrics is None
@@ -1189,6 +1305,18 @@ class LivenessPreviewFrameProcessor:
                 error="No face detected in cropped region",
                 profiling=profiling,
                 inference_scale=inference_scale,
+                extra_details=self._face_usability_details(
+                    face_usable=False,
+                    face_usability_reason="no_face_detected",
+                    face_usability_state="NO_FACE",
+                    face_usability_blocked=True,
+                    critical_occ=False,
+                    critical_occ_score=0.0,
+                    critical_occ_regions=(),
+                    critical_region_visibility={},
+                    liveness_skipped_due_to_face_usability=True,
+                    preview_bbox=bounding_box,
+                ),
             )
         except LivenessCheckError as exc:
             self._cached_liveness_result = None
@@ -1219,6 +1347,7 @@ class LivenessPreviewFrameProcessor:
             face_region=face_region,
             bounding_box=bounding_box,
             additional_bounding_boxes=additional_bounding_boxes,
+            face_usability=face_usability,
             result=liveness_result,
             brightness=face_region_brightness,
             blur_score=blur_score,
@@ -1369,6 +1498,14 @@ class LivenessPreviewFrameProcessor:
         gray = cv2.cvtColor(face_region, cv2.COLOR_BGR2GRAY)
         return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
+    @staticmethod
+    def _compute_lower_face_texture(face_region: np.ndarray) -> float:
+        gray = cv2.cvtColor(face_region, cv2.COLOR_BGR2GRAY)
+        height = gray.shape[0]
+        if height < 10:
+            return 0.0
+        return float(cv2.Laplacian(gray[height // 2 :], cv2.CV_64F).var())
+
     def _error_metrics(
         self,
         *,
@@ -1378,6 +1515,7 @@ class LivenessPreviewFrameProcessor:
         error: str,
         profiling: Optional[dict[str, float]] = None,
         inference_scale: float = 1.0,
+        extra_details: Optional[dict[str, Any]] = None,
     ) -> FrameMetrics:
         last_face_seen_age = (
             float(self._frame_index - self._last_successful_frame_index)
@@ -1401,7 +1539,7 @@ class LivenessPreviewFrameProcessor:
             and last_face_seen_age >= 0.0
             and last_face_seen_age <= 5.0
             and previous_face_or_reuse
-            and ("no face detected" in lowered_error or "circuit breaker" in lowered_error)
+            and ("circuit breaker" in lowered_error)
         )
         if should_use_no_face_grace or self._should_hold_last_success(error):
             return self._hold_last_success(
@@ -1413,6 +1551,19 @@ class LivenessPreviewFrameProcessor:
             self._last_successful_bbox = None
             self._last_successful_bbox_cleared_reason = "grace_expired"
         self._consecutive_face_seen_frames = 0
+        details = {
+            "preview_detector_unstable": 1.0 if not face_detected else 0.0,
+            "preview_last_face_seen_age": last_face_seen_age,
+            "preview_no_face_grace_active": 0.0,
+            "preview_no_face_grace_expired": 1.0 if (last_face_seen_age > 5.0 and self._last_successful_metrics is not None) else 0.0,
+            "preview_no_face_grace_reason": "-",
+            "preview_last_successful_bbox_available": 1.0 if self._last_successful_bbox is not None else 0.0,
+            "preview_last_successful_bbox_available_before_detection": 1.0 if last_successful_bbox_available_before_detection else 0.0,
+            "preview_last_successful_bbox_available_after_detection": 1.0 if self._last_successful_bbox is not None else 0.0,
+            "preview_last_successful_bbox_cleared_reason": self._last_successful_bbox_cleared_reason,
+        }
+        if extra_details:
+            details.update(extra_details)
         return FrameMetrics(
             timestamp=time.time(),
             face_detected=face_detected,
@@ -1436,17 +1587,7 @@ class LivenessPreviewFrameProcessor:
             background_active_mode="error" if face_detected else "no_face",
             background_active_detected=False,
             device_spoof=None,
-            details={
-                "preview_detector_unstable": 1.0 if not face_detected else 0.0,
-                "preview_last_face_seen_age": last_face_seen_age,
-                "preview_no_face_grace_active": 0.0,
-                "preview_no_face_grace_expired": 1.0 if (last_face_seen_age > 5.0 and self._last_successful_metrics is not None) else 0.0,
-                "preview_no_face_grace_reason": "-",
-                "preview_last_successful_bbox_available": 1.0 if self._last_successful_bbox is not None else 0.0,
-                "preview_last_successful_bbox_available_before_detection": 1.0 if last_successful_bbox_available_before_detection else 0.0,
-                "preview_last_successful_bbox_available_after_detection": 1.0 if self._last_successful_bbox is not None else 0.0,
-                "preview_last_successful_bbox_cleared_reason": self._last_successful_bbox_cleared_reason,
-            },
+            details=details,
             error=error,
             profiling=profiling or {},
             inference_scale=inference_scale,
@@ -1469,7 +1610,7 @@ class LivenessPreviewFrameProcessor:
         if not previous_face_or_reuse:
             return False
         lowered_error = error.lower()
-        return "no face detected" in lowered_error or "circuit breaker" in lowered_error
+        return "circuit breaker" in lowered_error
 
     def _hold_last_success(
         self,
@@ -1532,6 +1673,7 @@ class LivenessPreviewFrameProcessor:
         face_region: np.ndarray,
         bounding_box: tuple[int, int, int, int],
         additional_bounding_boxes: tuple[tuple[int, int, int, int], ...],
+        face_usability,
         result: LivenessResult,
         brightness: float,
         blur_score: float,
@@ -1552,12 +1694,7 @@ class LivenessPreviewFrameProcessor:
         # Laplacian variance of the bottom half of the face crop Ã¢â‚¬â€ used to detect a hand or
         # object covering the mouth/nose while the eyes remain open (EAR is still normal but
         # the lower face region becomes much more uniform than real facial skin texture).
-        gray_face = cv2.cvtColor(face_region, cv2.COLOR_BGR2GRAY)
-        h = gray_face.shape[0]
-        if h >= 10:
-            details["preview_lower_face_texture"] = float(
-                cv2.Laplacian(gray_face[h // 2 :], cv2.CV_64F).var()
-            )
+        details["preview_lower_face_texture"] = self._compute_lower_face_texture(face_region)
         face_quality = _coalesce_float(_maybe_float(details.get("face_quality")), face_signal_metrics.face_quality)
         ear_current = _coalesce_float(_maybe_float(details.get("ear_current")), face_signal_metrics.ear_current)
         mar_current = _coalesce_float(_maybe_float(details.get("mar_current")), face_signal_metrics.mar_current)
@@ -1583,22 +1720,26 @@ class LivenessPreviewFrameProcessor:
         details["preview_frame_active_score_standard"] = standard_frame_active_score
         details["preview_frame_active_score_mapping"] = "standard_sqrt"
         details["security_profile"] = PREVIEW_SECURITY_PROFILE
-        critical_visibility = self._critical_region_visibility_gate.evaluate(
-            frame_bgr=frame,
-            face_bounding_box=bounding_box,
-            preview_details=details,
-            blur_score=blur_score,
-        )
         details["preview_bbox_x"] = float(bounding_box[0])
         details["preview_bbox_y"] = float(bounding_box[1])
         details["preview_bbox_w"] = float(bounding_box[2])
         details["preview_bbox_h"] = float(bounding_box[3])
-        details["critical_occ"] = 1.0 if critical_visibility.is_critical_occluded else 0.0
-        details["critical_occ_score"] = critical_visibility.occlusion_score
-        details["critical_occ_regions"] = list(critical_visibility.occluded_regions)
-        details["critical_occ_reason"] = critical_visibility.reason
-        for region_name, score in critical_visibility.visibility_scores.items():
-            details[f"critical_vis_{region_name}"] = score
+        details.update(
+            self._face_usability_details(
+                face_usable=face_usability.usable,
+                face_usability_reason=face_usability.reason,
+                face_usability_state=face_usability.state,
+                face_usability_blocked=face_usability.blocked,
+                critical_occ=face_usability.occluded,
+                critical_occ_score=face_usability.occlusion_score,
+                critical_occ_regions=face_usability.occluded_regions,
+                critical_region_visibility=face_usability.visibility_scores,
+                liveness_skipped_due_to_face_usability=False,
+                preview_bbox=bounding_box,
+                critical_occ_streak=face_usability.occlusion_streak,
+                critical_clear_streak=face_usability.clear_streak,
+            )
+        )
         details["preview_detector_unstable"] = 0.0
         details["preview_last_face_seen_age"] = 0.0
         details["preview_no_face_grace_active"] = 0.0
@@ -1655,6 +1796,46 @@ class LivenessPreviewFrameProcessor:
             held_from_previous=False,
             inference_scale=inference_scale,
         )
+
+    @staticmethod
+    def _face_usability_details(
+        *,
+        face_usable: bool,
+        face_usability_reason: str,
+        face_usability_state: str,
+        face_usability_blocked: bool,
+        critical_occ: bool,
+        critical_occ_score: float,
+        critical_occ_regions: tuple[str, ...],
+        critical_region_visibility: dict[str, float],
+        liveness_skipped_due_to_face_usability: bool,
+        preview_bbox: Optional[tuple[int, int, int, int]],
+        critical_occ_streak: int = 0,
+        critical_clear_streak: int = 0,
+    ) -> dict[str, Any]:
+        details: dict[str, Any] = {
+            "face_usable": 1.0 if face_usable else 0.0,
+            "face_usability_reason": face_usability_reason,
+            "face_usability_state": face_usability_state,
+            "face_usability_blocked": 1.0 if face_usability_blocked else 0.0,
+            "critical_occ": 1.0 if critical_occ else 0.0,
+            "critical_occ_score": float(critical_occ_score),
+            "critical_occ_regions": list(critical_occ_regions),
+            "critical_occ_streak": float(critical_occ_streak),
+            "critical_clear_streak": float(critical_clear_streak),
+            "critical_occ_state": face_usability_state,
+            "critical_occ_reason": face_usability_reason,
+            "critical_region_visibility": dict(critical_region_visibility),
+            "liveness_skipped_due_to_face_usability": 1.0 if liveness_skipped_due_to_face_usability else 0.0,
+        }
+        for region_name in ("left_eye", "right_eye", "nose", "mouth", "lower_face"):
+            details[f"critical_vis_{region_name}"] = float(critical_region_visibility.get(region_name, 0.0))
+        if preview_bbox is not None:
+            details["preview_bbox_x"] = float(preview_bbox[0])
+            details["preview_bbox_y"] = float(preview_bbox[1])
+            details["preview_bbox_w"] = float(preview_bbox[2])
+            details["preview_bbox_h"] = float(preview_bbox[3])
+        return details
 
     def _compute_preview_frame_active_evidence(
         self,
@@ -1967,6 +2148,11 @@ class LiveLivenessPreview:
                     f"bbox={_format_bbox(frame_metrics)}",
                     f"bbox_reuse={int(frame_metrics.reused_face_detection)}",
                     f"face={int(frame_metrics.face_detected)}",
+                    f"face_usable={int(aggregate.face_usable)}",
+                    f"face_usability_reason={aggregate.face_usability_reason}",
+                    f"face_usability_state={aggregate.face_usability_state}",
+                    f"face_usability_blocked={int(aggregate.face_usability_blocked)}",
+                    f"liveness_skipped_due_to_face_usability={int(aggregate.liveness_skipped_due_to_face_usability)}",
                     f"face_quality={_format_optional(frame_metrics.face_quality)}",
                     f"face_size={_format_optional(frame_metrics.face_size_ratio)}",
                     f"brightness={frame_metrics.brightness:.1f}",
@@ -2089,6 +2275,9 @@ class LiveLivenessPreview:
                 ("Flash replay", str(int(aggregate.preview_flash_replay_support))),
             ] if _show_scores else []),
             ("Face", "YES" if frame_metrics.face_detected else "NO"),
+            ("Face usable", "YES" if aggregate.face_usable else "NO"),
+            ("Usability reason", aggregate.face_usability_reason),
+            ("Usability state", aggregate.face_usability_state),
             ("Window", f"{aggregate.window_seconds:0.1f}s / {aggregate.sample_count} samples"),
             ("FPS", f"{display_fps:0.1f} / inf {inference_fps:0.1f}"),
         ]
