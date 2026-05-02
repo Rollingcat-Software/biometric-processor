@@ -610,7 +610,7 @@ class Settings(BaseSettings):
         description="Default fusion weight for puzzle active evidence when a preview puzzle session is active.",
     )
     DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_MOIRE: float = Field(
-        default=0.28,
+        default=0.35,
         ge=0.0,
         le=1.0,
         description="Replay fusion weight for moire risk in the live liveness preview.",
@@ -622,22 +622,22 @@ class Settings(BaseSettings):
         description="Replay fusion weight for reflection risk in the live liveness preview.",
     )
     DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_FLICKER: float = Field(
-        default=0.14,
+        default=0.15,
         ge=0.0,
         le=1.0,
         description="Replay fusion weight for flicker risk in the live liveness preview.",
     )
     DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_FLASH: float = Field(
-        default=0.28,
+        default=0.30,
         ge=0.0,
         le=1.0,
         description="Replay fusion weight for flash replay risk in the live liveness preview.",
     )
     DEV_LIVENESS_PREVIEW_DEVICE_REPLAY_WEIGHT_SCREEN_FRAME: float = Field(
-        default=0.10,
+        default=0.0,
         ge=0.0,
         le=1.0,
-        description="Replay fusion weight for screen-frame boundary risk in the live liveness preview.",
+        description="Optional replay fusion weight for screen-frame risk in the live liveness preview.",
     )
     DEV_LIVENESS_PREVIEW_LOG_EVERY_N_FRAMES: int = Field(
         default=0,

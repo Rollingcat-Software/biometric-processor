@@ -1,0 +1,21 @@
+Snapshot: C:\Users\Aysenur\Documents\GitHub\FIVUCSAS\biometric-processor\.debug-snapshots\debug-window-20260502-094357
+Created: 2026-05-02T09:43:58.6631987+03:00
+
+git status --short
+ M app/core/config.py
+ M app/domain/entities/face_landmarks.py
+ M app/infrastructure/ml/landmarks/mediapipe_landmarks.py
+ M app/tools/live_liveness_preview.py
+ M tests/unit/infrastructure/test_live_liveness_preview.py
+?? .debug-snapshots/
+?? app/infrastructure/ml/liveness/critical_region_visibility_gate.py
+?? tests/unit/infrastructure/ml/
+
+Included files:
+app/core/config.py
+app/domain/entities/face_landmarks.py
+app/infrastructure/ml/landmarks/mediapipe_landmarks.py
+app/tools/live_liveness_preview.py
+tests/unit/infrastructure/test_live_liveness_preview.py
+app/infrastructure/ml/liveness/critical_region_visibility_gate.py
+tests/unit/infrastructure/ml (recursive)

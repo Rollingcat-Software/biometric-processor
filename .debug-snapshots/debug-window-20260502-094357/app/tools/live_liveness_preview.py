@@ -467,16 +467,6 @@ class TemporalLivenessAggregator:
             decision_confidence=window_confidence,
             no_face_consecutive_threshold=self._no_face_consecutive_threshold,
         )
-        # Apply critical-region visibility gate override to the authoritative decision.
-        # _resolve_decision_state only considers face_detected=False for NO_FACE; it
-        # doesn't know about pixel-level occlusion. When the gate detects persistent
-        # occlusion (e.g. hand over mouth/nose) it sets final_status_after_occ_gate to
-        # "NO_FACE" or "INSUFFICIENT_EVIDENCE". Only promote to a more restrictive state.
-        _OCC_RESTRICTIVENESS = {"NO_FACE": 0, "INSUFFICIENT_EVIDENCE": 1, "LOW_QUALITY": 2, "LIVE": 3, "SPOOF": 3}
-        occ_gate_status = str(temporal_signal_summary.get("final_status_after_occ_gate") or "")
-        if occ_gate_status and occ_gate_status != str(temporal_signal_summary.get("original_status_before_occ_gate") or ""):
-            if _OCC_RESTRICTIVENESS.get(occ_gate_status, 1) < _OCC_RESTRICTIVENESS.get(decision_state, 1):
-                decision_state = occ_gate_status
         self._update_debug_state(decision_state)
         aggregation_elapsed_ms = (time.perf_counter() - aggregation_started) * 1000.0
         aggregate_field_names = {item.name for item in fields(AggregatedMetrics)}
@@ -698,8 +688,8 @@ class TemporalLivenessAggregator:
             and flash_response_score <= 0.30
         )
         replay_penalty = 0.0
-        if not replay_veto and device_replay_risk >= 0.65:
-            replay_penalty = 0.45 * device_replay_risk
+        if not replay_veto and device_replay_risk >= 0.80:
+            replay_penalty = 0.30 * device_replay_risk
             if positive_flash_response:
                 replay_penalty *= 0.35
         adjusted_score = base_score * (1.0 - replay_penalty)
@@ -763,24 +753,7 @@ class TemporalLivenessAggregator:
             or recovery_after_low_quality
             or (low_quality and quality_reason == "face_too_small")
         )
-        flash_planar_risk = _maybe_float(metrics.details.get("planar_surface_risk")) or 0.0
-        # Use raw depth signals, not geometry_consistency. Cheek balance (part of geometry_consistency)
-        # is always high for any symmetric face — real or flat — so it doesn't discriminate.
-        # region_std and nose_cheek_delta directly measure 3D depth variation from the flash gradient.
-        flash_region_std = _maybe_float(metrics.details.get("flash_region_strength_std")) or 1.0
-        flash_nose_cheek = _maybe_float(metrics.details.get("flash_nose_cheek_delta")) or 1.0
-        # Paper/phone: region_std ≈ 0.03-0.07, nose_cheek ≈ 0.02-0.05 (uniform flat response).
-        # Real 3D face: region_std ≈ 0.12-0.18, nose_cheek ≈ 0.08-0.15 (nose protrudes, gets more flash).
-        flash_planar_spoof = bool(
-            flash_samples >= 1.0
-            and flash_planar_risk >= 0.72
-            and flash_region_std <= 0.10
-            and flash_nose_cheek <= 0.07
-        )
-        flash_replay_strong = bool(
-            (negative_flash_response and (reflect_compact >= 0.55 or flash_planar_risk >= 0.65))
-            or flash_planar_spoof
-        )
+        flash_replay_strong = bool(negative_flash_response and reflect_compact >= 0.65)
         motion_spoof = False
         spoof_gate = 0 if metrics.held_from_previous else int(_is_device_replay_spoof_detected(metrics))
         explicit_replay_evidence = bool(replay_veto or flash_replay_strong)
@@ -852,9 +825,7 @@ class TemporalLivenessAggregator:
             raw_decision = "LOW_QUALITY"
         elif replay_veto:
             raw_decision = "SPOOF"
-        elif negative_flash_response and (reflect_compact >= 0.55 or flash_planar_risk >= 0.65):
-            raw_decision = "SPOOF"
-        elif flash_planar_spoof:
+        elif negative_flash_response and reflect_compact >= 0.65:
             raw_decision = "SPOOF"
         elif puzzle_failed and strong_replay_for_puzzle_failure:
             raw_decision = "SPOOF"
@@ -2062,32 +2033,27 @@ class LiveLivenessPreview:
         flash_visible = bool(flash_state.get("enabled") and flash_state.get("visible"))
         status_color = _status_color(frame_metrics, aggregate)
         status_text = _status_text(frame_metrics, aggregate)
-        _show_scores = aggregate.decision_state != "NO_FACE"
-        lines: list[tuple[str, str]] = [
+        lines = [
             ("STATUS", status_text),
             ("Profile", PREVIEW_SECURITY_PROFILE),
-            *([
-                ("Frame score", f"{frame_metrics.raw_score:5.1f}"),
-                ("Smoothed", f"{aggregate.smoothed_score:5.1f}"),
-                ("Frame conf.", f"{frame_metrics.frame_confidence:0.2f}"),
-                ("Window conf.", f"{aggregate.window_confidence:0.2f}"),
-            ] if _show_scores else []),
+            ("Frame score", f"{frame_metrics.raw_score:5.1f}"),
+            ("Smoothed", f"{aggregate.smoothed_score:5.1f}"),
+            ("Frame conf.", f"{frame_metrics.frame_confidence:0.2f}"),
+            ("Window conf.", f"{aggregate.window_confidence:0.2f}"),
             ("Decision", aggregate.decision_state),
             ("Orig/Fnl", f"{aggregate.original_status_before_occ_gate} / {aggregate.final_status_after_occ_gate}"),
-            *([
-                ("Passive", f"{frame_metrics.passive_score:5.1f} / win {aggregate.passive_window_score:5.1f}"),
-                ("Frame active", f"{frame_metrics.active_score:5.1f}"),
-                ("BG active", f"{aggregate.background_active_score:5.1f}"),
-                ("Puzzle", f"{aggregate.puzzle_status} / {aggregate.puzzle_current_step}"),
-                ("Final active", f"{aggregate.final_active_score:5.1f}"),
-                ("Device replay", _format_optional(_device_spoof_value(frame_metrics, "device_replay_risk"))),
-                ("Replay veto", str(int(aggregate.replay_veto))),
-                ("Adjusted score", f"{aggregate.adjusted_score:5.1f}"),
-                ("Puzzle req.", str(int(aggregate.puzzle_required))),
-                ("Puzzle result", _format_optional(aggregate.puzzle_result)),
-                ("Flash live", str(int(aggregate.preview_flash_live_response))),
-                ("Flash replay", str(int(aggregate.preview_flash_replay_support))),
-            ] if _show_scores else []),
+            ("Passive", f"{frame_metrics.passive_score:5.1f} / win {aggregate.passive_window_score:5.1f}"),
+            ("Frame active", f"{frame_metrics.active_score:5.1f}"),
+            ("BG active", f"{aggregate.background_active_score:5.1f}"),
+            ("Puzzle", f"{aggregate.puzzle_status} / {aggregate.puzzle_current_step}"),
+            ("Final active", f"{aggregate.final_active_score:5.1f}"),
+            ("Device replay", _format_optional(_device_spoof_value(frame_metrics, "device_replay_risk"))),
+            ("Replay veto", str(int(aggregate.replay_veto))),
+            ("Adjusted score", f"{aggregate.adjusted_score:5.1f}"),
+            ("Puzzle req.", str(int(aggregate.puzzle_required))),
+            ("Puzzle result", _format_optional(aggregate.puzzle_result)),
+            ("Flash live", str(int(aggregate.preview_flash_live_response))),
+            ("Flash replay", str(int(aggregate.preview_flash_replay_support))),
             ("Face", "YES" if frame_metrics.face_detected else "NO"),
             ("Window", f"{aggregate.window_seconds:0.1f}s / {aggregate.sample_count} samples"),
             ("FPS", f"{display_fps:0.1f} / inf {inference_fps:0.1f}"),
@@ -2528,9 +2494,9 @@ def _is_device_replay_spoof_detected(frame_metrics: FrameMetrics) -> bool:
     )
     hard_flash_rule = (
         flash_samples >= 1.0
-        and flash_replay_risk >= 0.75
-        and flash_response_score <= 0.30
-        and device_replay_risk >= 0.50
+        and flash_replay_risk >= 0.78
+        and flash_response_score <= 0.22
+        and device_replay_risk >= 0.58
     )
     live_motion_override = _has_strong_live_override(frame_metrics)
     strong_spoof_corroboration = _has_strong_spoof_corroboration(frame_metrics)

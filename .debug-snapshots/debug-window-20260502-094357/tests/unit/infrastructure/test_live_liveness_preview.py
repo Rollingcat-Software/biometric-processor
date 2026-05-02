@@ -63,26 +63,6 @@ def _critical_visibility_details(frame: np.ndarray) -> dict[str, object]:
     return details
 
 
-def _force_occluded_critical_details() -> dict[str, object]:
-    """Return pre-set critical-region occlusion details with critical_occ=1.0.
-
-    Use this in aggregator unit tests that exercise the occlusion state machine
-    rather than the gate's pixel analysis (the synthetic test frame barely
-    misses the occlusion-score threshold, so the gate returns False).
-    """
-    return {
-        "critical_occ": 1.0,
-        "critical_occ_score": 0.68,
-        "critical_occ_regions": ["mouth", "lower_face", "nose"],
-        "critical_occ_reason": "critical_region_occluded",
-        "critical_vis_left_eye": 0.88,
-        "critical_vis_right_eye": 0.88,
-        "critical_vis_nose": 0.22,
-        "critical_vis_mouth": 0.05,
-        "critical_vis_lower_face": 0.12,
-    }
-
-
 def _device_spoof(
     *,
     moire_risk: float = 0.0,
@@ -1669,6 +1649,7 @@ def test_critical_region_occlusion_transitions_clear_to_temp_to_persistent_to_re
     assert result.original_status_before_occ_gate in {"LIVE", "INSUFFICIENT_EVIDENCE"}
     assert result.decision_state == result.final_status_after_occ_gate
 
+    occluded_frame = _preview_face_frame(occlude_lower_face=True)
     temp_result = None
     persistent_result = None
     for index in range(8):
@@ -1679,7 +1660,7 @@ def test_critical_region_occlusion_transitions_clear_to_temp_to_persistent_to_re
                     "timestamp": 1.8 + index * 0.1,
                     "details": {
                         **visible.details,
-                        **_force_occluded_critical_details(),
+                        **_critical_visibility_details(occluded_frame),
                     },
                 }
             )
@@ -1735,6 +1716,7 @@ def test_critical_region_occlusion_does_not_stop_liveness_score_computation():
         ema_alpha=0.3,
     )
 
+    occluded_frame = _preview_face_frame(occlude_lower_face=True)
     result = None
     for index in range(6):
         result = aggregator.add(
@@ -1743,7 +1725,7 @@ def test_critical_region_occlusion_does_not_stop_liveness_score_computation():
                     **_frame_metrics(raw_score=89.0, confidence=0.86, timestamp=1.0 + index * 0.1).__dict__,
                     "details": {
                         **_frame_metrics(raw_score=89.0, confidence=0.86, timestamp=1.0).__dict__["details"],
-                        **_force_occluded_critical_details(),
+                        **_critical_visibility_details(occluded_frame),
                         "smile": 48.0,
                     },
                 }

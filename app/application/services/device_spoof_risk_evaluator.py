@@ -89,11 +89,11 @@ class _FlashChallengeResult:
 class DeviceSpoofRiskEvaluator:
     """Estimate device replay risk without modifying core liveness scoring."""
 
-    DEVICE_REPLAY_MOIRE_WEIGHT = 0.35
+    DEVICE_REPLAY_MOIRE_WEIGHT = 0.28
     DEVICE_REPLAY_REFLECTION_WEIGHT = 0.20
-    DEVICE_REPLAY_FLICKER_WEIGHT = 0.15
-    DEVICE_REPLAY_FLASH_WEIGHT = 0.30
-    DEVICE_REPLAY_SCREEN_FRAME_WEIGHT = 0.0
+    DEVICE_REPLAY_FLICKER_WEIGHT = 0.14
+    DEVICE_REPLAY_FLASH_WEIGHT = 0.28
+    DEVICE_REPLAY_SCREEN_FRAME_WEIGHT = 0.10
 
     def __init__(
         self,

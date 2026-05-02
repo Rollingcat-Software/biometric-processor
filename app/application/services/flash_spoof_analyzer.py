@@ -316,16 +316,22 @@ class FlashSpoofAnalyzer:
             + 0.20 * _normalize(nose_cheek_delta, 0.04, 0.28)
             + 0.15 * _normalize(forehead_cheek_delta, 0.03, 0.24)
         )
+        # Low spatial variance in gray_delta = uniform illumination = flat surface.
+        # A 3D face produces uneven flash response (nose protrudes, cheeks recede).
+        gray_delta_spatial_std = float(np.std(gray_delta))
+        gray_delta_uniformity = 1.0 - _normalize(gray_delta_spatial_std, 1.5, 9.0)
         planar_surface_risk = _clamp01(
-            0.60 * (1.0 - _normalize(region_std, 0.03, 0.20))
-            + 0.25 * (1.0 - _normalize(max(nose_cheek_delta, forehead_cheek_delta), 0.03, 0.20))
-            + 0.15 * _normalize(float(np.std(gray_delta)), 1.0, 8.0) * 0.0
+            0.55 * (1.0 - _normalize(region_std, 0.03, 0.22))
+            + 0.30 * (1.0 - _normalize(max(nose_cheek_delta, forehead_cheek_delta), 0.03, 0.24))
+            + 0.15 * gray_delta_uniformity
         )
         return geometry_consistency, planar_surface_risk, {
             "flash_region_strength_std": region_std,
             "flash_cheek_balance": cheek_balance,
             "flash_nose_cheek_delta": nose_cheek_delta,
             "flash_forehead_cheek_delta": forehead_cheek_delta,
+            "flash_gray_delta_spatial_std": gray_delta_spatial_std,
+            "flash_gray_delta_uniformity": float(gray_delta_uniformity),
         }
 
     def _crop_relative(self, frame: np.ndarray, box: tuple[float, float, float, float]) -> np.ndarray:
