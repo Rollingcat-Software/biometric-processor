@@ -17,9 +17,24 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from app.domain.exceptions.liveness_errors import LivenessCheckError
 from app.infrastructure.ml.liveness.uniface_liveness_detector import (
     UniFaceLivenessDetector,
+    _get_shared_minifasnet,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_shared_minifasnet_cache():
+    """Clear the module-level MiniFASNet `lru_cache` between tests.
+
+    The cache is intentionally process-wide in production (Copilot
+    post-merge round 8 / PR #64), but tests stub different fake
+    `MiniFASNet` factories per case and need a fresh slate each time.
+    """
+    _get_shared_minifasnet.cache_clear()
+    yield
+    _get_shared_minifasnet.cache_clear()
 
 
 @pytest.mark.asyncio
@@ -92,3 +107,105 @@ async def test_ensure_model_loaded_returns_loaded_model_directly(monkeypatch):
     # Second call (fast path) must also return the same model.
     model2 = await detector._ensure_model_loaded()
     assert model2 is model
+
+
+# ---------------------------------------------------------------------------
+# warm_model_sync — Copilot post-merge round 8 (PR #64)
+# ---------------------------------------------------------------------------
+
+
+def test_warm_model_sync_loads_minifasnet_exactly_once(monkeypatch):
+    """warm_model_sync must instantiate MiniFASNet exactly once across both
+    multiple detector instances and repeat calls — the whole point of the
+    fix is that the warm-up persists into request-time detector instances."""
+    call_count = 0
+
+    def _fake_factory():
+        nonlocal call_count
+        call_count += 1
+        return MagicMock(name=f"MiniFASNet#{call_count}")
+
+    fake_spoofing = types.ModuleType("uniface.spoofing")
+    fake_spoofing.MiniFASNet = _fake_factory
+    monkeypatch.setitem(sys.modules, "uniface", types.ModuleType("uniface"))
+    monkeypatch.setitem(sys.modules, "uniface.spoofing", fake_spoofing)
+
+    # Detector A: warm at "startup" (analogue of initialize_dependencies).
+    warm_detector = UniFaceLivenessDetector()
+    warm_detector.warm_model_sync()
+    assert call_count == 1, "warm_model_sync should construct exactly one MiniFASNet"
+    assert warm_detector._model is not None
+
+    # Repeat call on the same instance is a no-op.
+    warm_detector.warm_model_sync()
+    assert call_count == 1, "second warm_model_sync on same instance must be a no-op"
+
+    # Detector B: a fresh instance — analogue of a request-time
+    # `get_liveness_detector()` after the warm-up. The shared lru_cache
+    # MUST hand back the same MiniFASNet, NOT instantiate another one.
+    request_detector = UniFaceLivenessDetector()
+    request_detector.warm_model_sync()
+    assert call_count == 1, (
+        "warm_model_sync on a second instance must reuse the shared MiniFASNet "
+        "(otherwise the bio-1 caching fix is broken)."
+    )
+    assert request_detector._model is warm_detector._model
+
+
+def test_warm_model_sync_surfaces_import_error_as_liveness_check_error(monkeypatch):
+    """If `uniface` is not installed, warm_model_sync must raise
+    LivenessCheckError with the original ImportError preserved as
+    `__cause__` so container.py can disambiguate missing-dependency
+    from real failures (Copilot post-merge round 8 / bio-2)."""
+    # Force `from uniface.spoofing import MiniFASNet` to raise ImportError
+    # by removing the fake modules from sys.modules and ensuring real
+    # import fails. We simulate a missing package via a sentinel module
+    # whose attribute access raises.
+    fake_spoofing = types.ModuleType("uniface.spoofing")
+
+    def _missing_attr(name):
+        raise ImportError(f"cannot import name {name!r} from 'uniface.spoofing' (test stub)")
+
+    fake_spoofing.__getattr__ = _missing_attr  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "uniface", types.ModuleType("uniface"))
+    monkeypatch.setitem(sys.modules, "uniface.spoofing", fake_spoofing)
+
+    detector = UniFaceLivenessDetector()
+    with pytest.raises(LivenessCheckError) as excinfo:
+        detector.warm_model_sync()
+
+    # The original ImportError must be reachable via __cause__ so the
+    # container.py warm-up code can log the operator-friendly message.
+    assert isinstance(excinfo.value.__cause__, ImportError)
+
+
+def test_warm_model_sync_primes_shared_cache_for_async_path(monkeypatch):
+    """After warm_model_sync(), a freshly constructed detector's
+    async `_ensure_model_loaded()` must skip MiniFASNet construction
+    and re-use the cached model — the end-to-end behaviour the warm-up
+    is meant to deliver."""
+    call_count = 0
+
+    def _fake_factory():
+        nonlocal call_count
+        call_count += 1
+        return MagicMock(name=f"MiniFASNet#{call_count}")
+
+    fake_spoofing = types.ModuleType("uniface.spoofing")
+    fake_spoofing.MiniFASNet = _fake_factory
+    monkeypatch.setitem(sys.modules, "uniface", types.ModuleType("uniface"))
+    monkeypatch.setitem(sys.modules, "uniface.spoofing", fake_spoofing)
+
+    # Warm at startup.
+    UniFaceLivenessDetector().warm_model_sync()
+    assert call_count == 1
+
+    # Simulate the request path: a fresh non-cached detector instance
+    # calls the async lazy-loader. The shared cache must short-circuit.
+    request_detector = UniFaceLivenessDetector()
+    loaded = asyncio.run(request_detector._ensure_model_loaded())
+    assert loaded is not None
+    assert call_count == 1, (
+        "request-time _ensure_model_loaded() must not pay the MiniFASNet "
+        "construction cost when warm_model_sync() ran at startup."
+    )

@@ -16,6 +16,7 @@ Follows the same ILivenessDetector protocol as other implementations
 
 import asyncio
 import logging
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Optional
 
 import cv2
@@ -32,6 +33,49 @@ if TYPE_CHECKING:
     from uniface.spoofing import MiniFASNet
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _get_shared_minifasnet() -> "MiniFASNet":
+    """Process-wide cached MiniFASNet ONNX session.
+
+    Copilot post-merge round 8 (PR #64): `get_liveness_detector()` is
+    intentionally NOT cached (the enhanced/hybrid detectors keep per-session
+    blink state which must not leak across requests). That meant the
+    startup warm-up loaded MiniFASNet onto a throw-away
+    `UniFaceLivenessDetector` and request handlers still constructed fresh
+    detectors paying the first-call ONNX session-init cost — the warm-up
+    was effectively dead code.
+
+    Caching the underlying MiniFASNet at module level (not the detector
+    instance) preserves blink-state isolation while ensuring the heavy
+    ONNX session is initialised exactly once per process. Every later
+    `UniFaceLivenessDetector` instance — including the inner detector
+    inside `HybridLivenessDetector` — picks up the same shared model.
+
+    Raises:
+        LivenessCheckError: If uniface is not installed or the model
+            fails to construct. The original `ImportError` is preserved
+            as `__cause__` so callers that need to disambiguate can walk
+            the cause chain.
+    """
+    try:
+        from uniface.spoofing import MiniFASNet
+        model = MiniFASNet()
+        logger.info("UniFace MiniFASNet model loaded (process-wide shared session)")
+        return model
+    except ImportError as e:
+        logger.error(f"uniface package not installed: {e}")
+        # Preserve the ImportError as __cause__ via `from e` so callers that
+        # need to disambiguate "missing dependency" from "model crashed"
+        # can walk `exc.__cause__`.
+        raise LivenessCheckError(
+            "uniface package is required for UniFace liveness detection. "
+            "Install it with: pip install 'uniface>=3.0.0'"
+        ) from e
+    except Exception as e:
+        logger.error(f"Failed to load MiniFASNet model: {e}", exc_info=True)
+        raise LivenessCheckError(f"Failed to initialize MiniFASNet: {e}") from e
 
 
 class UniFaceLivenessDetector(ILivenessDetector):
@@ -77,17 +121,17 @@ class UniFaceLivenessDetector(ILivenessDetector):
 
         Uses canonical double-checked locking: an unlocked fast-path read
         when the model is already loaded, then a lock-protected re-check
-        before construction so only one coroutine ever instantiates the
-        model.
+        before binding so only one coroutine ever populates ``self._model``.
 
         Returns the loaded model directly so callers don't have to deal
         with `Optional[MiniFASNet]` at the call site (Copilot post-merge
         finding on PR #59 — `.predict(...)` was failing mypy because
         `self._model` stayed typed `Optional` after the await).
 
-        This avoids importing uniface at module level, which allows
-        the application to start even if uniface is not installed
-        (graceful degradation).
+        The actual MiniFASNet construction lives in the module-level
+        `_get_shared_minifasnet()` `lru_cache`, so once any instance has
+        triggered the load every later instance picks up the same ONNX
+        session for free (Copilot post-merge round 8 / PR #64).
 
         Raises:
             LivenessCheckError: If uniface is not installed or model fails to load
@@ -102,54 +146,39 @@ class UniFaceLivenessDetector(ILivenessDetector):
             if self._model is not None:
                 return self._model
 
-            try:
-                from uniface.spoofing import MiniFASNet
-                self._model = MiniFASNet()
-                logger.info("UniFace MiniFASNet model loaded successfully")
-                return self._model
-            except ImportError as e:
-                logger.error(f"uniface package not installed: {e}")
-                # Version pin must match requirements.txt — keeping these
-                # in sync was a Copilot post-merge finding on PR #59.
-                raise LivenessCheckError(
-                    "uniface package is required for UniFace liveness detection. "
-                    "Install it with: pip install 'uniface>=3.0.0'"
-                )
-            except Exception as e:
-                logger.error(f"Failed to load MiniFASNet model: {e}", exc_info=True)
-                raise LivenessCheckError(f"Failed to initialize MiniFASNet: {e}")
+            # Resolve through the process-wide cache. Errors are already
+            # wrapped in LivenessCheckError by `_get_shared_minifasnet`.
+            self._model = _get_shared_minifasnet()
+            return self._model
 
     def warm_model_sync(self) -> None:
-        """Synchronously preload the MiniFASNet model on this detector instance.
+        """Synchronously preload the MiniFASNet model.
 
-        Intended for application startup (`initialize_dependencies`) before
-        the asyncio event loop is running. By loading the model directly onto
-        `self._model`, the same long-lived detector instance returned by
-        `get_liveness_detector()` skips the lazy-load on the first
-        `check_liveness()` call.
+        Intended for application startup (`initialize_dependencies`),
+        during startup before serving requests. Even though FastAPI's
+        ``lifespan`` is itself an `async` context, this hook is purely
+        synchronous: it forces the module-level
+        ``_get_shared_minifasnet()`` cache to populate so the heavy ONNX
+        session-init cost is paid by the operator, never by an end user
+        on the first `/verify` call after a deploy.
 
-        Copilot post-merge round 5 (PR #63): the previous warm-up created a
-        throw-away MiniFASNet, which only helped if `uniface` cached global
-        state — it did NOT prepopulate the per-instance `self._model`.
+        Copilot post-merge round 8 (PR #64): the previous implementation
+        wrote to a per-instance ``self._model``. Combined with
+        ``get_liveness_detector()`` being intentionally non-cached (so
+        per-session blink state in the enhanced/hybrid detectors stays
+        isolated), the warmed instance was thrown away and request
+        handlers still paid the first-call MiniFASNet load cost. Routing
+        through the module-level cache fixes that without re-introducing
+        cross-session blink-state leakage.
 
         Raises:
             LivenessCheckError: If uniface is not installed or model fails to load.
         """
-        if self._model is not None:
-            return
-        try:
-            from uniface.spoofing import MiniFASNet
-            self._model = MiniFASNet()
-            logger.info("UniFace MiniFASNet model pre-loaded (sync warm-up)")
-        except ImportError as e:
-            logger.error(f"uniface package not installed: {e}")
-            raise LivenessCheckError(
-                "uniface package is required for UniFace liveness detection. "
-                "Install it with: pip install 'uniface>=3.0.0'"
-            )
-        except Exception as e:
-            logger.error(f"Failed to pre-load MiniFASNet model: {e}", exc_info=True)
-            raise LivenessCheckError(f"Failed to initialize MiniFASNet: {e}")
+        # Bind the cached model to this instance too so the very first
+        # `check_liveness()` skips the lock + cache lookup.
+        if self._model is None:
+            self._model = _get_shared_minifasnet()
+        logger.info("UniFace MiniFASNet model pre-loaded (sync warm-up)")
 
     async def check_liveness(self, image: np.ndarray) -> LivenessResult:
         """Check if image shows a live person using MiniFASNet.

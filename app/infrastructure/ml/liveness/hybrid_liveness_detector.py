@@ -44,6 +44,18 @@ class HybridLivenessDetector(ILivenessDetector):
             liveness_threshold=liveness_threshold,
         )
 
+    def warm_model_sync(self) -> None:
+        """Forward sync warm-up to the inner UniFace detector.
+
+        Copilot post-merge round 8 (PR #64): with `LIVENESS_BACKEND=hybrid`
+        the warm-up hook in `initialize_dependencies()` previously fell
+        through the `getattr(..., "warm_model_sync", None)` branch and
+        logged "skipping explicit MiniFASNet pre-load", because
+        HybridLivenessDetector did not expose the hook. The inner
+        UniFace detector still owns the ONNX session, so we just forward.
+        """
+        self._uniface.warm_model_sync()
+
     async def check_liveness(self, image: np.ndarray) -> LivenessResult:
         enhanced_result = await self._enhanced.check_liveness(image)
         if enhanced_result.details.get("screen_replay_hard_veto"):
