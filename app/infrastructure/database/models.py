@@ -18,14 +18,16 @@ from typing import Any, Optional
 import enum
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
+    SmallInteger,
     String,
     Text,
-    BigInteger,
     func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
@@ -92,6 +94,10 @@ class FaceEmbeddingModel(Base):
     tenant_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
     user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     embedding: Mapped[list[float]] = mapped_column(ARRAY(Float), nullable=False)
+    # GDPR P1.3 — canonical ciphertext (Fernet) of the embedding vector.
+    # Nullable until backfill completes; will be promoted in a follow-up.
+    embedding_ciphertext: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    key_version: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")
     embedding_dimension: Mapped[int] = mapped_column(Integer, nullable=False, default=512)
     model_name: Mapped[str] = mapped_column(String(100), nullable=False, default="facenet")
     model_version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
