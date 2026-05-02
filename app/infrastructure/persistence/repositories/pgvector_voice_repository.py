@@ -14,10 +14,14 @@ import asyncpg
 import numpy as np
 
 from app.domain.exceptions.repository_errors import RepositoryError
+from app.infrastructure.security.embedding_cipher import EmbeddingCipher
 
 logger = logging.getLogger(__name__)
 
 VOICE_EMBEDDING_DIM = 256
+
+# GDPR P1.3 — see app/infrastructure/security/embedding_cipher.py for the
+# dual-column rationale (plaintext pgvector for ANN + ciphertext canonical store).
 
 
 class PgVectorVoiceRepository:
@@ -33,12 +37,15 @@ class PgVectorVoiceRepository:
         pool_min_size: int = 2,
         pool_max_size: int = 5,
         embedding_dimension: int = VOICE_EMBEDDING_DIM,
+        cipher: Optional[EmbeddingCipher] = None,
     ) -> None:
         self._database_url = database_url
         self._pool_min_size = pool_min_size
         self._pool_max_size = pool_max_size
         self._embedding_dimension = embedding_dimension
         self._pool: Optional[asyncpg.Pool] = None
+        self._cipher: EmbeddingCipher = cipher if cipher is not None else EmbeddingCipher.from_env()
+        self._key_version: int = 1
 
         logger.info(
             f"Initialized PgVectorVoiceRepository "
@@ -100,16 +107,19 @@ class PgVectorVoiceRepository:
         try:
             pool = await self._ensure_pool()
             embedding_list = embedding.tolist()
+            ciphertext = self._cipher.encrypt_vector(np.asarray(embedding, dtype=np.float32))
 
             async with pool.acquire() as conn:
-                # Insert individual enrollment
+                # Insert individual enrollment (with GDPR P1.3 ciphertext)
                 await conn.execute(
                     """
                     INSERT INTO voice_enrollments (
-                        user_id, tenant_id, embedding, quality_score, enrollment_type
-                    ) VALUES ($1::varchar, $2::varchar, $3, $4, 'INDIVIDUAL'::varchar)
+                        user_id, tenant_id, embedding, quality_score, enrollment_type,
+                        embedding_ciphertext, key_version
+                    ) VALUES ($1::varchar, $2::varchar, $3, $4, 'INDIVIDUAL'::varchar, $5, $6)
                     """,
                     user_id, tenant_id, embedding_list, quality_score,
+                    ciphertext, self._key_version,
                 )
 
                 # Check if centroid exists
@@ -123,39 +133,57 @@ class PgVectorVoiceRepository:
 
                 centroid_sql_avg = f"AVG(embedding)::vector({dim})"
 
-                if has_centroid == 0:
-                    # Create new centroid
-                    await conn.execute(
-                        f"""
-                        INSERT INTO voice_enrollments (user_id, tenant_id, embedding, quality_score, enrollment_type)
-                        SELECT $1::varchar, $2::varchar,
-                               {centroid_sql_avg},
-                               AVG(quality_score),
-                               'CENTROID'::varchar
-                        FROM voice_enrollments
-                        WHERE user_id = $1::varchar AND enrollment_type = 'INDIVIDUAL' AND deleted_at IS NULL
-                        """,
-                        user_id, tenant_id,
+                # Compute centroid in SQL, then re-read in Python to encrypt.
+                centroid_row = await conn.fetchrow(
+                    f"""
+                    SELECT {centroid_sql_avg} AS avg_emb,
+                           AVG(quality_score) AS avg_q
+                    FROM voice_enrollments
+                    WHERE user_id = $1::varchar
+                      AND enrollment_type = 'INDIVIDUAL'
+                      AND deleted_at IS NULL
+                    """,
+                    user_id,
+                )
+                if centroid_row and centroid_row["avg_emb"] is not None:
+                    centroid_vec = np.array(centroid_row["avg_emb"], dtype=np.float32)
+                    centroid_quality = (
+                        float(centroid_row["avg_q"])
+                        if centroid_row["avg_q"] is not None
+                        else 0.0
                     )
-                else:
-                    # Update existing centroid
-                    await conn.execute(
-                        f"""
-                        UPDATE voice_enrollments SET
-                            embedding = sub.avg_emb,
-                            quality_score = sub.avg_q,
-                            updated_at = CURRENT_TIMESTAMP
-                        FROM (
-                            SELECT {centroid_sql_avg} as avg_emb,
-                                   AVG(quality_score) as avg_q
-                            FROM voice_enrollments
-                            WHERE user_id = $1::varchar AND enrollment_type = 'INDIVIDUAL' AND deleted_at IS NULL
-                        ) sub
-                        WHERE voice_enrollments.user_id = $1::varchar
-                          AND voice_enrollments.enrollment_type = 'CENTROID'
-                        """,
-                        user_id,
-                    )
+                    centroid_ciphertext = self._cipher.encrypt_vector(centroid_vec)
+                    centroid_list = centroid_vec.tolist()
+
+                    if has_centroid == 0:
+                        # Create new centroid (plaintext + ciphertext in lockstep)
+                        await conn.execute(
+                            """
+                            INSERT INTO voice_enrollments (
+                                user_id, tenant_id, embedding, quality_score, enrollment_type,
+                                embedding_ciphertext, key_version
+                            )
+                            VALUES ($1::varchar, $2::varchar, $3, $4, 'CENTROID'::varchar, $5, $6)
+                            """,
+                            user_id, tenant_id, centroid_list, centroid_quality,
+                            centroid_ciphertext, self._key_version,
+                        )
+                    else:
+                        # Update existing centroid (plaintext + ciphertext in lockstep)
+                        await conn.execute(
+                            """
+                            UPDATE voice_enrollments SET
+                                embedding = $2,
+                                quality_score = $3,
+                                embedding_ciphertext = $4,
+                                key_version = $5,
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE user_id = $1::varchar
+                              AND enrollment_type = 'CENTROID'::varchar
+                            """,
+                            user_id, centroid_list, centroid_quality,
+                            centroid_ciphertext, self._key_version,
+                        )
 
                 count = await conn.fetchval(
                     """

@@ -1,12 +1,19 @@
 """Shared test fixtures and configuration."""
 
-import pytest
-import numpy as np
-from pathlib import Path
-from unittest.mock import Mock, AsyncMock
-from PIL import Image
-import tempfile
 import os
+import tempfile
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock
+
+import numpy as np
+import pytest
+from cryptography.fernet import Fernet
+from PIL import Image
+
+# GDPR P1.3 — repositories now require FIVUCSAS_EMBEDDING_KEY at construction.
+# Provide a stable per-test-run key so legacy tests that build the container
+# don't fail-fast at import time.
+os.environ.setdefault("FIVUCSAS_EMBEDDING_KEY", Fernet.generate_key().decode())
 
 from app.domain.entities.face_detection import FaceDetectionResult
 from app.domain.entities.quality_assessment import QualityAssessment

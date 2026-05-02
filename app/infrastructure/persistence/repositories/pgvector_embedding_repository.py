@@ -24,8 +24,17 @@ import asyncpg
 import numpy as np
 
 from app.domain.exceptions.repository_errors import RepositoryError
+from app.infrastructure.security.embedding_cipher import EmbeddingCipher
 
 logger = logging.getLogger(__name__)
+
+# Schema note (GDPR Art. 9 — P1.3):
+#   * ``embedding`` (pgvector) is the ANN search index — kept as plaintext
+#     because pgvector cosine search has no ciphertext-aware operator.
+#   * ``embedding_ciphertext`` (bytea) is the canonical store-of-record,
+#     written via Fernet authenticated encryption.
+#   * ``key_version`` (smallint, default 1) reserves room for per-tenant DEKs
+#     in a follow-up — the wire format does not change.
 
 
 class PgVectorEmbeddingRepository:
@@ -63,6 +72,7 @@ class PgVectorEmbeddingRepository:
         command_timeout: float = 30.0,
         max_queries: int = 50000,
         max_inactive_connection_lifetime: float = 300.0,
+        cipher: Optional[EmbeddingCipher] = None,
     ) -> None:
         """Initialize PostgreSQL pgvector repository with optimized connection pool.
 
@@ -92,6 +102,11 @@ class PgVectorEmbeddingRepository:
         self._max_queries = max_queries
         self._max_inactive_connection_lifetime = max_inactive_connection_lifetime
         self._pool: Optional[asyncpg.Pool] = None
+
+        # GDPR P1.3 — fail-fast at boot if FIVUCSAS_EMBEDDING_KEY is unset.
+        # Lazy-init only if not injected (test seams use the explicit injector).
+        self._cipher: EmbeddingCipher = cipher if cipher is not None else EmbeddingCipher.from_env()
+        self._key_version: int = 1
 
         logger.info(
             f"Initialized PgVectorEmbeddingRepository with optimized pool settings "
@@ -206,6 +221,11 @@ class PgVectorEmbeddingRepository:
             # Convert numpy array to list for PostgreSQL
             embedding_list = embedding.tolist()
 
+            # GDPR P1.3 — write the canonical ciphertext alongside the
+            # plaintext ANN index. Encryption happens before the row hits
+            # the wire so the DB never sees the raw vector outside `embedding`.
+            ciphertext = self._cipher.encrypt_vector(np.asarray(embedding, dtype=np.float32))
+
             # Normalize quality score to 0-1 range (database expects 0-1)
             normalized_quality = quality_score / 100.0 if quality_score > 1.0 else quality_score
 
@@ -214,10 +234,12 @@ class PgVectorEmbeddingRepository:
                 await conn.execute(
                     """
                     INSERT INTO face_embeddings (
-                        user_id, tenant_id, embedding, quality_score, enrollment_type
-                    ) VALUES ($1, $2, $3, $4, 'INDIVIDUAL')
+                        user_id, tenant_id, embedding, quality_score, enrollment_type,
+                        embedding_ciphertext, key_version
+                    ) VALUES ($1, $2, $3, $4, 'INDIVIDUAL', $5, $6)
                     """,
                     user_id, tenant_id, embedding_list, normalized_quality,
+                    ciphertext, self._key_version,
                 )
 
                 # Cap individual enrollments at 5 per user — delete oldest when exceeding
@@ -270,32 +292,47 @@ class PgVectorEmbeddingRepository:
                     WHERE user_id = $1 AND enrollment_type = 'INDIVIDUAL' AND deleted_at IS NULL
                 """
 
-                if has_centroid == 0:
-                    # Create centroid from quality-weighted individual embeddings
-                    await conn.execute(
-                        """
-                        INSERT INTO face_embeddings (user_id, tenant_id, embedding, quality_score, enrollment_type)
-                        SELECT $1, $2, sub.avg_emb, sub.avg_q, 'CENTROID'
-                        FROM (""" + centroid_sql + """) sub
-                        WHERE sub.avg_emb IS NOT NULL
-                        """,
-                        user_id, tenant_id,
-                    )
-                else:
-                    # Update existing centroid with quality-weighted average
-                    await conn.execute(
-                        """
-                        UPDATE face_embeddings SET
-                            embedding = sub.avg_emb,
-                            quality_score = sub.avg_q,
-                            updated_at = CURRENT_TIMESTAMP
-                        FROM (""" + centroid_sql + """) sub
-                        WHERE face_embeddings.user_id = $1
-                          AND face_embeddings.enrollment_type = 'CENTROID'
-                          AND sub.avg_emb IS NOT NULL
-                        """,
-                        user_id,
-                    )
+                # Compute centroid in SQL for parity with existing semantics,
+                # then re-read it in Python so we can encrypt it before persist.
+                centroid_row = await conn.fetchrow(
+                    centroid_sql,
+                    user_id,
+                )
+                if centroid_row and centroid_row["avg_emb"] is not None:
+                    centroid_vec = np.array(centroid_row["avg_emb"], dtype=np.float32)
+                    centroid_quality = float(centroid_row["avg_q"]) if centroid_row["avg_q"] is not None else 0.0
+                    centroid_ciphertext = self._cipher.encrypt_vector(centroid_vec)
+                    centroid_list = centroid_vec.tolist()
+
+                    if has_centroid == 0:
+                        # Create centroid (plaintext + ciphertext in lockstep)
+                        await conn.execute(
+                            """
+                            INSERT INTO face_embeddings (
+                                user_id, tenant_id, embedding, quality_score, enrollment_type,
+                                embedding_ciphertext, key_version
+                            )
+                            VALUES ($1, $2, $3, $4, 'CENTROID', $5, $6)
+                            """,
+                            user_id, tenant_id, centroid_list, centroid_quality,
+                            centroid_ciphertext, self._key_version,
+                        )
+                    else:
+                        # Update existing centroid (plaintext + ciphertext in lockstep)
+                        await conn.execute(
+                            """
+                            UPDATE face_embeddings SET
+                                embedding = $2,
+                                quality_score = $3,
+                                embedding_ciphertext = $4,
+                                key_version = $5,
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE user_id = $1
+                              AND enrollment_type = 'CENTROID'
+                            """,
+                            user_id, centroid_list, centroid_quality,
+                            centroid_ciphertext, self._key_version,
+                        )
 
                 # Get final count
                 count = await conn.fetchval(
@@ -726,14 +763,23 @@ class PgVectorEmbeddingRepository:
                         normalized_quality = (
                             quality_score / 100.0 if quality_score > 1.0 else quality_score
                         )
-                        records.append((user_id, tenant_id, embedding.tolist(), normalized_quality))
+                        ciphertext = self._cipher.encrypt_vector(
+                            np.asarray(embedding, dtype=np.float32)
+                        )
+                        records.append((
+                            user_id, tenant_id, embedding.tolist(), normalized_quality,
+                            ciphertext, self._key_version,
+                        ))
 
                     # Use copy_records_to_table for bulk insert
                     # This is much faster than individual inserts
                     await conn.executemany(
                         """
-                        INSERT INTO face_embeddings (user_id, tenant_id, embedding, quality_score, enrollment_type)
-                        VALUES ($1, $2, $3, $4, 'INDIVIDUAL')
+                        INSERT INTO face_embeddings (
+                            user_id, tenant_id, embedding, quality_score, enrollment_type,
+                            embedding_ciphertext, key_version
+                        )
+                        VALUES ($1, $2, $3, $4, 'INDIVIDUAL', $5, $6)
                         """,
                         records,
                     )
