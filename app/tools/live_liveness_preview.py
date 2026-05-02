@@ -220,12 +220,35 @@ class AggregatedMetrics:
     strong_spoof_evidence: bool
     unstable_non_spoof: bool
     decision_guard_reason: str
+<<<<<<< Updated upstream
     motion_spoof: bool
     flash_replay_strong: bool
     recovery_after_low_quality: bool
     recovery_frames_left: int
     spoof_streak_frozen: bool
     high_replay_risk_blocked: bool
+=======
+    strong_screen_signal: bool
+    effective_unstable: bool
+    screen_replay_confirmed: bool
+    screen_live_suppressed: bool
+    screen_replay_recovery_override: bool
+    screen_replay_confirm_reason: str
+    screen_replay_soft: bool
+    screen_replay_soft_votes: int
+    screen_replay_soft_recent_ratio: float
+    screen_replay_recent_valid_count: int
+    screen_replay_recent_soft_count: int
+    screen_replay_history_updated_before_decision: bool
+    screen_replay_recent_values: str
+    screen_replay_soft_off_streak: int
+    screen_replay_streak_decay_reason: str
+    fresh_detection_recent: bool
+    screen_replay_streak: int
+    screen_replay_streak_threshold: int
+    screen_replay_votes_detail: str
+    screen_replay_blocked_by_recovery: bool
+>>>>>>> Stashed changes
     suspicion_reasons: tuple[str, ...]
     unstable_signal: bool
     no_face_cooldown_active: bool
@@ -287,6 +310,13 @@ class TemporalLivenessAggregator:
         self._last_debug_decision_state: Optional[str] = None
         self._no_face_live_cooldown_frames = 0
         self._stable_live_hold_frames = 0
+<<<<<<< Updated upstream
+=======
+        self._screen_replay_soft_streak = 0
+        self._screen_replay_soft_history: deque[bool] = deque(maxlen=10)
+        self._screen_replay_soft_off_streak = 0
+        self._screen_replay_recent_weak_streak = 0
+>>>>>>> Stashed changes
         self._low_quality_recovery_frames = 0
 
     def add(self, metrics: FrameMetrics) -> AggregatedMetrics:
@@ -396,6 +426,9 @@ class TemporalLivenessAggregator:
         )
         temporal_signal_summary.update(strict_decision_layers)
         low_quality = _is_low_quality(metrics)
+        quality_reason = _quality_block_reason(metrics)
+        if quality_reason == "face_too_small":
+            self._low_quality_recovery_frames = max(self._low_quality_recovery_frames, 10)
         sufficient_evidence = _has_sufficient_evidence(
             recent_entries=effective_entries,
             temporal_signal_summary=temporal_signal_summary,
@@ -447,7 +480,11 @@ class TemporalLivenessAggregator:
         )
         debug_decision_summary = self._apply_debug_decision_layer(
             metrics=metrics,
+<<<<<<< Updated upstream
             recent_entries=recent_entries,
+=======
+            recent_entries=effective_entries,
+>>>>>>> Stashed changes
             temporal_signal_summary=temporal_signal_summary,
             smoothed_score=smoothed_score,
             sufficient_evidence=sufficient_evidence,
@@ -502,7 +539,7 @@ class TemporalLivenessAggregator:
         self._update_debug_state(decision_state)
         aggregation_elapsed_ms = (time.perf_counter() - aggregation_started) * 1000.0
         aggregate_field_names = {item.name for item in fields(AggregatedMetrics)}
-        return AggregatedMetrics(
+        aggregate = AggregatedMetrics(
             sample_count=len(effective_entries),
             window_seconds=self._window_seconds,
             decision_state=decision_state,
@@ -541,6 +578,9 @@ class TemporalLivenessAggregator:
                 if key in aggregate_field_names and key not in {"supported_score", "background_reaction_ms"}
             },
         )
+        if self._low_quality_recovery_frames > 0 and quality_reason != "face_too_small":
+            self._low_quality_recovery_frames -= 1
+        return aggregate
 
     @property
     def window_seconds(self) -> float:
@@ -577,6 +617,11 @@ class TemporalLivenessAggregator:
         self._last_debug_decision_state = None
         self._no_face_live_cooldown_frames = 0
         self._stable_live_hold_frames = 0
+        self._screen_replay_soft_streak = 0
+        self._screen_replay_soft_history.clear()
+        self._screen_replay_soft_off_streak = 0
+        self._screen_replay_recent_weak_streak = 0
+        self._low_quality_recovery_frames = 0
 
     def start_puzzle_session(self) -> Optional[PreviewPuzzleSummary]:
         """Start a preview puzzle session using the configured defaults."""
@@ -735,6 +780,7 @@ class TemporalLivenessAggregator:
         debug_active_score = float(temporal_signal_summary.get("final_active_score") or 0.0)
         live_active_ready = bool(debug_active_score > 60.0)
         reflect_compact = _maybe_float(metrics.details.get("reflection_compact_highlight_score")) or 0.0
+<<<<<<< Updated upstream
         motion_anomaly_score = float(temporal_signal_summary.get("motion_anomaly_score") or 0.0)
         signal_inconsistency_score = float(temporal_signal_summary.get("signal_inconsistency_score") or 0.0)
         quality_reason = _quality_block_reason(metrics)
@@ -776,10 +822,22 @@ class TemporalLivenessAggregator:
             self._low_quality_recovery_frames > 0 and quality_reason != "face_too_small"
         )
         spoof_streak_frozen = recovery_after_low_quality
+=======
+        screen_frame_risk = _device_spoof_value(metrics, "screen_frame_risk") or 0.0
+        moire_risk = _device_spoof_value(metrics, "moire_risk") or 0.0
+        flicker_risk = _device_spoof_value(metrics, "flicker_risk") or 0.0
+        flash_planar = _maybe_float(metrics.details.get("planar_surface_risk")) or 0.0
+        quality_reason = _quality_block_reason(metrics)
+        landmark_face_visible_raw = _maybe_float(metrics.details.get("landmark_face_visible"))
+        landmark_face_visible = bool(landmark_face_visible_raw) if landmark_face_visible_raw is not None else True
+        bbox_reuse = bool(metrics.reused_face_detection or metrics.held_from_previous)
+        detector_unstable = bbox_reuse or (not metrics.face_detected and landmark_face_visible)
+>>>>>>> Stashed changes
         no_face_cooldown_active = self._no_face_live_cooldown_frames > 0
         unstable_non_spoof = bool(
             detector_unstable
             or bool(temporal_signal_summary.get("unstable_signal"))
+<<<<<<< Updated upstream
             or not live_active_ready
             or recovery_after_low_quality
             or (low_quality and quality_reason == "face_too_small")
@@ -817,17 +875,155 @@ class TemporalLivenessAggregator:
             replay_veto
             or spoof_gate
             or flash_replay_strong
+=======
+            or (low_quality and quality_reason == "face_too_small")
+            or not landmark_face_visible
+        )
+        recovery_after_low_quality = bool(
+            self._low_quality_recovery_frames > 0 and quality_reason != "face_too_small"
+        )
+        screen_replay_blocked_by_recovery = bool(
+            recovery_after_low_quality or (low_quality and quality_reason == "face_too_small")
+        )
+        screen_vote_names: list[str] = []
+        if screen_frame_risk >= 0.30:
+            screen_vote_names.append("screen_frame")
+        if device_replay_risk >= 0.30:
+            screen_vote_names.append("device_replay")
+        if moire_risk >= 0.50:
+            screen_vote_names.append("moire")
+        if reflect_compact >= 0.60:
+            screen_vote_names.append("reflect_compact")
+        if flash_planar >= 0.70:
+            screen_vote_names.append("flash_planar")
+        if flicker_risk >= 0.25:
+            screen_vote_names.append("flicker")
+        screen_replay_soft_votes = len(screen_vote_names)
+        screen_replay_soft = screen_replay_soft_votes >= 3
+        screen_replay_streak_threshold = 8
+        streak_increment_blocked = bool(
+            screen_replay_blocked_by_recovery
+            or bbox_reuse
+            or detector_unstable
+            or not landmark_face_visible
+            or (low_quality and quality_reason == "face_too_small")
+        )
+        blur_adequacy = _maybe_float(temporal_signal_summary.get("blur_adequacy")) or 0.0
+        brightness_value = float(metrics.brightness or 0.0)
+        strong_screen_signal = bool(
+            moire_risk >= 0.55
+            or flicker_risk >= 0.70
+            or blur_adequacy <= 0.50
+            or brightness_value >= 195.0
+        )
+        effective_unstable = False if strong_screen_signal else unstable_non_spoof
+        effective_blocked = bool(streak_increment_blocked and not strong_screen_signal)
+        valid_screen_frame = bool(metrics.face_detected and landmark_face_visible)
+        stable_live_ratio = (
+            sum(1 for entry in recent_entries if entry.is_live) / max(len(recent_entries), 1)
+            if recent_entries
+            else 0.0
+        )
+        face_size_value = float(metrics.face_size_ratio or 0.0)
+        face_size_adequacy_value = _face_size_adequacy(metrics.face_size_ratio)
+        fresh_detection_recent = bool(
+            any(
+                entry.face_detected and not entry.reused_face_detection and not entry.held_from_previous
+                for entry in recent_entries[-3:]
+            )
+        )
+        screen_replay_streak_decay_reason = "-"
+        screen_replay_history_updated_before_decision = False
+        if valid_screen_frame:
+            self._screen_replay_soft_history.append(screen_replay_soft)
+            screen_replay_history_updated_before_decision = True
+            if screen_replay_soft:
+                self._screen_replay_soft_off_streak = 0
+            else:
+                self._screen_replay_soft_off_streak += 1
+        valid_history_count = len(self._screen_replay_soft_history)
+        soft_history_count = sum(1 for value in self._screen_replay_soft_history if value)
+        screen_replay_recent_values = "".join("1" if value else "0" for value in self._screen_replay_soft_history) or "-"
+        screen_replay_soft_recent_ratio = (
+            soft_history_count / max(valid_history_count, 1)
+            if valid_history_count > 0
+            else 0.0
+        )
+        if not metrics.face_detected and (consecutive_no_face_frames >= 3 or face_present_ratio <= 0.15):
+            self._screen_replay_soft_streak = 0
+            self._screen_replay_soft_history.clear()
+            self._screen_replay_soft_off_streak = 0
+            screen_replay_streak_decay_reason = "context_reset"
+        elif valid_screen_frame and not screen_replay_soft and self._screen_replay_soft_off_streak >= 8:
+            self._screen_replay_soft_streak = 0
+            screen_replay_streak_decay_reason = "soft_off_reset"
+        elif stable_live_ratio >= 1.0 and adjusted_score > 80.0 and not screen_replay_soft:
+            self._screen_replay_soft_streak = max(0, self._screen_replay_soft_streak - 3)
+            screen_replay_streak_decay_reason = "stable_live_aggressive"
+        elif screen_replay_soft and not effective_unstable and not effective_blocked:
+            self._screen_replay_soft_streak += 1
+        else:
+            self._screen_replay_soft_streak = max(0, self._screen_replay_soft_streak - 1)
+            if screen_replay_streak_decay_reason == "-":
+                screen_replay_streak_decay_reason = "default_decay"
+        screen_replay_streak = self._screen_replay_soft_streak
+        screen_replay_strong = screen_replay_streak >= screen_replay_streak_threshold
+        spoof_gate = int(_is_device_replay_spoof_detected(metrics))
+        screen_live_suppressed = False
+        screen_replay_recovery_override = False
+        screen_replay_confirm_reason = "-"
+        if screen_replay_blocked_by_recovery:
+            screen_replay_recovery_override = bool(
+                screen_replay_soft_votes >= 5
+                and screen_replay_soft_recent_ratio >= 0.90
+                and (
+                    flicker_risk >= 0.70
+                    or flash_planar >= 0.80
+                    or screen_frame_risk >= 0.40
+                )
+            )
+        screen_replay_confirm_candidate = bool(
+            screen_replay_soft
+            and screen_replay_streak >= screen_replay_streak_threshold
+            and screen_replay_soft_recent_ratio >= 0.80
+            and fresh_detection_recent
+            and not replay_veto
+            and spoof_gate == 0
+            and not screen_replay_blocked_by_recovery
+        )
+        if screen_replay_confirm_candidate:
+            screen_replay_confirm_reason = "recent_ratio_confirmed"
+        elif screen_replay_recovery_override:
+            screen_replay_confirm_candidate = True
+            screen_replay_confirm_reason = "recovery_override"
+        if valid_screen_frame and screen_replay_soft_recent_ratio < 0.50:
+            self._screen_replay_recent_weak_streak += 1
+        elif valid_screen_frame:
+            self._screen_replay_recent_weak_streak = 0
+        if not metrics.face_detected:
+            self._screen_replay_recent_weak_streak = 0
+        screen_replay_confirmed = bool(screen_replay_confirm_candidate)
+        spoof_reason_explicit = bool(
+            replay_veto
+            or _is_device_replay_spoof_detected(metrics)
+            or (negative_flash_response and reflect_compact >= 0.65)
+>>>>>>> Stashed changes
             or (puzzle_failed and strong_replay_for_puzzle_failure)
         )
         strong_spoof_evidence = bool(replay_veto)
         decision_guard_reason = "-"
+<<<<<<< Updated upstream
         high_replay_risk_blocked = False
+=======
+>>>>>>> Stashed changes
 
         suspicion_reasons: list[str] = []
         if replay_veto:
             suspicion_reasons.append("HIGH_REPLAY_RISK")
         elif device_replay_risk > 0.4:
             suspicion_reasons.append("HIGH_REPLAY_RISK")
+        if screen_replay_soft:
+            suspicion_reasons.append("SCREEN_REPLAY_SOFT")
         if negative_flash_response:
             suspicion_reasons.append("FLASH_REPLAY_RISK")
         elif positive_flash_response:
@@ -893,9 +1089,45 @@ class TemporalLivenessAggregator:
         else:
             raw_decision = "SPOOF"
 
+<<<<<<< Updated upstream
         if raw_decision == "LIVE" and no_face_cooldown_active:
+=======
+        if raw_decision == "LIKELY_LIVE" and no_face_cooldown_active:
+>>>>>>> Stashed changes
             raw_decision = "INSUFFICIENT_EVIDENCE"
             suspicion_reasons.append("POST_NO_FACE_COOLDOWN")
+        if (
+            raw_decision == "LIKELY_LIVE"
+            and strong_screen_signal
+            and screen_replay_soft
+            and screen_replay_soft_votes >= 3
+            and fresh_detection_recent
+            and metrics.face_detected
+        ):
+            raw_decision = "INSUFFICIENT_EVIDENCE"
+            decision_guard_reason = "screen_soft_live_suppressed"
+            screen_live_suppressed = True
+        elif (
+            raw_decision == "LIKELY_LIVE"
+            and strong_screen_signal
+            and valid_history_count >= 5
+            and screen_replay_soft_recent_ratio >= 0.50
+        ):
+            raw_decision = "INSUFFICIENT_EVIDENCE"
+            decision_guard_reason = "screen_suspicious_live_suppressed"
+            screen_live_suppressed = True
+        elif (
+            raw_decision == "LIKELY_LIVE"
+            and screen_replay_streak >= screen_replay_streak_threshold
+            and (
+                not screen_replay_soft
+                or valid_history_count < 5
+                or screen_replay_soft_recent_ratio < 0.60
+                or not fresh_detection_recent
+            )
+        ):
+            raw_decision = "INSUFFICIENT_EVIDENCE"
+            decision_guard_reason = "screen_replay_recent_weak"
 
         if (
             raw_decision == "SPOOF"
@@ -959,6 +1191,19 @@ class TemporalLivenessAggregator:
             raw_decision = "LIVE"
             stable_live_hold_active = True
             suspicion_reasons.append("LIVE_HOLD")
+        if (
+            raw_decision == "LIKELY_SPOOF"
+            and not spoof_reason_explicit
+            and not strong_spoof_evidence
+        ):
+            raw_decision = "INSUFFICIENT_EVIDENCE"
+            if decision_guard_reason == "-":
+                decision_guard_reason = "no_explicit_spoof_reason"
+        if screen_replay_confirmed:
+            suspicion_reasons.append("SCREEN_REPLAY_CONFIRMED")
+            raw_decision = "LIKELY_SPOOF"
+            if decision_guard_reason in {"-", "no_explicit_spoof_reason"}:
+                decision_guard_reason = screen_replay_confirm_reason
 
         return {
             "replay_veto": replay_veto,
@@ -972,12 +1217,35 @@ class TemporalLivenessAggregator:
             "strong_spoof_evidence": strong_spoof_evidence,
             "unstable_non_spoof": unstable_non_spoof,
             "decision_guard_reason": decision_guard_reason,
+<<<<<<< Updated upstream
             "motion_spoof": motion_spoof,
             "flash_replay_strong": flash_replay_strong,
             "recovery_after_low_quality": recovery_after_low_quality,
             "recovery_frames_left": self._low_quality_recovery_frames,
             "spoof_streak_frozen": spoof_streak_frozen,
             "high_replay_risk_blocked": high_replay_risk_blocked,
+=======
+            "strong_screen_signal": strong_screen_signal,
+            "effective_unstable": effective_unstable,
+            "screen_replay_confirmed": screen_replay_confirmed,
+            "screen_live_suppressed": screen_live_suppressed,
+            "screen_replay_recovery_override": screen_replay_recovery_override,
+            "screen_replay_confirm_reason": screen_replay_confirm_reason,
+            "screen_replay_soft": screen_replay_soft,
+            "screen_replay_soft_votes": screen_replay_soft_votes,
+            "screen_replay_soft_recent_ratio": screen_replay_soft_recent_ratio,
+            "screen_replay_recent_valid_count": valid_history_count,
+            "screen_replay_recent_soft_count": soft_history_count,
+            "screen_replay_history_updated_before_decision": screen_replay_history_updated_before_decision,
+            "screen_replay_recent_values": screen_replay_recent_values,
+            "screen_replay_soft_off_streak": self._screen_replay_soft_off_streak,
+            "screen_replay_streak_decay_reason": screen_replay_streak_decay_reason,
+            "fresh_detection_recent": fresh_detection_recent,
+            "screen_replay_streak": screen_replay_streak,
+            "screen_replay_streak_threshold": screen_replay_streak_threshold,
+            "screen_replay_votes_detail": ",".join(screen_vote_names) if screen_vote_names else "-",
+            "screen_replay_blocked_by_recovery": screen_replay_blocked_by_recovery,
+>>>>>>> Stashed changes
             "suspicion_reasons": tuple(dict.fromkeys(suspicion_reasons)),
             "unstable_signal": bool(temporal_signal_summary.get("unstable_signal")),
             "no_face_cooldown_active": no_face_cooldown_active,
@@ -1758,6 +2026,8 @@ class LivenessPreviewFrameProcessor:
             face_region_bgr=face_region,
             face_bounding_box=bounding_box,
             frame_timestamp=frame_timestamp,
+            flash_skin_regions=face_signal_metrics.flash_skin_regions,
+            bbox_reused=reused_face_detection,
         )
         details.update(device_spoof.to_dict())
         return FrameMetrics(
@@ -2089,12 +2359,35 @@ class LiveLivenessPreview:
                     f"strong_spoof_evidence={int(aggregate.strong_spoof_evidence)}",
                     f"unstable_non_spoof={int(aggregate.unstable_non_spoof)}",
                     f"decision_guard_reason={aggregate.decision_guard_reason}",
+<<<<<<< Updated upstream
                     f"motion_spoof={int(aggregate.motion_spoof)}",
                     f"flash_replay_strong={int(aggregate.flash_replay_strong)}",
                     f"recovery_after_low_quality={int(aggregate.recovery_after_low_quality)}",
                     f"recovery_frames_left={aggregate.recovery_frames_left}",
                     f"spoof_streak_frozen={int(aggregate.spoof_streak_frozen)}",
                     f"high_replay_risk_blocked={int(aggregate.high_replay_risk_blocked)}",
+=======
+                    f"strong_screen_signal={int(aggregate.strong_screen_signal)}",
+                    f"effective_unstable={int(aggregate.effective_unstable)}",
+                    f"screen_replay_confirmed={int(aggregate.screen_replay_confirmed)}",
+                    f"screen_live_suppressed={int(aggregate.screen_live_suppressed)}",
+                    f"screen_replay_recovery_override={int(aggregate.screen_replay_recovery_override)}",
+                    f"screen_replay_confirm_reason={aggregate.screen_replay_confirm_reason}",
+                    f"screen_replay_soft={int(aggregate.screen_replay_soft)}",
+                    f"screen_replay_soft_votes={aggregate.screen_replay_soft_votes}",
+                    f"screen_replay_soft_recent_ratio={aggregate.screen_replay_soft_recent_ratio:.2f}",
+                    f"screen_replay_recent_valid_count={aggregate.screen_replay_recent_valid_count}",
+                    f"screen_replay_recent_soft_count={aggregate.screen_replay_recent_soft_count}",
+                    f"screen_replay_history_updated_before_decision={int(aggregate.screen_replay_history_updated_before_decision)}",
+                    f"screen_replay_recent_values={aggregate.screen_replay_recent_values}",
+                    f"screen_replay_soft_off_streak={aggregate.screen_replay_soft_off_streak}",
+                    f"screen_replay_streak_decay_reason={aggregate.screen_replay_streak_decay_reason}",
+                    f"fresh_detection_recent={int(aggregate.fresh_detection_recent)}",
+                    f"screen_replay_streak={aggregate.screen_replay_streak}",
+                    f"screen_replay_streak_threshold={aggregate.screen_replay_streak_threshold}",
+                    f"screen_replay_votes_detail={aggregate.screen_replay_votes_detail}",
+                    f"screen_replay_blocked_by_recovery={int(aggregate.screen_replay_blocked_by_recovery)}",
+>>>>>>> Stashed changes
                     f"flash_match={_format_optional(_maybe_float(frame_metrics.details.get('flash_color_match_score')))}",
                     f"flash_skin_mask_coverage={_format_optional(_maybe_float(frame_metrics.details.get('flash_skin_mask_coverage')))}",
                     f"flash_channel_response={_format_optional(_maybe_float(frame_metrics.details.get('flash_channel_response')))}",
@@ -2104,6 +2397,7 @@ class LiveLivenessPreview:
                     f"flash_diffuse={_format_optional(_maybe_float(frame_metrics.details.get('diffuse_response_score')))}",
                     f"flash_geom={_format_optional(_maybe_float(frame_metrics.details.get('geometry_response_consistency')))}",
                     f"flash_planar={_format_optional(_maybe_float(frame_metrics.details.get('planar_surface_risk')))}",
+<<<<<<< Updated upstream
                     f"held_from_previous={int(frame_metrics.held_from_previous)}",
                     f"detector_unstable={int(bool(_maybe_float(frame_metrics.details.get('preview_detector_unstable')) or 0.0))}",
                     f"last_face_seen_age={_format_optional(_maybe_float(frame_metrics.details.get('preview_last_face_seen_age')))}",
@@ -2114,6 +2408,12 @@ class LiveLivenessPreview:
                     f"last_successful_bbox_available_before_detection={int(bool(_maybe_float(frame_metrics.details.get('preview_last_successful_bbox_available_before_detection')) or 0.0))}",
                     f"last_successful_bbox_available_after_detection={int(bool(_maybe_float(frame_metrics.details.get('preview_last_successful_bbox_available_after_detection')) or 0.0))}",
                     f"last_successful_bbox_cleared_reason={frame_metrics.details.get('preview_last_successful_bbox_cleared_reason') or '-'}",
+=======
+                    f"flash_skin_mask_coverage={_format_optional(_maybe_float(frame_metrics.details.get('flash_skin_mask_coverage')))}",
+                    f"flash_channel_response={_format_optional(_maybe_float(frame_metrics.details.get('flash_channel_response')))}",
+                    f"flash_baseline_frames={_format_optional(_maybe_float(frame_metrics.details.get('flash_baseline_frames')))}",
+                    f"flash_response_samples={_format_optional(_maybe_float(frame_metrics.details.get('flash_response_samples')))}",
+>>>>>>> Stashed changes
                     f"unstable_signal={int(aggregate.unstable_signal)}",
                     f"no_face_cooldown={int(aggregate.no_face_cooldown_active)}",
                     f"stable_live_hold={int(aggregate.stable_live_hold_active)}",

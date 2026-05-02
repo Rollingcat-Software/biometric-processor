@@ -35,6 +35,7 @@ class FaceSignalMetrics:
     cheek_depth_asymmetry: Optional[float]
     depth_flat_risk: Optional[float]
     landmark_model: Optional[str] = None
+    flash_skin_regions: Optional[dict[str, list[tuple[int, int]]]] = None
 
     def to_dict(self) -> dict[str, float | bool | str | None]:
         """Serialize to a flat calibration/debug payload."""
@@ -54,6 +55,7 @@ class FaceSignalMetrics:
             "cheek_depth_asymmetry": self.cheek_depth_asymmetry,
             "depth_flat_risk": self.depth_flat_risk,
             "landmark_model": self.landmark_model,
+            "flash_skin_regions": self.flash_skin_regions,
         }
 
 
@@ -86,6 +88,7 @@ def extract_face_signal_metrics(
             cheek_depth_asymmetry=None,
             depth_flat_risk=None,
             landmark_model=None,
+            flash_skin_regions=None,
         )
 
     try:
@@ -109,6 +112,7 @@ def extract_face_signal_metrics(
             cheek_depth_asymmetry=None,
             depth_flat_risk=None,
             landmark_model=None,
+            flash_skin_regions=None,
         )
     except Exception as exc:
         logger.debug("Unexpected landmark extraction failure: %s", exc)
@@ -128,6 +132,7 @@ def extract_face_signal_metrics(
             cheek_depth_asymmetry=None,
             depth_flat_risk=None,
             landmark_model=None,
+            flash_skin_regions=None,
         )
 
     ear_current = _compute_ear(landmark_result)
@@ -155,6 +160,7 @@ def extract_face_signal_metrics(
         cheek_depth_asymmetry=cheek_depth_asymmetry,
         depth_flat_risk=depth_flat_risk,
         landmark_model=landmark_result.model,
+        flash_skin_regions=_extract_flash_skin_regions(landmark_result),
     )
 
 
@@ -256,6 +262,32 @@ def _region_points(result: LandmarkResult, region_name: str) -> list[Landmark]:
 
 def _distance(a: Landmark, b: Landmark) -> float:
     return float(np.hypot(a.x - b.x, a.y - b.y))
+
+
+def _extract_flash_skin_regions(result: LandmarkResult) -> Optional[dict[str, list[tuple[int, int]]]]:
+    if "mediapipe" not in result.model:
+        return None
+
+    region_indices = {
+        "face_oval": result.regions.get("face_oval", []),
+        "left_eye": result.regions.get("left_eye", []),
+        "right_eye": result.regions.get("right_eye", []),
+        "mouth": result.regions.get("mouth", []),
+        "nose": result.regions.get("nose", []),
+        "left_eyebrow": result.regions.get("left_eyebrow", []),
+        "right_eyebrow": result.regions.get("right_eyebrow", []),
+    }
+    regions: dict[str, list[tuple[int, int]]] = {}
+    for name, indices in region_indices.items():
+        points: list[tuple[int, int]] = []
+        for index in indices:
+            if index >= len(result.landmarks):
+                continue
+            point = result.landmarks[index]
+            points.append((int(point.x), int(point.y)))
+        if len(points) >= 3:
+            regions[name] = points
+    return regions or None
 
 
 def _compute_depth_profile_metrics(

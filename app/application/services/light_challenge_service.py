@@ -54,6 +54,8 @@ class LightChallengeService:
         flash_timestamp: float,
         frame_timestamp: Optional[float],
         baseline_bgr: Optional[Sequence[float]] = None,
+        measurement_mask: Optional[np.ndarray] = None,
+        expected_max_response: float = 40.0,
     ) -> dict:
         verified_frame_timestamp = self._normalize_timestamp(frame_timestamp) or time.time()
         verified_flash_timestamp = self._normalize_timestamp(flash_timestamp) or time.time()
@@ -72,12 +74,15 @@ class LightChallengeService:
             frame=frame,
             expected_color=expected_color,
             baseline_bgr=baseline_bgr,
+            measurement_mask=measurement_mask,
+            expected_max_response=expected_max_response,
         )
 
         if color_shift >= self._min_color_shift:
             return {
                 "passed": True,
                 "color_shift": color_shift,
+                "channel_response": color_shift * max(float(expected_max_response), 1.0),
                 "delay_seconds": delay,
                 "face_mean_bgr": face_mean_bgr,
             }
@@ -86,6 +91,7 @@ class LightChallengeService:
             "passed": False,
             "reason": "no_color_response",
             "color_shift": color_shift,
+            "channel_response": color_shift * max(float(expected_max_response), 1.0),
             "delay_seconds": delay,
             "face_mean_bgr": face_mean_bgr,
         }
@@ -95,41 +101,23 @@ class LightChallengeService:
         frame: np.ndarray,
         expected_color: str,
         baseline_bgr: Optional[Sequence[float]] = None,
+        measurement_mask: Optional[np.ndarray] = None,
+        expected_max_response: float = 40.0,
     ) -> tuple[float, list[float]]:
         if frame.size == 0:
             return 0.0, [0.0, 0.0, 0.0]
 
-        face_mean = frame.mean(axis=(0, 1)).astype(float)
+        face_mean = self._masked_channel_mean(frame, measurement_mask)
+        max_response = max(float(expected_max_response), 1.0)
 
         if expected_color in self._COLOR_CHANNEL_INDEX:
             target_index = self._COLOR_CHANNEL_INDEX[expected_color]
-            other_indexes = [idx for idx in range(3) if idx != target_index]
-            target_value = face_mean[target_index]
-            other_value = float(np.mean(face_mean[other_indexes]))
-
             if baseline_bgr is not None and len(baseline_bgr) == 3:
                 baseline = np.asarray(baseline_bgr, dtype=float)
-                target_delta = max(0.0, target_value - baseline[target_index])
-                other_delta = max(0.0, other_value - float(np.mean(baseline[other_indexes])))
-                baseline_sum = float(np.sum(baseline) + 1e-6)
-                current_sum = float(np.sum(face_mean) + 1e-6)
-                baseline_target_chroma = float(baseline[target_index] / baseline_sum)
-                current_target_chroma = float(target_value / current_sum)
-                baseline_other_chroma = float(np.mean([baseline[idx] / baseline_sum for idx in other_indexes]))
-                current_other_chroma = float(np.mean([face_mean[idx] / current_sum for idx in other_indexes]))
-                chroma_gain = max(0.0, (current_target_chroma - baseline_target_chroma) - (current_other_chroma - baseline_other_chroma))
-                absolute_gain = max(0.0, (target_delta - other_delta) / 255.0)
-                dominance_gain = max(0.0, target_delta / max(target_delta + other_delta, 1e-6) - 0.45)
-                shift = max(
-                    0.0,
-                    0.45 * absolute_gain
-                    + 0.40 * min(1.0, chroma_gain / 0.08)
-                    + 0.15 * min(1.0, dominance_gain / 0.35),
-                )
+                channel_response = max(0.0, float(face_mean[target_index] - baseline[target_index]))
+                shift = max(0.0, min(1.0, channel_response / max_response))
             else:
-                raw_gain = max(0.0, (target_value - other_value) / 255.0)
-                dominance = max(0.0, target_value / max(target_value + other_value, 1e-6) - 0.45)
-                shift = max(0.0, 0.75 * raw_gain + 0.25 * min(1.0, dominance / 0.35))
+                shift = 0.0
             return float(shift), face_mean.tolist()
 
         brightness = float(np.mean(face_mean))
@@ -144,6 +132,21 @@ class LightChallengeService:
             brightness_shift = max(0.0, brightness_shift - (blue_penalty / 255.0))
 
         return brightness_shift, face_mean.tolist()
+
+    @staticmethod
+    def _masked_channel_mean(frame: np.ndarray, measurement_mask: Optional[np.ndarray]) -> np.ndarray:
+        if measurement_mask is None or measurement_mask.size == 0:
+            return frame.mean(axis=(0, 1)).astype(float)
+
+        if measurement_mask.ndim == 3:
+            mask = measurement_mask[:, :, 0] > 0
+        else:
+            mask = measurement_mask > 0
+
+        valid_pixels = frame[mask]
+        if valid_pixels.size == 0:
+            return frame.mean(axis=(0, 1)).astype(float)
+        return valid_pixels.reshape(-1, 3).mean(axis=0).astype(float)
 
     @staticmethod
     def _normalize_timestamp(timestamp: Optional[float]) -> Optional[float]:

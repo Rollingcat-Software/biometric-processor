@@ -61,6 +61,9 @@ class _FlashChallengeState:
     response_deadline: float
     baseline_bgr: list[float]
     baseline_frame_bgr: np.ndarray
+    baseline_frames: int = 1
+    last_mask_coverage: float = 0.0
+    last_channel_response: float = 0.0
     observed_shifts: list[float] = field(default_factory=list)
     passed_shifts: list[float] = field(default_factory=list)
     evaluated_samples: int = 0
@@ -112,6 +115,7 @@ class DeviceSpoofRiskEvaluator:
         self._enable_flash_replay = enable_flash_replay
         self._flash_interval_seconds = max(0.0, float(flash_interval_seconds))
         self._flash_history: deque[_FlashChallengeResult] = deque(maxlen=max(1, flash_history_size))
+        self._pre_flash_measurements: deque[dict[str, float | np.ndarray]] = deque(maxlen=5)
         self._flash_state: Optional[_FlashChallengeState] = None
         self._next_flash_at = 0.0
         self._last_flash_analysis_details: dict[str, float | str] = {}
@@ -141,6 +145,8 @@ class DeviceSpoofRiskEvaluator:
         face_region_bgr: Optional[np.ndarray] = None,
         face_bounding_box: Optional[tuple[int, int, int, int]] = None,
         frame_timestamp: Optional[float] = None,
+        flash_skin_regions: Optional[dict[str, list[tuple[int, int]]]] = None,
+        bbox_reused: bool = False,
     ) -> DeviceSpoofRiskAssessment:
         """Return normalized replay/device risk signals for the current frame."""
         timestamp = float(frame_timestamp or time.time())
@@ -175,6 +181,8 @@ class DeviceSpoofRiskEvaluator:
         flash_metrics, flash_details = self._compute_flash_response_metrics(
             face_region_bgr=face_region_bgr,
             frame_timestamp=timestamp,
+            flash_skin_regions=flash_skin_regions,
+            bbox_reused=bbox_reused,
         )
         flicker_risk = 0.0
         device_replay_risk = self._combine_risks(
@@ -460,6 +468,8 @@ class DeviceSpoofRiskEvaluator:
         *,
         face_region_bgr: Optional[np.ndarray],
         frame_timestamp: float,
+        flash_skin_regions: Optional[dict[str, list[tuple[int, int]]]] = None,
+        bbox_reused: bool = False,
     ) -> tuple[dict[str, float], dict[str, float | str]]:
         if not self._enable_flash_replay:
             self._update_flash_visual_state(frame_timestamp=frame_timestamp)
@@ -472,6 +482,12 @@ class DeviceSpoofRiskEvaluator:
             }
             details.update(self._flash_visual_details())
             return summary, details
+
+        current_measurement = self._measure_flash_skin_response(
+            face_region_bgr=face_region_bgr,
+            flash_skin_regions=flash_skin_regions,
+            bbox_reused=bbox_reused,
+        )
 
         if face_region_bgr is None or face_region_bgr.size == 0:
             if self._flash_state is not None and frame_timestamp > self._flash_state.response_deadline:
@@ -489,14 +505,27 @@ class DeviceSpoofRiskEvaluator:
             details.update(self._flash_visual_details())
             return summary, details
 
+        if self._flash_state is None and current_measurement is not None:
+            self._pre_flash_measurements.append(current_measurement)
+
         if self._flash_state is None and frame_timestamp >= self._next_flash_at:
-            self._start_flash_challenge(face_region_bgr=face_region_bgr, frame_timestamp=frame_timestamp)
+            self._start_flash_challenge(
+                face_region_bgr=face_region_bgr,
+                frame_timestamp=frame_timestamp,
+                current_measurement=current_measurement,
+            )
 
         if self._flash_state is not None:
             if frame_timestamp > self._flash_state.response_deadline:
                 self._finalize_flash_challenge(frame_timestamp)
+            elif frame_timestamp <= self._flash_state.visible_until:
+                pass
             else:
-                self._observe_flash_response(face_region_bgr=face_region_bgr, frame_timestamp=frame_timestamp)
+                self._observe_flash_response(
+                    face_region_bgr=face_region_bgr,
+                    frame_timestamp=frame_timestamp,
+                    current_measurement=current_measurement,
+                )
 
         self._update_flash_visual_state(frame_timestamp=frame_timestamp)
         summary = self._summarize_flash_history(include_current=True)
@@ -512,32 +541,74 @@ class DeviceSpoofRiskEvaluator:
         details.update(self._flash_visual_details())
         return summary, details
 
-    def _start_flash_challenge(self, *, face_region_bgr: np.ndarray, frame_timestamp: float) -> None:
+    def _start_flash_challenge(
+        self,
+        *,
+        face_region_bgr: np.ndarray,
+        frame_timestamp: float,
+        current_measurement: Optional[dict[str, float | np.ndarray]] = None,
+    ) -> None:
         challenge = self._light_challenge_service.generate_challenge()
         challenge["issued_at"] = frame_timestamp
         challenge["expires_at"] = frame_timestamp + (challenge["expected_response_window_ms"] / 1000.0)
+        baseline_measurements = list(self._pre_flash_measurements)[-5:]
+        baseline_bgr = (
+            np.mean([np.asarray(item["mean_bgr"], dtype=float) for item in baseline_measurements], axis=0).astype(float).tolist()
+            if baseline_measurements
+            else face_region_bgr.mean(axis=(0, 1)).astype(float).tolist()
+        )
+        resized_baseline_frames = []
+        target_height, target_width = face_region_bgr.shape[:2]
+        for item in baseline_measurements:
+            candidate = item.get("masked_frame_bgr")
+            if not isinstance(candidate, np.ndarray) or candidate.size == 0:
+                continue
+            if candidate.shape[:2] != (target_height, target_width):
+                candidate = cv2.resize(candidate, (target_width, target_height), interpolation=cv2.INTER_AREA)
+            resized_baseline_frames.append(np.asarray(candidate, dtype=np.float32))
+        baseline_frame_bgr = (
+            np.mean(resized_baseline_frames, axis=0).astype(np.uint8)
+            if resized_baseline_frames
+            else face_region_bgr.copy()
+        )
         self._flash_state = _FlashChallengeState(
             color=str(challenge["color"]),
             issued_at=frame_timestamp,
             visible_until=frame_timestamp + (challenge["duration_ms"] / 1000.0),
             response_deadline=frame_timestamp + (challenge["expected_response_window_ms"] / 1000.0),
-            baseline_bgr=face_region_bgr.mean(axis=(0, 1)).astype(float).tolist(),
-            baseline_frame_bgr=face_region_bgr.copy(),
+            baseline_bgr=baseline_bgr,
+            baseline_frame_bgr=baseline_frame_bgr,
+            baseline_frames=len(baseline_measurements) or 1,
         )
 
-    def _observe_flash_response(self, *, face_region_bgr: np.ndarray, frame_timestamp: float) -> None:
+    def _observe_flash_response(
+        self,
+        *,
+        face_region_bgr: np.ndarray,
+        frame_timestamp: float,
+        current_measurement: Optional[dict[str, float | np.ndarray]] = None,
+    ) -> None:
         if self._flash_state is None:
             return
+        measurement_mask = current_measurement.get("mask") if current_measurement is not None else None
+        reliability_scale = float(current_measurement.get("reliability_scale") or 1.0) if current_measurement is not None else 1.0
         verification = self._light_challenge_service.verify_response(
             frame=face_region_bgr,
             expected_color=self._flash_state.color,
             flash_timestamp=self._flash_state.issued_at,
             frame_timestamp=frame_timestamp,
             baseline_bgr=self._flash_state.baseline_bgr,
+            measurement_mask=measurement_mask,
         )
         face_mean_bgr = verification.get("face_mean_bgr")
         if isinstance(face_mean_bgr, list) and len(face_mean_bgr) == 3:
             self._flash_state.last_face_mean_bgr = [float(value) for value in face_mean_bgr]
+        self._flash_state.last_mask_coverage = float(
+            current_measurement.get("mask_coverage") if current_measurement is not None else 0.0
+        )
+        self._flash_state.last_channel_response = float(verification.get("channel_response") or 0.0) * max(
+            0.0, min(1.0, reliability_scale)
+        )
 
         delay_seconds = _maybe_float(verification.get("delay_seconds")) or 0.0
         min_delay_seconds = self._light_challenge_service._minimum_delay_ms / 1000.0
@@ -545,6 +616,7 @@ class DeviceSpoofRiskEvaluator:
             return
 
         color_shift = float(verification.get("color_shift") or 0.0)
+        color_shift *= max(0.0, min(1.0, reliability_scale))
         self._flash_state.evaluated_samples += 1
         self._flash_state.observed_shifts.append(color_shift)
         self._flash_state.peak_shift = max(self._flash_state.peak_shift, color_shift)
@@ -559,7 +631,7 @@ class DeviceSpoofRiskEvaluator:
         self._flash_state.analysis_frames_captured += 1
         self._flash_state.best_color_match_score = max(
             self._flash_state.best_color_match_score,
-            analysis.flash_color_match_score,
+            color_shift,
         )
         self._flash_state.best_specular_hotspot_risk = max(
             self._flash_state.best_specular_hotspot_risk,
@@ -578,6 +650,11 @@ class DeviceSpoofRiskEvaluator:
             analysis.planar_surface_risk,
         )
         self._flash_state.latest_analysis_details = dict(analysis.details)
+        self._flash_state.latest_analysis_details["flash_color_match_score"] = float(self._flash_state.best_color_match_score)
+        self._flash_state.latest_analysis_details["flash_skin_mask_coverage"] = float(self._flash_state.last_mask_coverage)
+        self._flash_state.latest_analysis_details["flash_channel_response"] = float(self._flash_state.last_channel_response)
+        self._flash_state.latest_analysis_details["flash_baseline_frames"] = float(self._flash_state.baseline_frames)
+        self._flash_state.latest_analysis_details["flash_response_samples"] = float(self._flash_state.evaluated_samples)
 
     def _finalize_flash_challenge(self, frame_timestamp: Optional[float] = None) -> None:
         if self._flash_state is None:
@@ -592,6 +669,10 @@ class DeviceSpoofRiskEvaluator:
         self._last_flash_analysis_details["planar_surface_risk"] = float(self._flash_state.best_planar_surface_risk)
         self._last_flash_analysis_details["pre_flash_captured"] = 1.0
         self._last_flash_analysis_details["flash_frame_captured"] = float(self._flash_state.analysis_frames_captured > 0)
+        self._last_flash_analysis_details["flash_skin_mask_coverage"] = float(self._flash_state.last_mask_coverage)
+        self._last_flash_analysis_details["flash_channel_response"] = float(self._flash_state.last_channel_response)
+        self._last_flash_analysis_details["flash_baseline_frames"] = float(self._flash_state.baseline_frames)
+        self._last_flash_analysis_details["flash_response_samples"] = float(self._flash_state.evaluated_samples)
         self._flash_history.append(self._summarize_flash_state(self._flash_state))
         self._flash_state = None
         self._next_flash_at = float(frame_timestamp or time.time()) + self._flash_interval_seconds
@@ -615,17 +696,15 @@ class DeviceSpoofRiskEvaluator:
         }
 
     def _summarize_flash_state(self, state: _FlashChallengeState) -> _FlashChallengeResult:
-        strength = _normalize(
-            state.peak_shift,
-            self._light_challenge_service._min_color_shift,
-            max(self._light_challenge_service._min_color_shift + 0.10, 0.18),
-        )
+        flash_match = _clamp01(state.peak_shift)
+        strength = flash_match
         strength = max(
             strength,
             _clamp01(
-                0.45 * state.best_color_match_score
+                0.55 * flash_match
+                + 0.20 * state.best_color_match_score
                 + 0.30 * state.best_diffuse_response_score
-                + 0.25 * state.best_geometry_response_consistency
+                + 0.15 * state.best_geometry_response_consistency
             ),
         )
         pass_ratio = state.passed_samples / max(state.evaluated_samples, 1)
@@ -645,23 +724,17 @@ class DeviceSpoofRiskEvaluator:
                 + 0.15 * state.best_geometry_response_consistency
             )
         response_score = _clamp01(
-            0.30 * strength
-            + 0.20 * consistency
-            + 0.15 * pass_ratio
-            + 0.15 * state.best_color_match_score
-            + 0.12 * state.best_diffuse_response_score
-            + 0.08 * state.best_geometry_response_consistency
+            0.75 * _normalize(flash_match, 0.05, 0.35)
+            + 0.15 * consistency
+            + 0.10 * pass_ratio
         )
         replay_risk = _clamp01(
-            1.0
-            - (
-                0.38 * response_score
-                + 0.18 * state.best_color_match_score
-                + 0.14 * state.best_diffuse_response_score
-                + 0.10 * state.best_geometry_response_consistency
+            max(0.0, (0.10 - flash_match) / 0.10)
+            * (
+                0.45
+                + 0.25 * state.best_specular_hotspot_risk
+                + 0.30 * state.best_planar_surface_risk
             )
-            + 0.12 * state.best_specular_hotspot_risk
-            + 0.08 * state.best_planar_surface_risk
         )
         return _FlashChallengeResult(
             response_score=response_score,
@@ -709,6 +782,10 @@ class DeviceSpoofRiskEvaluator:
             "flash_timestamp": float(state.issued_at) if state is not None else 0.0,
             "pre_flash_captured": float(state is not None and state.baseline_frame_bgr.size > 0),
             "flash_frame_captured": float(state.analysis_frames_captured > 0) if state is not None else 0.0,
+            "flash_skin_mask_coverage": float(state.last_mask_coverage) if state is not None else 0.0,
+            "flash_channel_response": float(state.last_channel_response) if state is not None else 0.0,
+            "flash_baseline_frames": float(state.baseline_frames) if state is not None else 0.0,
+            "flash_response_samples": float(state.evaluated_samples) if state is not None else 0.0,
         }
         persisted_analysis = (
             state.latest_analysis_details
@@ -725,6 +802,85 @@ class DeviceSpoofRiskEvaluator:
             details["geometry_response_consistency"] = float(state.best_geometry_response_consistency)
             details["planar_surface_risk"] = float(state.best_planar_surface_risk)
         return details
+
+    def _measure_flash_skin_response(
+        self,
+        *,
+        face_region_bgr: Optional[np.ndarray],
+        flash_skin_regions: Optional[dict[str, list[tuple[int, int]]]],
+        bbox_reused: bool = False,
+    ) -> Optional[dict[str, float | np.ndarray]]:
+        if face_region_bgr is None or face_region_bgr.size == 0:
+            return None
+        mask = self._build_flash_skin_mask(face_region_bgr, flash_skin_regions)
+        mean_bgr = self._masked_mean_bgr(face_region_bgr, mask)
+        mask_coverage = float(np.mean(mask > 0)) if mask is not None and mask.size else 0.0
+        return {
+            "mean_bgr": mean_bgr,
+            "mask": mask,
+            "mask_coverage": mask_coverage,
+            "masked_frame_bgr": cv2.bitwise_and(face_region_bgr, face_region_bgr, mask=mask),
+            "reliability_scale": 0.5 if bbox_reused else 1.0,
+        }
+
+    def _build_flash_skin_mask(
+        self,
+        face_region_bgr: np.ndarray,
+        flash_skin_regions: Optional[dict[str, list[tuple[int, int]]]],
+    ) -> np.ndarray:
+        height, width = face_region_bgr.shape[:2]
+        mask = np.zeros((height, width), dtype=np.uint8)
+        if flash_skin_regions:
+            face_oval = flash_skin_regions.get("face_oval") or []
+            if len(face_oval) >= 3:
+                face_polygon = np.asarray(face_oval, dtype=np.int32).reshape((-1, 1, 2))
+                cv2.fillPoly(mask, [face_polygon], 255)
+            for feature_name in ("left_eye", "right_eye", "mouth"):
+                points = flash_skin_regions.get(feature_name) or []
+                if len(points) < 3:
+                    continue
+                polygon = np.asarray(points, dtype=np.int32).reshape((-1, 1, 2))
+                cv2.fillPoly(mask, [polygon], 0)
+        if not np.any(mask):
+            mask = self._central_elliptic_face_mask(height, width)
+        gray = cv2.cvtColor(face_region_bgr, cv2.COLOR_BGR2GRAY)
+        intensity_mask = ((gray >= 40) & (gray <= 220)).astype(np.uint8) * 255
+        mask = cv2.bitwise_and(mask, intensity_mask)
+        kernel = np.ones((5, 5), dtype=np.uint8)
+        mask = cv2.dilate(mask, kernel, iterations=2)
+        mask_coverage = float(np.mean(mask > 0)) if mask.size else 0.0
+        if not np.any(mask) or mask_coverage < 0.08:
+            fallback_mask = cv2.bitwise_and(self._central_elliptic_face_mask(height, width), intensity_mask)
+            if np.any(fallback_mask):
+                mask = cv2.dilate(fallback_mask, kernel, iterations=2)
+            elif np.any(intensity_mask):
+                mask = intensity_mask
+            else:
+                mask = np.full((height, width), 255, dtype=np.uint8)
+        return mask
+
+    @staticmethod
+    def _central_elliptic_face_mask(height: int, width: int) -> np.ndarray:
+        mask = np.zeros((height, width), dtype=np.uint8)
+        center = (width // 2, int(height * 0.52))
+        axes = (max(1, int(width * 0.34)), max(1, int(height * 0.42)))
+        cv2.ellipse(mask, center, axes, 0, 0, 360, 255, -1)
+        eye_y = int(height * 0.38)
+        eye_axes = (max(1, int(width * 0.10)), max(1, int(height * 0.06)))
+        mouth_center = (width // 2, int(height * 0.72))
+        mouth_axes = (max(1, int(width * 0.14)), max(1, int(height * 0.08)))
+        cv2.ellipse(mask, (int(width * 0.34), eye_y), eye_axes, 0, 0, 360, 0, -1)
+        cv2.ellipse(mask, (int(width * 0.66), eye_y), eye_axes, 0, 0, 360, 0, -1)
+        cv2.ellipse(mask, mouth_center, mouth_axes, 0, 0, 360, 0, -1)
+        return mask
+
+    @staticmethod
+    def _masked_mean_bgr(face_region_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        valid_pixels = face_region_bgr[mask > 0]
+        if valid_pixels.size == 0:
+            return face_region_bgr.mean(axis=(0, 1)).astype(float)
+        return valid_pixels.reshape(-1, 3).mean(axis=0).astype(float)
+
     @staticmethod
     def _combine_risks(
         *,
