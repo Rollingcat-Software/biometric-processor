@@ -229,16 +229,6 @@ class TestDataCollector:
                 (200, 200, 200),
                 1,
             )
-            cv2.putText(
-                display_frame,
-                f"Last key: {last_key_code}",
-                (10, display_frame.shape[0] - 35),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                (180, 180, 180),
-                1,
-            )
-
             if status_ttl > 0 and status_message:
                 cv2.putText(
                     display_frame,
