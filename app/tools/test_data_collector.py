@@ -24,9 +24,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from collections import deque
 from datetime import datetime
 from pathlib import Path
+from queue import Queue
 from typing import Optional
 
 import cv2
@@ -90,8 +92,28 @@ class TestDataCollector:
         self.frame_count = {"live": 0, "spoof": 0}
         self.confidence_history = deque(maxlen=_CONFIDENCE_WINDOW_SIZE)
 
-    async def collect_from_camera(self):
-        """Interactive camera capture loop."""
+    def _detector_worker(self, frame_queue: Queue, result_queue: Queue):
+        """Background thread: detect faces from frame queue."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        while True:
+            frame_data = frame_queue.get()
+            if frame_data is None:  # Sentinel to exit
+                break
+
+            frame_number, frame = frame_data
+            try:
+                detection = loop.run_until_complete(self.detector.detect(frame))
+                result_queue.put((frame_number, detection))
+            except FaceNotDetectedError:
+                result_queue.put((frame_number, None))
+            except Exception as e:
+                logger.error(f"Detection error: {e}")
+                result_queue.put((frame_number, None))
+
+    def collect_from_camera(self):
+        """Interactive camera capture loop (synchronous)."""
         cap = cv2.VideoCapture(0)
         if not cap.isOpened():
             print("❌ Camera not available")
@@ -119,7 +141,19 @@ class TestDataCollector:
         captured_frame = None
         frame_number = 0
         last_detection = None
-        detection_frame_skip = 0  # Only detect every 3rd frame to avoid blocking
+
+        # Start detector worker thread
+        frame_queue = Queue(maxsize=2)
+        result_queue = Queue()
+        detector_thread = threading.Thread(
+            target=self._detector_worker,
+            args=(frame_queue, result_queue),
+            daemon=True,
+        )
+        detector_thread.start()
+
+        # Process results from detector
+        pending_results = {}
 
         while True:
             ret, frame = cap.read()
@@ -129,26 +163,29 @@ class TestDataCollector:
             frame_number += 1
             detection_ok = False
 
-            # Try to detect face every 3rd frame (to avoid blocking event loop)
-            if frame_number % 3 == 0:
-                try:
-                    detection = await self.detector.detect(frame)
+            # Send frame to detector thread (non-blocking)
+            try:
+                frame_queue.put_nowait((frame_number, frame.copy()))
+            except Exception:
+                pass  # Queue full, skip this frame
+
+            # Check for detection results (non-blocking)
+            try:
+                result_frame_num, detection = result_queue.get_nowait()
+                if detection:
                     self.confidence_history.append(detection.confidence)
                     last_detection = detection
-                    avg_confidence = np.mean(list(self.confidence_history)) if self.confidence_history else 0
-                    detection_ok = avg_confidence >= _MIN_CONFIDENCE_FOR_DETECTION
-                except FaceNotDetectedError:
-                    # Use historical average if available
-                    if self.confidence_history and np.mean(list(self.confidence_history)) >= _MIN_CONFIDENCE_FOR_DETECTION:
-                        # Face was detected recently - likely temporary glitch
-                        detection_ok = True
-                    else:
-                        detection_ok = False
-                        last_detection = None
-            else:
-                # Use last detection result for smooth display
-                if last_detection:
-                    detection_ok = np.mean(list(self.confidence_history)) >= _MIN_CONFIDENCE_FOR_DETECTION if self.confidence_history else False
+                    pending_results[result_frame_num] = True
+                else:
+                    pending_results[result_frame_num] = False
+            except Exception:
+                pass  # No results yet
+
+            # Use latest available result
+            if pending_results:
+                detection_ok = any(pending_results.values())
+            elif last_detection and self.confidence_history:
+                detection_ok = np.mean(list(self.confidence_history)) >= _MIN_CONFIDENCE_FOR_DETECTION
 
             # Show captured frame highlight
             display_frame = frame.copy()
@@ -215,17 +252,21 @@ class TestDataCollector:
 
             # 1 - Label as LIVE
             elif key == ord("1") and captured_frame is not None:
-                await self._save_frame(captured_frame, label="live")
+                asyncio.run(self._save_frame(captured_frame, label="live"))
                 captured_frame = None
 
             # 2 - Label as SPOOF
             elif key == ord("2") and captured_frame is not None:
-                await self._save_frame(captured_frame, label="spoof")
+                asyncio.run(self._save_frame(captured_frame, label="spoof"))
                 captured_frame = None
 
             # Q - Quit
             elif key == ord("q"):
                 break
+
+        # Stop detector thread
+        frame_queue.put(None)
+        detector_thread.join(timeout=2)
 
         cap.release()
         cv2.destroyAllWindows()
@@ -318,11 +359,11 @@ class TestDataCollector:
         print("=" * 60 + "\n")
 
 
-async def main():
+def main():
     """Run the collector."""
     collector = TestDataCollector()
-    await collector.collect_from_camera()
+    collector.collect_from_camera()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
