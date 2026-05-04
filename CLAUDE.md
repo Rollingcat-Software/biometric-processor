@@ -14,6 +14,14 @@ pip install -r requirements.txt
 python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
+## Migrations (Alembic)
+
+Alembic is included in `requirements.txt` and `Dockerfile.gpu` since PR #68
+(2026-05-02 morning) — `alembic upgrade head` runs inside the runtime
+container. The earlier manual-SQL workaround for embedding-ciphertext
+backfill (Task #81) is obsolete; `backfill_embedding_ciphertext.py` was
+also repaired in the same PR.
+
 Runs on port 8001. API docs at `/docs`. Demo UI served at root `/` (disabled in production).
 
 ## Security (Production)
