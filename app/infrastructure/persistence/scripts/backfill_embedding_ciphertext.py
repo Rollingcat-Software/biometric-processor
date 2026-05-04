@@ -24,7 +24,7 @@ import asyncio
 import logging
 import os
 import sys
-from typing import Iterable, Tuple
+from typing import Tuple
 
 import asyncpg
 import numpy as np
@@ -55,6 +55,19 @@ async def _setup_connection(conn: asyncpg.Connection) -> None:
     await register_vector(conn)
 
 
+def _coerce_embedding(raw) -> np.ndarray:
+    """Normalize a pgvector column value into a float32 numpy array.
+
+    pgvector returns the column as a Python string (e.g. ``'[0,0.024,0.149,...]'``)
+    when the connection isn't registered with ``pgvector.asyncpg.register_vector``,
+    and as a list/sequence when it is. Handle both — the registration call has
+    historically been fragile across asyncpg/pgvector versions.
+    """
+    if isinstance(raw, str):
+        raw = [float(x) for x in raw.strip("[]").split(",") if x]
+    return np.array(raw, dtype=np.float32)
+
+
 async def _backfill_table(
     conn: asyncpg.Connection, table: str, cipher: EmbeddingCipher, key_version: int
 ) -> Tuple[int, int]:
@@ -62,44 +75,47 @@ async def _backfill_table(
     scanned = 0
     updated = 0
 
-    # Stream rows with a server-side cursor to keep memory bounded for large
-    # datasets. asyncpg cursors require a transaction.
-    async with conn.transaction():
-        cursor: Iterable = await conn.cursor(
-            f"""
-            SELECT id, embedding
-            FROM {table}
-            WHERE embedding_ciphertext IS NULL
-              AND embedding IS NOT NULL
-            ORDER BY id
-            """
-        )
+    # NOTE: previous implementation used ``async for row in await conn.cursor(...)``
+    # which raises ``TypeError: 'async for' requires an object with __aiter__``
+    # against the asyncpg version pinned in this repo (Cursor lacks __aiter__).
+    # ``conn.fetch`` materializes the result set in memory; current biometric_db
+    # rowcounts are O(hundreds), so this is fine. If volume grows >100k, switch
+    # to explicit cursor iteration via ``cursor.fetch(N)`` in a loop.
+    rows = await conn.fetch(
+        f"""
+        SELECT id, embedding
+        FROM {table}
+        WHERE embedding_ciphertext IS NULL
+          AND embedding IS NOT NULL
+        ORDER BY id
+        """
+    )
 
-        async for row in cursor:
-            scanned += 1
-            row_id = row["id"]
-            try:
-                vec = np.array(row["embedding"], dtype=np.float32)
-                if vec.size == 0:
-                    logger.warning("%s id=%s has empty embedding; skipping", table, row_id)
-                    continue
-                ciphertext = cipher.encrypt_vector(vec)
-                await conn.execute(
-                    f"""
-                    UPDATE {table}
-                    SET embedding_ciphertext = $1,
-                        key_version = $2
-                    WHERE id = $3
-                      AND embedding_ciphertext IS NULL
-                    """,
-                    ciphertext, key_version, row_id,
-                )
-                updated += 1
-            except Exception as e:  # noqa: BLE001 — keep going past one bad row
-                logger.error("%s id=%s failed: %s", table, row_id, e)
+    for row in rows:
+        scanned += 1
+        row_id = row["id"]
+        try:
+            vec = _coerce_embedding(row["embedding"])
+            if vec.size == 0:
+                logger.warning("%s id=%s has empty embedding; skipping", table, row_id)
+                continue
+            ciphertext = cipher.encrypt_vector(vec)
+            await conn.execute(
+                f"""
+                UPDATE {table}
+                SET embedding_ciphertext = $1,
+                    key_version = $2
+                WHERE id = $3
+                  AND embedding_ciphertext IS NULL
+                """,
+                ciphertext, key_version, row_id,
+            )
+            updated += 1
+        except Exception as e:  # noqa: BLE001 — keep going past one bad row
+            logger.error("%s id=%s failed: %s", table, row_id, e)
 
-            if scanned % PROGRESS_EVERY == 0:
-                logger.info("%s: scanned=%d updated=%d", table, scanned, updated)
+        if scanned % PROGRESS_EVERY == 0:
+            logger.info("%s: scanned=%d updated=%d", table, scanned, updated)
 
     logger.info("%s: DONE scanned=%d updated=%d", table, scanned, updated)
     return scanned, updated

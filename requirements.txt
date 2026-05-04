@@ -59,6 +59,16 @@ psycopg2-binary>=2.9.10
 cloud-sql-python-connector[asyncpg]>=1.0.0
 
 # ===========================================
+# Migrations - Alembic (used by alembic/env.py at runtime)
+# Required so `alembic upgrade head` works inside the runtime container.
+# Without this, operators have to apply migrations via raw SQL, which is
+# how V0005 was applied during the 2026-05-02 prod deploy.
+# SQLAlchemy 2.0+ compatible (lock file pins SQLAlchemy==2.0.25).
+# ===========================================
+alembic>=1.13.0
+SQLAlchemy[asyncio]>=2.0.25
+
+# ===========================================
 # Caching - Redis
 # ===========================================
 redis>=5.3.0
