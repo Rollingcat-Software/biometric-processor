@@ -24,6 +24,31 @@ _DEFAULT_REGION_WEIGHTS = {
 }
 _DEFAULT_REGION_SCORE_THRESHOLD = 0.55
 _DEFAULT_OCCLUSION_SCORE_THRESHOLD = 0.32
+_EYE_VISIBILITY_THRESHOLD = 0.60
+_NOSE_VISIBILITY_THRESHOLD = 0.65
+_MOUTH_VISIBILITY_THRESHOLD = 0.65
+_LOWER_FACE_VISIBILITY_THRESHOLD = 0.58
+_MOUTH_REDNESS_OCCLUDED_DELTA = 3.5
+_MOUTH_REDNESS_WARNING_DELTA = 6.0
+_LOWER_FACE_TEXTURE_OCCLUDED_RATIO = 0.62
+_LOWER_FACE_TEXTURE_WARNING_RATIO = 0.78
+_QUALITY_OCCLUSION_THRESHOLD = 42.0
+_PHYSICAL_OCCLUSION_REASON_TOKENS = frozenset(
+    {
+        "dark_occluding_surface",
+        "hand_overlap_signal",
+        "eye_occluded",
+        "lip_color_signature_missing",
+        "mouth_structure_weakened",
+        "mouth_replaced_by_skin_like_surface",
+        "nose_replaced_by_skin_like_surface",
+        "nose_structure_missing",
+        "mouth_roi_color_invalid",
+        "mouth_chrominance_anomaly",
+        # "facial_detail_missing" excluded: generic quality signal — fires under shadow/low contrast
+        # "lower_face_texture_drop" excluded: relative heuristic — unreliable under uneven illumination
+    }
+)
 
 _REGION_RATIOS = {
     "left_eye": (0.14, 0.24, 0.24, 0.18),
@@ -45,6 +70,9 @@ class CriticalRegionVisibilityResult:
     occlusion_score: float
     occluded_regions: tuple[str, ...]
     visibility_scores: dict[str, float]
+    region_reasons: dict[str, str]
+    blocking_regions: tuple[str, ...]
+    suspicious_regions: tuple[str, ...]
     reason: str
 
 
@@ -73,6 +101,7 @@ class CriticalRegionVisibilityGate:
     ) -> None:
         self._region_score_threshold = region_score_threshold
         self._occlusion_score_threshold = occlusion_score_threshold
+        self._clear_reference_features: dict[str, dict[str, float]] = {}
 
     def evaluate(
         self,
@@ -90,6 +119,9 @@ class CriticalRegionVisibilityGate:
                 occlusion_score=0.0,
                 occluded_regions=(),
                 visibility_scores={},
+                region_reasons={},
+                blocking_regions=(),
+                suspicious_regions=(),
                 reason="no_face_bbox_unavailable",
             )
 
@@ -100,6 +132,9 @@ class CriticalRegionVisibilityGate:
                 occlusion_score=0.0,
                 occluded_regions=(),
                 visibility_scores={},
+                region_reasons={},
+                blocking_regions=(),
+                suspicious_regions=(),
                 reason="no_face_bbox_unavailable",
             )
 
@@ -116,7 +151,9 @@ class CriticalRegionVisibilityGate:
         baseline = _baseline_features(baseline_patches or [face_roi])
 
         visibility_scores: dict[str, float] = {}
-        occluded_regions: list[str] = []
+        region_reasons: dict[str, str] = {}
+        region_features: dict[str, dict[str, float]] = {}
+        threshold_failed_regions: list[str] = []
         weighted_visibility = 0.0
         total_weight = 0.0
 
@@ -129,36 +166,58 @@ class CriticalRegionVisibilityGate:
                 region_name=region_name,
                 fallback_ratios=ratios,
             )
-            score = _visibility_score(
+            score, region_reason, features = _visibility_score(
                 patch=patch,
                 baseline=baseline,
                 hand_overlap_signal=hand_overlap_signal,
                 region_name=region_name,
+                reference_features=self._clear_reference_features.get(region_name),
             )
             visibility_scores[region_name] = score
+            region_reasons[region_name] = region_reason
+            region_features[region_name] = features
             weight = _DEFAULT_REGION_WEIGHTS[region_name]
             weighted_visibility += score * weight
             total_weight += weight
-            if score < self._region_score_threshold:
-                occluded_regions.append(region_name)
+            if score < _region_visibility_threshold(region_name):
+                threshold_failed_regions.append(region_name)
 
         visibility_mean = weighted_visibility / max(total_weight, 1e-6)
         occlusion_score = max(0.0, min(1.0, 1.0 - visibility_mean))
-        occluded_regions, visibility_scores, occlusion_score = _apply_preview_heuristics(
-            occluded_regions=occluded_regions,
+        threshold_failed_regions, visibility_scores, region_reasons, occlusion_score = _apply_preview_heuristics(
+            occluded_regions=threshold_failed_regions,
             visibility_scores=visibility_scores,
+            region_reasons=region_reasons,
             occlusion_score=occlusion_score,
             preview_details=preview_details,
             blur_score=blur_score,
         )
-        is_critical_occluded = bool(
-            occluded_regions and occlusion_score >= self._occlusion_score_threshold
+        blocking_regions, suspicious_regions = _classify_region_states(
+            visibility_scores=visibility_scores,
+            region_reasons=region_reasons,
+            threshold_failed_regions=threshold_failed_regions,
         )
+        is_critical_occluded = _is_critical_occluded(
+            blocking_regions=blocking_regions,
+            suspicious_regions=suspicious_regions,
+            region_reasons=region_reasons,
+            visibility_scores=visibility_scores,
+            occlusion_score=occlusion_score,
+            occlusion_score_threshold=self._occlusion_score_threshold,
+        )
+        if not is_critical_occluded:
+            for region_name in ("left_eye", "right_eye", "nose", "mouth", "lower_face"):
+                region_feature = region_features.get(region_name)
+                if region_feature:
+                    self._clear_reference_features[region_name] = dict(region_feature)
         return CriticalRegionVisibilityResult(
             is_critical_occluded=is_critical_occluded,
             occlusion_score=occlusion_score,
-            occluded_regions=tuple(occluded_regions),
+            occluded_regions=tuple(blocking_regions),
             visibility_scores=visibility_scores,
+            region_reasons=region_reasons,
+            blocking_regions=tuple(blocking_regions),
+            suspicious_regions=tuple(suspicious_regions),
             reason="critical_region_visible" if not is_critical_occluded else "critical_region_occluded",
         )
 
@@ -226,7 +285,7 @@ class CriticalRegionVisibilityTracker:
             override_reason = "critical_region_temporarily_occluded"
             state_name = "TEMP_OCCLUDED"
             recently_occluded = True
-        elif recently_occluded and clear_streak < self._recovery_clear_frames:
+        elif not assessment.is_critical_occluded and recently_occluded and clear_streak < self._recovery_clear_frames:
             override_status = "INSUFFICIENT_EVIDENCE"
             override_reason = "recovering_after_critical_region_occlusion"
             state_name = "RECOVERING"
@@ -341,38 +400,79 @@ def _visibility_score(
     patch: np.ndarray,
     baseline: dict[str, float],
     hand_overlap_signal: Optional[float],
+    reference_features: Optional[dict[str, float]],
     region_name: str = "",
-) -> float:
+) -> tuple[float, str, dict[str, float]]:
     if patch.size == 0:
-        return 0.0
+        return 0.0, "patch_missing", {"visibility": 0.0}
 
     brightness = _brightness(patch)
     texture = _laplacian_variance(patch)
     edge = _edge_density(patch)
+    gray_std = _gray_std(patch)
+    clahe_texture = texture
+    clahe_edge = edge
+    clahe_std = gray_std
     lab_l, lab_a, lab_b = _lab_mean(patch)
+
+    if region_name in {"left_eye", "right_eye"}:
+        clahe_gray = _clahe_gray(patch)
+        clahe_texture = float(cv2.Laplacian(clahe_gray, cv2.CV_64F).var())
+        clahe_edges = cv2.Canny(clahe_gray, 40, 120)
+        clahe_edge = float(np.count_nonzero(clahe_edges)) / max(clahe_edges.size, 1)
+        clahe_std = float(np.std(clahe_gray))
+        texture = max(texture, clahe_texture)
+        edge = max(edge, clahe_edge)
+        gray_std = max(gray_std, clahe_std)
 
     brightness_score = _band_score(brightness, low=35.0, high=235.0, inner_low=65.0, inner_high=210.0)
     texture_score = _ratio_score(texture, baseline["texture"], stretch=0.65)
     edge_score = _ratio_score(edge, baseline["edge"], stretch=0.75)
+    uniformity_score = max(0.0, min(1.0, gray_std / 28.0))
     color_distance = float(
         np.linalg.norm(
             np.array([lab_l - baseline["lab_l"], lab_a - baseline["lab_a"], lab_b - baseline["lab_b"]], dtype=np.float32)
         )
     )
     skin_score = max(0.0, 1.0 - min(color_distance / 38.0, 1.0))
+    detail_score = 0.52 * texture_score + 0.30 * edge_score + 0.18 * uniformity_score
 
     visibility = (
         0.18 * brightness_score
-        + 0.40 * texture_score
-        + 0.24 * edge_score
+        + 0.32 * texture_score
+        + 0.20 * edge_score
+        + 0.12 * uniformity_score
         + 0.18 * skin_score
     )
+    reasons: list[str] = []
 
-    # Dark non-skin cover: brightness well below baseline AND no skin color match.
-    # Texture/edge from a partial-occlusion boundary inflate scores artificially,
-    # so we cap visibility when the patch is clearly both dim and non-skin-colored.
-    if brightness < baseline["brightness"] * 0.55 and skin_score < 0.05:
-        visibility = min(visibility, 0.35)
+    if detail_score < 0.46:
+        visibility = min(visibility, 0.40)
+        reasons.append("facial_detail_missing")
+
+    # Darkness alone is a face-quality problem, not proof of physical occlusion.
+    # Treat it as occlusion only when the region is also structurally missing after
+    # normalization, which indicates an external cover instead of shadow.
+    if brightness < baseline["brightness"] * 0.55 and skin_score < 0.08:
+        if detail_score >= 0.50:
+            visibility = max(visibility, 0.56)
+            reasons.append("poor_region_illumination")
+        elif gray_std < 12.0:
+            visibility = min(visibility, 0.32)
+            reasons.append("dark_occluding_surface")
+
+    if region_name in {"left_eye", "right_eye"}:
+        face_brightness = max(baseline["brightness"], 1e-6)
+        eye_brightness_ratio = brightness / face_brightness
+        if eye_brightness_ratio < 0.82 and detail_score >= 0.54:
+            visibility = max(visibility, 0.62 if eye_brightness_ratio >= 0.60 else 0.58)
+            reasons.append("eye_low_light_warning")
+        if skin_score > 0.78 and detail_score < 0.50 and uniformity_score < 0.60:
+            visibility = min(visibility, 0.34)
+            reasons.append("eye_occluded")
+        elif detail_score < 0.34 and gray_std < 12.0:
+            visibility = min(visibility, 0.38)
+            reasons.append("eye_occluded")
 
     if region_name == "mouth":
         # Lips are always redder than surrounding cheek skin in the Lab a* channel.
@@ -381,12 +481,98 @@ def _visibility_score(
         # The generic skin_score is counterproductive here — it rewards a hand (same
         # skin as baseline) more than visible lips (which are distinctly redder).
         lip_redness_delta = lab_a - baseline["lab_a"]
-        if lip_redness_delta < 5.0:
-            visibility = min(visibility, 0.45)
+        brightness_ratio = brightness / max(baseline["brightness"], 1e-6)
+        texture_is_flat = texture_score < 0.72
+        edge_is_flat = edge_score < 0.72
+        if (
+            lip_redness_delta < _MOUTH_REDNESS_OCCLUDED_DELTA
+            and texture_is_flat
+            and edge_is_flat
+        ):
+            visibility = min(visibility, 0.18)
+            reasons.append("lip_color_signature_missing")
+        elif lip_redness_delta < _MOUTH_REDNESS_WARNING_DELTA and (texture_is_flat or edge_is_flat):
+            # Redness drop + flat texture/edge = hand or surface covering mouth
+            visibility = min(visibility, 0.42)
+            reasons.append("mouth_structure_weakened")
+
+        if (
+            brightness_score >= 0.45
+            and brightness_ratio >= 0.72
+            and skin_score > 0.82
+            and detail_score < 0.68
+            and gray_std < 18.0
+        ):
+            visibility = min(visibility, 0.20)
+            reasons.append("mouth_replaced_by_skin_like_surface")
+
+        # HSV and chrominance checks — only on real skin baseline (lab_a > 127 = reddish skin tone).
+        # Synthetic / non-skin-colored frames are skipped to avoid false positives in tests.
+        if baseline["lab_a"] > 127 and brightness > 60.0:
+            color_valid, color_confidence = _mouth_hsv_color_validity(patch)
+            if not color_valid and color_confidence < 0.15:
+                visibility = min(visibility, 0.20)
+                reasons.append("mouth_roi_color_invalid")
+
+            if not _mouth_cr_in_skin_range(patch):
+                visibility = min(visibility, 0.30)
+                reasons.append("mouth_chrominance_anomaly")
+
+    if region_name == "nose":
+        brightness_ratio = brightness / max(baseline["brightness"], 1e-6)
+        if (
+            brightness_score >= 0.45
+            and brightness_ratio >= 0.72
+            and skin_score > 0.84
+            and detail_score < 0.70
+            and gray_std < 18.0
+        ):
+            visibility = min(visibility, 0.22)
+            reasons.append("nose_replaced_by_skin_like_surface")
+        if (
+            brightness_score >= 0.55
+            and brightness_ratio >= 0.68
+            and texture_score < 0.60
+            and edge_score < 0.58
+            and gray_std < 22.0  # physical cover is flatter than nose bridge; shadow preserves 3D gradient
+        ):
+            visibility = min(visibility, 0.34)
+            reasons.append("nose_structure_missing")
+
+    if region_name in {"mouth", "nose"} and reference_features:
+        reference_texture_ratio = texture / max(reference_features.get("texture", texture), 1e-6)
+        reference_edge_ratio = edge / max(reference_features.get("edge", edge), 1e-6)
+        reference_std_ratio = gray_std / max(reference_features.get("gray_std", gray_std), 1e-6)
+        if reference_texture_ratio < 0.58 and reference_edge_ratio < 0.62:
+            visibility = min(visibility, 0.28 if region_name == "mouth" else 0.32)
+            reasons.append("detail_drop_vs_clear_face")
+        if reference_std_ratio < 0.65 and detail_score < 0.74:
+            visibility = min(visibility, 0.36)
+            reasons.append("uniform_surface_vs_clear_face")
 
     if hand_overlap_signal is not None:
         visibility *= max(0.0, min(1.0, 1.0 - hand_overlap_signal))
-    return max(0.0, min(1.0, float(visibility)))
+        if hand_overlap_signal > 0.20:
+            reasons.append("hand_overlap_signal")
+    visibility = max(0.0, min(1.0, float(visibility)))
+    features = {
+        "visibility": visibility,
+        "brightness": float(brightness),
+        "texture": float(texture),
+        "edge": float(edge),
+        "gray_std": float(gray_std),
+        "clahe_texture": float(clahe_texture),
+        "clahe_edge": float(clahe_edge),
+        "clahe_std": float(clahe_std),
+        "brightness_score": float(brightness_score),
+        "texture_score": float(texture_score),
+        "edge_score": float(edge_score),
+        "uniformity_score": float(uniformity_score),
+        "detail_score": float(detail_score),
+        "color_distance": float(color_distance),
+        "skin_score": float(skin_score),
+    }
+    return visibility, "|".join(dict.fromkeys(reasons)) if reasons else "region_visible", features
 
 
 def _laplacian_variance(patch: np.ndarray) -> float:
@@ -398,6 +584,16 @@ def _edge_density(patch: np.ndarray) -> float:
     gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 60, 140)
     return float(np.count_nonzero(edges)) / max(edges.size, 1)
+
+
+def _gray_std(patch: np.ndarray) -> float:
+    return float(np.std(cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)))
+
+
+def _clahe_gray(patch: np.ndarray) -> np.ndarray:
+    gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+    return clahe.apply(gray)
 
 
 def _brightness(patch: np.ndarray) -> float:
@@ -430,37 +626,264 @@ def _apply_preview_heuristics(
     *,
     occluded_regions: list[str],
     visibility_scores: dict[str, float],
+    region_reasons: dict[str, str],
     occlusion_score: float,
     preview_details: Optional[dict[str, object]],
     blur_score: Optional[float],
-) -> tuple[list[str], dict[str, float], float]:
+) -> tuple[list[str], dict[str, float], dict[str, str], float]:
     if not preview_details:
-        return occluded_regions, visibility_scores, occlusion_score
+        return occluded_regions, visibility_scores, region_reasons, occlusion_score
 
     quality_occlusion = _coerce_float(preview_details.get("quality_occlusion"))
     lower_face_texture = _coerce_float(preview_details.get("preview_lower_face_texture"))
 
     if lower_face_texture is not None and blur_score is not None and blur_score > 10.0:
         lower_texture_ratio = lower_face_texture / max(blur_score, 1e-6)
-        if lower_texture_ratio < 0.95:
-            severity = max(0.0, min(1.0, (0.95 - lower_texture_ratio) / 0.55))
-            for region_name in ("mouth", "lower_face", "nose"):
+        if lower_texture_ratio < _LOWER_FACE_TEXTURE_WARNING_RATIO:
+            if lower_texture_ratio < _LOWER_FACE_TEXTURE_OCCLUDED_RATIO:
+                severity = max(
+                    0.0,
+                    min(
+                        1.0,
+                        (_LOWER_FACE_TEXTURE_OCCLUDED_RATIO - lower_texture_ratio)
+                        / max(_LOWER_FACE_TEXTURE_OCCLUDED_RATIO, 1e-6),
+                    ),
+                )
+                affected_regions = ("mouth", "lower_face", "nose")
+                visibility_floor = 0.18
+                score_floor = 0.38
+            else:
+                severity = max(
+                    0.0,
+                    min(
+                        1.0,
+                        (_LOWER_FACE_TEXTURE_WARNING_RATIO - lower_texture_ratio)
+                        / max(
+                            _LOWER_FACE_TEXTURE_WARNING_RATIO - _LOWER_FACE_TEXTURE_OCCLUDED_RATIO,
+                            1e-6,
+                        ),
+                    ),
+                )
+                affected_regions = ("mouth", "lower_face")
+                visibility_floor = 0.42
+                score_floor = 0.24
+            for region_name in affected_regions:
                 current = visibility_scores.get(region_name, 1.0)
-                visibility_scores[region_name] = min(current, max(0.0, 1.0 - severity))
-                if visibility_scores[region_name] < _DEFAULT_REGION_SCORE_THRESHOLD and region_name not in occluded_regions:
+                visibility_scores[region_name] = min(
+                    current,
+                    max(visibility_floor, 1.0 - severity),
+                )
+                if visibility_scores[region_name] < _region_visibility_threshold(region_name) and region_name not in occluded_regions:
                     occluded_regions.append(region_name)
-            occlusion_score = max(occlusion_score, 0.30 + 0.55 * severity)
+                if visibility_scores[region_name] < _region_visibility_threshold(region_name):
+                    region_reasons[region_name] = _merge_reason(region_reasons.get(region_name), "lower_face_texture_drop")
+            occlusion_score = max(occlusion_score, score_floor + 0.45 * severity)
 
-    if quality_occlusion is not None and quality_occlusion < 55.0:
-        severity = max(0.0, min(1.0, (55.0 - quality_occlusion) / 30.0))
+    if quality_occlusion is not None and quality_occlusion < _QUALITY_OCCLUSION_THRESHOLD:
+        severity = max(
+            0.0,
+            min(1.0, (_QUALITY_OCCLUSION_THRESHOLD - quality_occlusion) / 24.0),
+        )
         for region_name in ("nose", "mouth", "lower_face"):
             current = visibility_scores.get(region_name, 1.0)
             visibility_scores[region_name] = min(current, max(0.0, 1.0 - severity))
-            if visibility_scores[region_name] < _DEFAULT_REGION_SCORE_THRESHOLD and region_name not in occluded_regions:
+            if visibility_scores[region_name] < _region_visibility_threshold(region_name) and region_name not in occluded_regions:
                 occluded_regions.append(region_name)
-        occlusion_score = max(occlusion_score, 0.28 + 0.60 * severity)
+            if visibility_scores[region_name] < _region_visibility_threshold(region_name):
+                region_reasons[region_name] = _merge_reason(region_reasons.get(region_name), "quality_occlusion_signal")
+        occlusion_score = max(occlusion_score, 0.32 + 0.50 * severity)
 
-    return occluded_regions, visibility_scores, occlusion_score
+    return occluded_regions, visibility_scores, region_reasons, occlusion_score
+
+
+def _is_critical_occluded(
+    *,
+    blocking_regions: list[str],
+    suspicious_regions: list[str],
+    region_reasons: dict[str, str],
+    visibility_scores: dict[str, float],
+    occlusion_score: float,
+    occlusion_score_threshold: float,
+) -> bool:
+    del occlusion_score, occlusion_score_threshold
+    blocked = set(blocking_regions)
+    suspicious = set(suspicious_regions)
+
+    # Both eyes physically blocked together.
+    if {"left_eye", "right_eye"}.issubset(blocked):
+        return True
+
+    # Nose or mouth individually blocked by a physical signal.
+    if "nose" in blocked or "mouth" in blocked:
+        return True
+
+    # Lower face covered: both nose AND mouth degraded simultaneously AND at least
+    # one carries a physical occlusion signal (not mere illumination degradation).
+    # Poor illumination degrades both regions similarly but without physical tokens.
+    if "nose" in suspicious and "mouth" in suspicious:
+        nose_tokens = _reason_tokens(region_reasons.get("nose"))
+        mouth_tokens = _reason_tokens(region_reasons.get("mouth"))
+        if (nose_tokens | mouth_tokens) & _PHYSICAL_OCCLUSION_REASON_TOKENS:
+            return True
+
+    # Half-face: one eye physically blocked AND at least one lower-face region
+    # below its visibility threshold — covers hand/arm hiding one side of the face.
+    one_eye_blocked = bool(blocked & {"left_eye", "right_eye"})
+    if one_eye_blocked:
+        nose_low = visibility_scores.get("nose", 1.0) < _NOSE_VISIBILITY_THRESHOLD
+        mouth_low = visibility_scores.get("mouth", 1.0) < _MOUTH_VISIBILITY_THRESHOLD
+        lower_face_low = visibility_scores.get("lower_face", 1.0) < _LOWER_FACE_VISIBILITY_THRESHOLD
+        if nose_low or mouth_low or lower_face_low:
+            return True
+
+    return False
+
+
+def _region_visibility_threshold(region_name: str) -> float:
+    if region_name in {"left_eye", "right_eye"}:
+        return _EYE_VISIBILITY_THRESHOLD
+    if region_name == "nose":
+        return _NOSE_VISIBILITY_THRESHOLD
+    if region_name == "mouth":
+        return _MOUTH_VISIBILITY_THRESHOLD
+    if region_name == "lower_face":
+        return _LOWER_FACE_VISIBILITY_THRESHOLD
+    return _DEFAULT_REGION_SCORE_THRESHOLD
+
+
+def _merge_reason(existing: Optional[str], new_reason: str) -> str:
+    if not existing or existing == "region_visible":
+        return new_reason
+    if new_reason in existing.split("|"):
+        return existing
+    return f"{existing}|{new_reason}"
+
+
+def _reason_tokens(reason: Optional[str]) -> set[str]:
+    if not reason or reason == "region_visible":
+        return set()
+    return {token for token in str(reason).split("|") if token}
+
+
+def _is_region_physically_blocked(
+    *,
+    region_name: str,
+    visibility_scores: dict[str, float],
+    region_reasons: dict[str, str],
+) -> bool:
+    score = visibility_scores.get(region_name, 1.0)
+    if score >= _region_visibility_threshold(region_name):
+        return False
+    return bool(_reason_tokens(region_reasons.get(region_name)) & _PHYSICAL_OCCLUSION_REASON_TOKENS)
+
+
+def _classify_region_states(
+    *,
+    visibility_scores: dict[str, float],
+    region_reasons: dict[str, str],
+    threshold_failed_regions: list[str],
+) -> tuple[list[str], list[str]]:
+    left_eye_visible = visibility_scores.get("left_eye", 1.0) >= _EYE_VISIBILITY_THRESHOLD
+    right_eye_visible = visibility_scores.get("right_eye", 1.0) >= _EYE_VISIBILITY_THRESHOLD
+    nose_visible = visibility_scores.get("nose", 1.0) >= _NOSE_VISIBILITY_THRESHOLD
+    mouth_visible = visibility_scores.get("mouth", 1.0) >= _MOUTH_VISIBILITY_THRESHOLD
+    lower_face_visible = visibility_scores.get("lower_face", 1.0) >= _LOWER_FACE_VISIBILITY_THRESHOLD
+    left_eye_blocked = _is_region_physically_blocked(
+        region_name="left_eye",
+        visibility_scores=visibility_scores,
+        region_reasons=region_reasons,
+    )
+    right_eye_blocked = _is_region_physically_blocked(
+        region_name="right_eye",
+        visibility_scores=visibility_scores,
+        region_reasons=region_reasons,
+    )
+    nose_blocked = _is_region_physically_blocked(
+        region_name="nose",
+        visibility_scores=visibility_scores,
+        region_reasons=region_reasons,
+    )
+    mouth_blocked = _is_region_physically_blocked(
+        region_name="mouth",
+        visibility_scores=visibility_scores,
+        region_reasons=region_reasons,
+    )
+    lower_face_blocked = _is_region_physically_blocked(
+        region_name="lower_face",
+        visibility_scores=visibility_scores,
+        region_reasons=region_reasons,
+    )
+
+    blocking_regions: list[str] = []
+    suspicious_regions: list[str] = []
+
+    if nose_blocked:
+        blocking_regions.append("nose")
+    elif not nose_visible:
+        suspicious_regions.append("nose")
+    if mouth_blocked:
+        blocking_regions.append("mouth")
+    elif not mouth_visible:
+        suspicious_regions.append("mouth")
+    if lower_face_blocked and (mouth_blocked or nose_blocked):
+        blocking_regions.append("lower_face")
+    elif not lower_face_visible:
+        suspicious_regions.append("lower_face")
+
+    if left_eye_blocked and right_eye_blocked:
+        blocking_regions.extend(["left_eye", "right_eye"])
+        region_reasons["left_eye"] = _merge_reason(region_reasons.get("left_eye"), "eye_occluded")
+        region_reasons["right_eye"] = _merge_reason(region_reasons.get("right_eye"), "eye_occluded")
+    else:
+        if not left_eye_visible:
+            suspicious_regions.append("left_eye")
+            if not left_eye_blocked:
+                region_reasons["left_eye"] = _merge_reason(
+                    region_reasons.get("left_eye"),
+                    "single_eye_low_light_warning",
+                )
+        if not right_eye_visible:
+            suspicious_regions.append("right_eye")
+            if not right_eye_blocked:
+                region_reasons["right_eye"] = _merge_reason(
+                    region_reasons.get("right_eye"),
+                    "single_eye_low_light_warning",
+                )
+
+    for region_name in threshold_failed_regions:
+        if region_name not in blocking_regions and region_name not in suspicious_regions:
+            suspicious_regions.append(region_name)
+
+    return blocking_regions, suspicious_regions
+
+
+def _mouth_hsv_color_validity(patch: np.ndarray) -> tuple[bool, float]:
+    """Returns (color_valid, confidence) based on lip/skin HSV pixel distribution.
+
+    Paper, fabric, cardboard lack both lip-pink and skin-tan pixels and fail this check.
+    """
+    total = patch.shape[0] * patch.shape[1]
+    if total == 0:
+        return True, 1.0
+    hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+    lip_mask = cv2.inRange(hsv, np.array([0, 30, 60], dtype=np.uint8), np.array([20, 180, 255], dtype=np.uint8))
+    skin_mask = cv2.inRange(hsv, np.array([0, 15, 80], dtype=np.uint8), np.array([25, 150, 255], dtype=np.uint8))
+    lip_ratio = float(np.count_nonzero(lip_mask)) / total
+    skin_ratio = float(np.count_nonzero(skin_mask)) / total
+    color_valid = (lip_ratio > 0.08) or (skin_ratio > 0.25)
+    confidence = lip_ratio + skin_ratio * 0.5
+    return color_valid, confidence
+
+
+def _mouth_cr_in_skin_range(patch: np.ndarray) -> bool:
+    """Returns True if YCrCb Cr channel is in skin/lip range.
+
+    Achromatic occluders (paper, white board) have Cr near neutral (~115-128).
+    Real skin and lips read Cr ~135-185.
+    """
+    ycrcb = cv2.cvtColor(patch, cv2.COLOR_BGR2YCrCb)
+    cr_mean = float(np.mean(ycrcb[:, :, 1]))
+    return 135.0 < cr_mean < 185.0
 
 
 def _coerce_float(value: object) -> Optional[float]:

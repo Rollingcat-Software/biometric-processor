@@ -40,6 +40,7 @@ from app.domain.interfaces.face_detector import IFaceDetector
 from app.domain.interfaces.landmark_detector import ILandmarkDetector
 from app.domain.interfaces.liveness_detector import ILivenessDetector
 from app.infrastructure.ml.liveness.face_usability_gate import FaceUsabilityGate
+from app.infrastructure.ml.liveness.rppg_analyzer import RPPGAnalyzer
 
 logger = logging.getLogger(__name__)
 PREVIEW_SECURITY_PROFILE = "standard"
@@ -233,6 +234,7 @@ class AggregatedMetrics:
     passive_window_score: float
     active_frame_score_mean: float
     active_frame_evidence_mean: float
+    rppg_live_signal: bool = False
     background_reaction_ms: float = 0.0
     temporal_aggregation_ms: float = 0.0
     @property
@@ -350,8 +352,15 @@ class TemporalLivenessAggregator:
             or ("OCCLUDED_CONFIRMED" if critical_occ else ("CLEAR" if face_usable else "NO_FACE"))
         )
         face_usability_blocked = bool(_maybe_float(metrics.details.get("face_usability_blocked")) or 0.0)
+        face_usability_override_status_raw = str(metrics.details.get("face_usability_override_status") or "-")
+        face_usability_override_status = None if face_usability_override_status_raw == "-" else face_usability_override_status_raw
         if "face_usability_blocked" not in metrics.details:
             face_usability_blocked = critical_occ or not face_usable
+        if face_usability_override_status is None:
+            if face_usability_reason == "no_face_detected" or face_usability_state in {"NO_FACE", "OCCLUDED_NO_FACE"}:
+                face_usability_override_status = "NO_FACE"
+            elif face_usability_blocked or not face_usable:
+                face_usability_override_status = "INSUFFICIENT_EVIDENCE"
         critical_occ_state = str(metrics.details.get("critical_occ_state") or face_usability_state)
         critical_occ_reason = str(metrics.details.get("critical_occ_reason") or face_usability_reason)
         liveness_skipped_due_to_face_usability = bool(
@@ -377,7 +386,7 @@ class TemporalLivenessAggregator:
         puzzle_summary = self._evaluate_puzzle(metrics, temporal_signal_summary)
         temporal_signal_summary.update(
             _compute_preview_active_fusion(
-                background_active_evidence=float(temporal_signal_summary.get("combined_active_evidence") or 0.0),
+                background_active_evidence=0.0 if liveness_skipped_due_to_face_usability else float(temporal_signal_summary.get("combined_active_evidence") or 0.0),
                 background_active_score=float(temporal_signal_summary.get("combined_active_score") or 0.0),
                 background_supported_score=float(temporal_signal_summary.get("supported_score") or 0.0),
                 passive_window_score=passive_window_score,
@@ -463,6 +472,7 @@ class TemporalLivenessAggregator:
                 face_usability_reason=face_usability_reason,
                 face_usability_state=face_usability_state,
                 face_usability_blocked=face_usability_blocked,
+                face_usability_override_status=face_usability_override_status,
                 critical_occ=critical_occ,
                 critical_occ_score=critical_occ_score,
                 critical_occ_regions=critical_occ_regions,
@@ -718,11 +728,23 @@ class TemporalLivenessAggregator:
             and flash_replay_risk >= 0.70
             and flash_response_score <= 0.30
         )
+        rppg_score = _maybe_float(metrics.details.get("rppg_score")) or 0.5
+        rppg_bpm = _maybe_float(metrics.details.get("rppg_bpm")) or 0.0
+        rppg_signal_strength = _maybe_float(metrics.details.get("rppg_signal_strength")) or 0.0
+        rppg_frame_count = int(_maybe_float(metrics.details.get("rppg_frame_count")) or 0)
+        rppg_live_signal = bool(
+            rppg_frame_count >= 45
+            and rppg_score >= 0.60
+            and rppg_signal_strength >= 0.25
+            and 40.0 <= rppg_bpm <= 180.0
+        )
         replay_penalty = 0.0
         if not replay_veto and device_replay_risk >= 0.65:
             replay_penalty = 0.45 * device_replay_risk
             if positive_flash_response:
                 replay_penalty *= 0.35
+            if rppg_live_signal:
+                replay_penalty *= 0.50
         adjusted_score = base_score * (1.0 - replay_penalty)
 
         puzzle_result = _current_puzzle_result_from_summary(temporal_signal_summary)
@@ -832,6 +854,8 @@ class TemporalLivenessAggregator:
             suspicion_reasons.append("FLASH_REPLAY_RISK")
         elif positive_flash_response:
             suspicion_reasons.append("FLASH_LIVE_RESPONSE")
+        if rppg_live_signal:
+            suspicion_reasons.append("RPPG_LIVE")
         if not live_active_ready:
             suspicion_reasons.append("LOW_ACTIVE_SCORE")
         if window_confidence < 0.6:
@@ -968,6 +992,7 @@ class TemporalLivenessAggregator:
             "puzzle_result": puzzle_result,
             "preview_flash_live_response": positive_flash_response,
             "preview_flash_replay_support": negative_flash_response,
+            "rppg_live_signal": rppg_live_signal,
             "spoof_reason_explicit": spoof_reason_explicit,
             "strong_spoof_evidence": strong_spoof_evidence,
             "unstable_non_spoof": unstable_non_spoof,
@@ -993,6 +1018,7 @@ class TemporalLivenessAggregator:
         face_usability_reason: str,
         face_usability_state: str,
         face_usability_blocked: bool,
+        face_usability_override_status: Optional[str],
         critical_occ: bool,
         critical_occ_score: float,
         critical_occ_regions: tuple[str, ...],
@@ -1003,12 +1029,13 @@ class TemporalLivenessAggregator:
         critical_occ_reason: str,
         liveness_skipped_due_to_face_usability: bool,
     ) -> dict[str, Any]:
-        final_status = "NO_FACE" if face_usability_blocked or not face_usable else original_status
+        final_status = face_usability_override_status or original_status
         return {
             "face_usable": face_usable,
             "face_usability_reason": face_usability_reason,
             "face_usability_state": face_usability_state,
             "face_usability_blocked": face_usability_blocked,
+            "face_usability_override_status": face_usability_override_status or "-",
             "critical_occ": critical_occ,
             "critical_occ_score": critical_occ_score,
             "critical_occ_regions": critical_occ_regions,
@@ -1027,7 +1054,7 @@ class TemporalLivenessAggregator:
         self._debug_decision_history.append(decision_state)
         self._last_debug_decision_state = decision_state
         if decision_state == "NO_FACE":
-            self._no_face_live_cooldown_frames = 6
+            self._no_face_live_cooldown_frames = 0
             self._stable_live_hold_frames = 0
             return
         if self._no_face_live_cooldown_frames > 0:
@@ -1054,6 +1081,7 @@ class LivenessPreviewFrameProcessor:
         self._landmark_detector = landmark_detector
         self._frame_index = 0
         self._cached_bounding_box: Optional[tuple[int, int, int, int]] = None
+        self._cached_usability_bounding_box: Optional[tuple[int, int, int, int]] = None
         self._cached_additional_bounding_boxes: tuple[tuple[int, int, int, int], ...] = ()
         self._cached_face_signal_metrics: Any = None
         self._cached_liveness_result: Optional[LivenessResult] = None
@@ -1064,6 +1092,7 @@ class LivenessPreviewFrameProcessor:
         self._last_successful_bbox_cleared_reason = "-"
         self._consecutive_face_seen_frames = 0
         self._face_usability_gate = FaceUsabilityGate()
+        self._rppg_analyzer = RPPGAnalyzer(fps=25.0, window_seconds=6.0)
         self._device_spoof_risk_evaluator = DeviceSpoofRiskEvaluator(
             enable_flash_replay=settings.DEV_LIVENESS_PREVIEW_FLASH_REPLAY_ENABLED,
             flash_interval_seconds=settings.DEV_LIVENESS_PREVIEW_FLASH_INTERVAL_SECONDS,
@@ -1085,6 +1114,7 @@ class LivenessPreviewFrameProcessor:
         reused_face_detection = False
         reused_landmarks = False
         reused_liveness = False
+        usability_bounding_box: Optional[tuple[int, int, int, int]] = None
         brightness = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
         inference_frame, inference_scale = self._resize_for_inference(frame)
 
@@ -1102,6 +1132,7 @@ class LivenessPreviewFrameProcessor:
                 detection = asyncio.run(self._face_detector.detect(inference_frame))
                 if not detection.found or detection.bounding_box is None:
                     self._cached_bounding_box = None
+                    self._cached_usability_bounding_box = None
                     self._cached_additional_bounding_boxes = ()
                     self._cached_face_signal_metrics = None
                     self._cached_liveness_result = None
@@ -1118,17 +1149,39 @@ class LivenessPreviewFrameProcessor:
                             face_usability_reason="no_face_detected",
                             face_usability_state="NO_FACE",
                             face_usability_blocked=True,
+                            face_usability_override_status="NO_FACE",
+                            face_quality_gate_status="-",
+                            face_quality_reason="-",
+                            per_region_brightness={},
+                            brightness_uniformity=0.0,
+                            illumination_score=0.0,
+                            global_face_brightness=0.0,
+                            shadow_asymmetry=0.0,
+                            underexposed_regions=(),
+                            overexposed_regions=(),
                             critical_occ=False,
                             critical_occ_score=0.0,
                             critical_occ_regions=(),
                             critical_region_visibility={},
+                            critical_region_reasons={},
+                            blocking_regions=(),
+                            suspicious_regions=(),
                             liveness_skipped_due_to_face_usability=True,
+                            liveness_skipped_reason="no_face_detected",
+                            physical_occlusion_score=0.0,
+                            physical_occlusion_regions=(),
+                            physical_occlusion_reason="-",
                             preview_bbox=None,
                         ),
                     )
                 else:
+                    usability_bounding_box = self._scale_bounding_box(
+                        detection.bounding_box,
+                        inference_scale,
+                        frame.shape,
+                    )
                     bounding_box = self._expand_bounding_box(
-                        self._scale_bounding_box(detection.bounding_box, inference_scale, frame.shape),
+                        usability_bounding_box,
                         frame.shape,
                     )
                     additional_bounding_boxes = tuple(
@@ -1139,15 +1192,18 @@ class LivenessPreviewFrameProcessor:
                         for candidate_bbox in detection.additional_bounding_boxes
                     )
                     self._cached_bounding_box = bounding_box
+                    self._cached_usability_bounding_box = usability_bounding_box
                     self._cached_additional_bounding_boxes = additional_bounding_boxes
                     self._last_successful_bbox = bounding_box
                     self._last_successful_bbox_cleared_reason = "-"
             else:
                 reused_face_detection = True
                 bounding_box = self._cached_bounding_box
+                usability_bounding_box = self._cached_usability_bounding_box
                 additional_bounding_boxes = self._cached_additional_bounding_boxes
         except Exception as exc:
             self._cached_bounding_box = None
+            self._cached_usability_bounding_box = None
             self._cached_additional_bounding_boxes = ()
             self._cached_face_signal_metrics = None
             self._cached_liveness_result = None
@@ -1177,11 +1233,28 @@ class LivenessPreviewFrameProcessor:
                     face_usability_reason="no_face_detected",
                     face_usability_state="NO_FACE",
                     face_usability_blocked=True,
+                    face_usability_override_status="NO_FACE",
+                    face_quality_gate_status="-",
+                    face_quality_reason="-",
+                    per_region_brightness={},
+                    brightness_uniformity=0.0,
+                    illumination_score=0.0,
+                    global_face_brightness=0.0,
+                    shadow_asymmetry=0.0,
+                    underexposed_regions=(),
+                    overexposed_regions=(),
                     critical_occ=False,
                     critical_occ_score=0.0,
                     critical_occ_regions=(),
                     critical_region_visibility={},
+                    critical_region_reasons={},
+                    blocking_regions=(),
+                    suspicious_regions=(),
                     liveness_skipped_due_to_face_usability=True,
+                    liveness_skipped_reason="no_face_detected",
+                    physical_occlusion_score=0.0,
+                    physical_occlusion_regions=(),
+                    physical_occlusion_reason="-",
                     preview_bbox=None,
                 ),
             )
@@ -1189,6 +1262,7 @@ class LivenessPreviewFrameProcessor:
         face_region = self._crop_face_region(frame, bounding_box)
         if face_region.size == 0:
             self._cached_bounding_box = None
+            self._cached_usability_bounding_box = None
             self._cached_additional_bounding_boxes = ()
             self._cached_face_signal_metrics = None
             self._cached_liveness_result = None
@@ -1204,11 +1278,28 @@ class LivenessPreviewFrameProcessor:
                     face_usability_reason="no_face_detected",
                     face_usability_state="NO_FACE",
                     face_usability_blocked=True,
+                    face_usability_override_status="NO_FACE",
+                    face_quality_gate_status="-",
+                    face_quality_reason="-",
+                    per_region_brightness={},
+                    brightness_uniformity=0.0,
+                    illumination_score=0.0,
+                    global_face_brightness=0.0,
+                    shadow_asymmetry=0.0,
+                    underexposed_regions=(),
+                    overexposed_regions=(),
                     critical_occ=False,
                     critical_occ_score=0.0,
                     critical_occ_regions=(),
                     critical_region_visibility={},
+                    critical_region_reasons={},
+                    blocking_regions=(),
+                    suspicious_regions=(),
                     liveness_skipped_due_to_face_usability=True,
+                    liveness_skipped_reason="no_face_detected",
+                    physical_occlusion_score=0.0,
+                    physical_occlusion_regions=(),
+                    physical_occlusion_reason="-",
                     preview_bbox=None,
                 ),
             )
@@ -1221,44 +1312,18 @@ class LivenessPreviewFrameProcessor:
         frame_height, frame_width = frame.shape[:2]
         face_size_ratio = (face_width * face_height) / max(frame_width * frame_height, 1)
         preview_lower_face_texture = self._compute_lower_face_texture(face_region)
-        usability_started = time.perf_counter()
-        face_usability = self._face_usability_gate.evaluate(
-            frame=frame,
-            face_bbox=bounding_box,
-            preview_details={
-                "preview_bbox_x": float(bounding_box[0]),
-                "preview_bbox_y": float(bounding_box[1]),
-                "preview_bbox_w": float(bounding_box[2]),
-                "preview_bbox_h": float(bounding_box[3]),
-                "preview_lower_face_texture": preview_lower_face_texture,
-            },
-            blur_score=blur_score,
+        usability_bounding_box = usability_bounding_box or bounding_box
+        usability_face_region = self._crop_face_region(frame, usability_bounding_box)
+        usability_blur_score = (
+            self._compute_blur(usability_face_region)
+            if usability_face_region.size > 0
+            else blur_score
         )
-        profiling["face_usability_ms"] = (time.perf_counter() - usability_started) * 1000.0
-        if not face_usability.usable:
-            self._cached_face_signal_metrics = None
-            self._cached_liveness_result = None
-            self._consecutive_face_seen_frames = 0
-            return self._error_metrics(
-                brightness=face_region_brightness,
-                blur_score=blur_score,
-                face_detected=False,
-                error="Please keep your full face visible.",
-                profiling=profiling,
-                inference_scale=inference_scale,
-                extra_details=self._face_usability_details(
-                    face_usable=face_usability.usable,
-                    face_usability_reason=face_usability.reason,
-                    face_usability_state=face_usability.state,
-                    face_usability_blocked=face_usability.blocked,
-                    critical_occ=face_usability.occluded,
-                    critical_occ_score=face_usability.occlusion_score,
-                    critical_occ_regions=face_usability.occluded_regions,
-                    critical_region_visibility=face_usability.visibility_scores,
-                    liveness_skipped_due_to_face_usability=True,
-                    preview_bbox=bounding_box,
-                ),
-            )
+        usability_lower_face_texture = (
+            self._compute_lower_face_texture(usability_face_region)
+            if usability_face_region.size > 0
+            else preview_lower_face_texture
+        )
         landmark_started = time.perf_counter()
         should_extract_landmarks = (
             self._cached_face_signal_metrics is None
@@ -1278,6 +1343,65 @@ class LivenessPreviewFrameProcessor:
             reused_landmarks = True
             face_signal_metrics = self._cached_face_signal_metrics
         profiling["landmark_ms"] = (time.perf_counter() - landmark_started) * 1000.0
+        usability_started = time.perf_counter()
+        face_usability = self._face_usability_gate.evaluate(
+            frame=frame,
+            face_bbox=usability_bounding_box,
+            landmarks=None,
+            preview_details={
+                "preview_bbox_x": float(usability_bounding_box[0]),
+                "preview_bbox_y": float(usability_bounding_box[1]),
+                "preview_bbox_w": float(usability_bounding_box[2]),
+                "preview_bbox_h": float(usability_bounding_box[3]),
+                "preview_lower_face_texture": usability_lower_face_texture,
+            },
+            blur_score=usability_blur_score,
+        )
+        profiling["face_usability_ms"] = (time.perf_counter() - usability_started) * 1000.0
+        if not face_usability.usable:
+            self._cached_face_signal_metrics = None
+            self._cached_liveness_result = None
+            self._consecutive_face_seen_frames = 0
+            return self._error_metrics(
+                brightness=face_region_brightness,
+                blur_score=blur_score,
+                face_detected=True,
+                error=self._face_usability_error_message(face_usability.reason),
+                profiling=profiling,
+                inference_scale=inference_scale,
+                extra_details=self._face_usability_details(
+                    face_usable=face_usability.usable,
+                    face_usability_reason=face_usability.reason,
+                    face_usability_state=face_usability.state,
+                    face_usability_blocked=face_usability.blocked,
+                    face_usability_override_status=face_usability.status_override,
+                    face_quality_gate_status=face_usability.quality_status,
+                    face_quality_reason=face_usability.quality_reason,
+                    per_region_brightness=face_usability.per_region_brightness,
+                    brightness_uniformity=face_usability.brightness_uniformity,
+                    illumination_score=face_usability.illumination_score,
+                    global_face_brightness=face_usability.global_face_brightness,
+                    shadow_asymmetry=face_usability.shadow_asymmetry,
+                    underexposed_regions=face_usability.underexposed_regions,
+                    overexposed_regions=face_usability.overexposed_regions,
+                    critical_occ=face_usability.occluded,
+                    critical_occ_score=face_usability.occlusion_score,
+                    critical_occ_regions=face_usability.occluded_regions,
+                    critical_region_visibility=face_usability.visibility_scores,
+                    critical_region_reasons=face_usability.region_reasons,
+                    blocking_regions=face_usability.blocking_regions,
+                    suspicious_regions=face_usability.suspicious_regions,
+                    physical_occlusion_score=face_usability.physical_occlusion_score,
+                    physical_occlusion_regions=face_usability.physical_occlusion_regions,
+                    physical_occlusion_reason=face_usability.physical_occlusion_reason,
+                    liveness_skipped_due_to_face_usability=True,
+                    liveness_skipped_reason=face_usability.liveness_skipped_reason,
+                    preview_bbox=bounding_box,
+                    critical_occ_streak=face_usability.occlusion_streak,
+                    quality_streak=face_usability.quality_streak,
+                    critical_clear_streak=face_usability.clear_streak,
+                ),
+            )
 
         liveness_started = time.perf_counter()
         should_run_liveness = (
@@ -1294,6 +1418,7 @@ class LivenessPreviewFrameProcessor:
                 liveness_result = self._cached_liveness_result
         except FaceNotDetectedError:
             self._cached_bounding_box = None
+            self._cached_usability_bounding_box = None
             self._cached_additional_bounding_boxes = ()
             self._cached_face_signal_metrics = None
             self._cached_liveness_result = None
@@ -1310,11 +1435,28 @@ class LivenessPreviewFrameProcessor:
                     face_usability_reason="no_face_detected",
                     face_usability_state="NO_FACE",
                     face_usability_blocked=True,
+                    face_usability_override_status="NO_FACE",
+                    face_quality_gate_status="-",
+                    face_quality_reason="-",
+                    per_region_brightness={},
+                    brightness_uniformity=0.0,
+                    illumination_score=0.0,
+                    global_face_brightness=0.0,
+                    shadow_asymmetry=0.0,
+                    underexposed_regions=(),
+                    overexposed_regions=(),
                     critical_occ=False,
                     critical_occ_score=0.0,
                     critical_occ_regions=(),
                     critical_region_visibility={},
+                    critical_region_reasons={},
+                    blocking_regions=(),
+                    suspicious_regions=(),
                     liveness_skipped_due_to_face_usability=True,
+                    liveness_skipped_reason="no_face_detected",
+                    physical_occlusion_score=0.0,
+                    physical_occlusion_regions=(),
+                    physical_occlusion_reason="-",
                     preview_bbox=bounding_box,
                 ),
             )
@@ -1730,13 +1872,31 @@ class LivenessPreviewFrameProcessor:
                 face_usability_reason=face_usability.reason,
                 face_usability_state=face_usability.state,
                 face_usability_blocked=face_usability.blocked,
+                face_usability_override_status=face_usability.status_override,
+                face_quality_gate_status=face_usability.quality_status,
+                face_quality_reason=face_usability.quality_reason,
+                per_region_brightness=face_usability.per_region_brightness,
+                brightness_uniformity=face_usability.brightness_uniformity,
+                illumination_score=face_usability.illumination_score,
+                global_face_brightness=face_usability.global_face_brightness,
+                shadow_asymmetry=face_usability.shadow_asymmetry,
+                underexposed_regions=face_usability.underexposed_regions,
+                overexposed_regions=face_usability.overexposed_regions,
                 critical_occ=face_usability.occluded,
                 critical_occ_score=face_usability.occlusion_score,
                 critical_occ_regions=face_usability.occluded_regions,
                 critical_region_visibility=face_usability.visibility_scores,
+                critical_region_reasons=face_usability.region_reasons,
+                blocking_regions=face_usability.blocking_regions,
+                suspicious_regions=face_usability.suspicious_regions,
+                physical_occlusion_score=face_usability.physical_occlusion_score,
+                physical_occlusion_regions=face_usability.physical_occlusion_regions,
+                physical_occlusion_reason=face_usability.physical_occlusion_reason,
                 liveness_skipped_due_to_face_usability=False,
+                liveness_skipped_reason=face_usability.liveness_skipped_reason,
                 preview_bbox=bounding_box,
                 critical_occ_streak=face_usability.occlusion_streak,
+                quality_streak=face_usability.quality_streak,
                 critical_clear_streak=face_usability.clear_streak,
             )
         )
@@ -1760,6 +1920,13 @@ class LivenessPreviewFrameProcessor:
             frame_timestamp=frame_timestamp,
         )
         details.update(device_spoof.to_dict())
+        self._rppg_analyzer.add_frame(face_region)
+        rppg = self._rppg_analyzer.analyze()
+        details["rppg_score"] = float(rppg.get("score") or 0.5)
+        details["rppg_bpm"] = float(rppg.get("bpm") or 0.0)
+        details["rppg_signal_strength"] = float(rppg.get("signal_strength") or 0.0)
+        details["rppg_reason"] = str(rppg.get("reason") or "insufficient_frames")
+        details["rppg_frame_count"] = int(rppg.get("frame_count") or 0)
         return FrameMetrics(
             timestamp=float(frame_timestamp or time.time()),
             face_detected=True,
@@ -1804,30 +1971,98 @@ class LivenessPreviewFrameProcessor:
         face_usability_reason: str,
         face_usability_state: str,
         face_usability_blocked: bool,
+        face_usability_override_status: Optional[str],
+        face_quality_gate_status: str,
+        face_quality_reason: str,
+        per_region_brightness: dict[str, float],
+        brightness_uniformity: float,
+        illumination_score: float,
+        global_face_brightness: float,
+        shadow_asymmetry: float,
+        underexposed_regions: tuple[str, ...],
+        overexposed_regions: tuple[str, ...],
         critical_occ: bool,
         critical_occ_score: float,
         critical_occ_regions: tuple[str, ...],
         critical_region_visibility: dict[str, float],
+        critical_region_reasons: dict[str, str],
+        blocking_regions: tuple[str, ...],
+        suspicious_regions: tuple[str, ...],
         liveness_skipped_due_to_face_usability: bool,
+        liveness_skipped_reason: str,
+        physical_occlusion_score: float,
+        physical_occlusion_regions: tuple[str, ...],
+        physical_occlusion_reason: str,
         preview_bbox: Optional[tuple[int, int, int, int]],
         critical_occ_streak: int = 0,
+        quality_streak: int = 0,
         critical_clear_streak: int = 0,
     ) -> dict[str, Any]:
+        left_eye_score = float(critical_region_visibility.get("left_eye", 0.0))
+        right_eye_score = float(critical_region_visibility.get("right_eye", 0.0))
+        eye_visibility_score = min(left_eye_score, right_eye_score)
+        nose_visibility_score = float(critical_region_visibility.get("nose", 0.0))
+        mouth_visibility_score = float(critical_region_visibility.get("mouth", 0.0))
+        eye_visible = eye_visibility_score >= 0.60
+        nose_visible = nose_visibility_score >= 0.65
+        mouth_visible = mouth_visibility_score >= 0.65
         details: dict[str, Any] = {
             "face_usable": 1.0 if face_usable else 0.0,
             "face_usability_reason": face_usability_reason,
             "face_usability_state": face_usability_state,
             "face_usability_blocked": 1.0 if face_usability_blocked else 0.0,
+            "face_usability_override_status": face_usability_override_status or "-",
+            "face_quality_gate_status": face_quality_gate_status,
+            "face_quality_reason": face_quality_reason,
+            "illumination_gate_failed": 1.0 if face_quality_gate_status == "LOW_QUALITY" else 0.0,
+            "illumination_score": float(illumination_score),
+            "global_face_brightness": float(global_face_brightness),
+            "brightness_uniformity": float(brightness_uniformity),
+            "shadow_asymmetry": float(shadow_asymmetry),
+            "underexposed_regions": list(underexposed_regions),
+            "overexposed_regions": list(overexposed_regions),
+            "low_quality_regions": list(dict.fromkeys([*underexposed_regions, *overexposed_regions])),
+            "eye_visible": 1.0 if eye_visible else 0.0,
+            "nose_visible": 1.0 if nose_visible else 0.0,
+            "mouth_visible": 1.0 if mouth_visible else 0.0,
+            "eye_visibility_score": eye_visibility_score,
+            "nose_visibility_score": nose_visibility_score,
+            "mouth_visibility_score": mouth_visibility_score,
+            "eye_occ_reason": (
+                critical_region_reasons.get("left_eye")
+                if left_eye_score <= right_eye_score
+                else critical_region_reasons.get("right_eye")
+            )
+            or "-",
+            "nose_occ_reason": critical_region_reasons.get("nose", "-"),
+            "mouth_occ_reason": critical_region_reasons.get("mouth", "-"),
             "critical_occ": 1.0 if critical_occ else 0.0,
             "critical_occ_score": float(critical_occ_score),
             "critical_occ_regions": list(critical_occ_regions),
+            "quality_streak": float(quality_streak),
             "critical_occ_streak": float(critical_occ_streak),
             "critical_clear_streak": float(critical_clear_streak),
             "critical_occ_state": face_usability_state,
             "critical_occ_reason": face_usability_reason,
             "critical_region_visibility": dict(critical_region_visibility),
+            "critical_region_reasons": dict(critical_region_reasons),
+            "physical_occlusion_score": float(physical_occlusion_score),
+            "physical_occlusion_regions": list(physical_occlusion_regions),
+            "physical_occlusion_reason": physical_occlusion_reason,
+            "physical_occlusion_confirmed": 1.0 if bool(physical_occlusion_regions) and face_usability_reason == "critical_face_region_occluded" else 0.0,
+            "final_gate_priority": (
+                "PHYSICAL_OCCLUSION"
+                if face_usability_reason == "critical_face_region_occluded"
+                else "ILLUMINATION_QUALITY"
+                if face_quality_gate_status == "LOW_QUALITY"
+                else "CLEAR"
+            ),
             "liveness_skipped_due_to_face_usability": 1.0 if liveness_skipped_due_to_face_usability else 0.0,
+            "liveness_skipped_reason": liveness_skipped_reason,
+            "skipped_liveness_reason": liveness_skipped_reason,
         }
+        for region_name, brightness in per_region_brightness.items():
+            details[f"face_region_brightness_{region_name}"] = float(brightness)
         for region_name in ("left_eye", "right_eye", "nose", "mouth", "lower_face"):
             details[f"critical_vis_{region_name}"] = float(critical_region_visibility.get(region_name, 0.0))
         if preview_bbox is not None:
@@ -1836,6 +2071,14 @@ class LivenessPreviewFrameProcessor:
             details["preview_bbox_w"] = float(preview_bbox[2])
             details["preview_bbox_h"] = float(preview_bbox[3])
         return details
+
+    @staticmethod
+    def _face_usability_error_message(reason: str) -> str:
+        if reason in {"poor_face_illumination", "uneven_face_lighting"}:
+            return "Please improve lighting on your face."
+        if reason == "recovering_face_usability":
+            return "Please hold still while face visibility recovers."
+        return "Please keep your full face visible."
 
     def _compute_preview_frame_active_evidence(
         self,
@@ -2135,6 +2378,11 @@ class LiveLivenessPreview:
                     f"reflect_glossy={_format_optional(_maybe_float(frame_metrics.details.get('reflection_glossy_patch_ratio')))}",
                     f"flicker={_format_optional(_device_spoof_value(frame_metrics, 'flicker_risk'))}",
                     f"device_replay={_format_optional(_device_spoof_value(frame_metrics, 'device_replay_risk'))}",
+                    f"rppg_score={_format_optional(_maybe_float(frame_metrics.details.get('rppg_score')))}",
+                    f"rppg_bpm={_format_optional(_maybe_float(frame_metrics.details.get('rppg_bpm')))}",
+                    f"rppg_sig={_format_optional(_maybe_float(frame_metrics.details.get('rppg_signal_strength')))}",
+                    f"rppg_n={int(_maybe_float(frame_metrics.details.get('rppg_frame_count')) or 0)}",
+                    f"rppg_reason={frame_metrics.details.get('rppg_reason') or '-'}",
                     f"sf_hi={int(_is_screen_frame_high(frame_metrics))}",
                     f"moire_hi={int(_is_moire_high(frame_metrics))}",
                     f"depth_hi={int(_is_depth_flat(frame_metrics))}",
@@ -2152,7 +2400,32 @@ class LiveLivenessPreview:
                     f"face_usability_reason={aggregate.face_usability_reason}",
                     f"face_usability_state={aggregate.face_usability_state}",
                     f"face_usability_blocked={int(aggregate.face_usability_blocked)}",
+                    f"face_quality_gate_status={frame_metrics.details.get('face_quality_gate_status') or '-'}",
+                    f"face_quality_reason={frame_metrics.details.get('face_quality_reason') or '-'}",
+                    f"illumination_gate_failed={int(bool(_maybe_float(frame_metrics.details.get('illumination_gate_failed')) or 0.0))}",
+                    f"illumination_score={_format_optional(_maybe_float(frame_metrics.details.get('illumination_score')))}",
+                    f"global_face_brightness={_format_optional(_maybe_float(frame_metrics.details.get('global_face_brightness')))}",
+                    f"brightness_uniformity={_format_optional(_maybe_float(frame_metrics.details.get('brightness_uniformity')))}",
+                    f"shadow_asymmetry={_format_optional(_maybe_float(frame_metrics.details.get('shadow_asymmetry')))}",
+                    f"low_quality_regions={','.join(frame_metrics.details.get('low_quality_regions') or []) if frame_metrics.details.get('low_quality_regions') else '-'}",
+                    f"underexposed_regions={','.join(frame_metrics.details.get('underexposed_regions') or []) if frame_metrics.details.get('underexposed_regions') else '-'}",
+                    f"overexposed_regions={','.join(frame_metrics.details.get('overexposed_regions') or []) if frame_metrics.details.get('overexposed_regions') else '-'}",
+                    f"eye_visible={int(bool(_maybe_float(frame_metrics.details.get('eye_visible')) or 0.0))}",
+                    f"nose_visible={int(bool(_maybe_float(frame_metrics.details.get('nose_visible')) or 0.0))}",
+                    f"mouth_visible={int(bool(_maybe_float(frame_metrics.details.get('mouth_visible')) or 0.0))}",
+                    f"eye_visibility_score={_format_optional(_maybe_float(frame_metrics.details.get('eye_visibility_score')))}",
+                    f"nose_visibility_score={_format_optional(_maybe_float(frame_metrics.details.get('nose_visibility_score')))}",
+                    f"mouth_visibility_score={_format_optional(_maybe_float(frame_metrics.details.get('mouth_visibility_score')))}",
+                    f"eye_occ_reason={frame_metrics.details.get('eye_occ_reason') or '-'}",
+                    f"nose_occ_reason={frame_metrics.details.get('nose_occ_reason') or '-'}",
+                    f"mouth_occ_reason={frame_metrics.details.get('mouth_occ_reason') or '-'}",
+                    f"physical_occlusion_score={_format_optional(_maybe_float(frame_metrics.details.get('physical_occlusion_score')))}",
+                    f"physical_occlusion_regions={','.join(frame_metrics.details.get('physical_occlusion_regions') or []) if frame_metrics.details.get('physical_occlusion_regions') else '-'}",
+                    f"physical_occlusion_reason={frame_metrics.details.get('physical_occlusion_reason') or '-'}",
+                    f"physical_occlusion_confirmed={int(bool(_maybe_float(frame_metrics.details.get('physical_occlusion_confirmed')) or 0.0))}",
+                    f"final_gate_priority={frame_metrics.details.get('final_gate_priority') or '-'}",
                     f"liveness_skipped_due_to_face_usability={int(aggregate.liveness_skipped_due_to_face_usability)}",
+                    f"liveness_skipped_reason={frame_metrics.details.get('liveness_skipped_reason') or '-'}",
                     f"face_quality={_format_optional(frame_metrics.face_quality)}",
                     f"face_size={_format_optional(frame_metrics.face_size_ratio)}",
                     f"brightness={frame_metrics.brightness:.1f}",
@@ -2207,6 +2480,11 @@ class LiveLivenessPreview:
                     f"critical_occ={int(aggregate.critical_occ)}",
                     f"critical_occ_score={aggregate.critical_occ_score:.2f}",
                     f"critical_occ_regions={','.join(aggregate.critical_occ_regions) if aggregate.critical_occ_regions else '-'}",
+                    "critical_region_visibility="
+                    + ",".join(
+                        f"{region}:{aggregate.critical_region_visibility.get(region, 0.0):.2f}"
+                        for region in ("left_eye", "right_eye", "nose", "mouth", "lower_face")
+                    ),
                     f"critical_occ_streak={aggregate.critical_occ_streak}",
                     f"critical_clear_streak={aggregate.critical_clear_streak}",
                     f"critical_occ_state={aggregate.critical_occ_state}",
@@ -2316,6 +2594,10 @@ class LiveLivenessPreview:
                     ("Pre-flash cap.", str(int(_maybe_float(frame_metrics.details.get("pre_flash_captured")) or 0.0))),
                     ("Flash frame cap.", str(int(_maybe_float(frame_metrics.details.get("flash_frame_captured")) or 0.0))),
                     ("Device replay", _format_optional(_device_spoof_value(frame_metrics, "device_replay_risk"))),
+                    ("rPPG score", _format_optional(_maybe_float(frame_metrics.details.get("rppg_score")))),
+                    ("rPPG BPM", _format_optional(_maybe_float(frame_metrics.details.get("rppg_bpm")))),
+                    ("rPPG signal", _format_optional(_maybe_float(frame_metrics.details.get("rppg_signal_strength")))),
+                    ("rPPG frames", str(int(_maybe_float(frame_metrics.details.get("rppg_frame_count")) or 0))),
                     ("Screen hi", str(int(_is_screen_frame_high(frame_metrics)))),
                     ("Moire hi", str(int(_is_moire_high(frame_metrics)))),
                     ("Depth hi", str(int(_is_depth_flat(frame_metrics)))),
@@ -2856,6 +3138,15 @@ def _spoof_support_count(frame_metrics: FrameMetrics) -> int:
     return _spoof_support_count_from_details(frame_metrics.details)
 
 
+def _is_rppg_no_pulse(details: dict[str, Any]) -> bool:
+    rppg_frame_count = int(_maybe_float(details.get("rppg_frame_count")) or 0)
+    rppg_signal_strength = _maybe_float(details.get("rppg_signal_strength")) or 0.0
+    rppg_score = _maybe_float(details.get("rppg_score")) or 0.5
+    if rppg_frame_count < 60:
+        return False
+    return rppg_signal_strength < 0.06 and rppg_score < 0.25
+
+
 def _spoof_support_count_from_details(details: dict[str, Any]) -> int:
     strict_exam = _is_strict_exam_profile(details)
     support_flags = (
@@ -2867,6 +3158,7 @@ def _spoof_support_count_from_details(details: dict[str, Any]) -> int:
         strict_exam and _is_detail_cutout_high(details),
         _is_detail_uniface_negative(details),
         _is_detail_depth_flat(details),
+        _is_rppg_no_pulse(details),
     )
     return int(sum(1 for flag in support_flags if flag))
 
@@ -3530,6 +3822,8 @@ def _quality_block_reason(frame_metrics: FrameMetrics) -> str:
 
 
 def _is_quality_blocked(frame_metrics: FrameMetrics, aggregate: AggregatedMetrics) -> bool:
+    if aggregate.decision_state == "LOW_QUALITY":
+        return True
     return aggregate.decision_state == "INSUFFICIENT_EVIDENCE" and _quality_block_reason(frame_metrics) != "-"
 
 

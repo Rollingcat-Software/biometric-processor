@@ -1,11 +1,13 @@
 """Live camera analysis use case for real-time frame processing."""
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 import cv2
 import numpy as np
 
+from app.application.services.device_spoof_risk_evaluator import DeviceSpoofRiskEvaluator
+from app.application.services.hybrid_fusion_evaluator import HybridFusionEvaluator
 from app.api.schemas.live_analysis import (
     AnalysisMode,
     LiveAnalysisResponse,
@@ -18,6 +20,7 @@ from app.api.schemas.live_analysis import (
     SearchResult as LiveSearchResult,
     LandmarksResult,
 )
+from app.core.config import Settings, get_settings
 from app.domain.exceptions.face_errors import FaceNotDetectedError, MultipleFacesError
 from app.domain.exceptions.verification_errors import EmbeddingNotFoundError
 from app.domain.interfaces.face_detector import IFaceDetector
@@ -60,6 +63,9 @@ class LiveCameraAnalysisUseCase:
         embedding_extractor: Optional[IEmbeddingExtractor] = None,
         embedding_repository: Optional[IEmbeddingRepository] = None,
         similarity_calculator: Optional[ISimilarityCalculator] = None,
+        settings: Optional[Settings] = None,
+        device_spoof_risk_evaluator: Optional[DeviceSpoofRiskEvaluator] = None,
+        hybrid_fusion_evaluator: Optional[HybridFusionEvaluator] = None,
     ):
         self._detector = detector
         self._quality_assessor = quality_assessor
@@ -70,6 +76,15 @@ class LiveCameraAnalysisUseCase:
         self._extractor = embedding_extractor
         self._repository = embedding_repository
         self._similarity = similarity_calculator
+        self._settings = settings or get_settings()
+        self._device_spoof_risk_evaluator = device_spoof_risk_evaluator
+        if self._settings.LIVENESS_FUSION_ENABLED and self._device_spoof_risk_evaluator is None:
+            self._device_spoof_risk_evaluator = DeviceSpoofRiskEvaluator()
+        self._hybrid_fusion_evaluator = hybrid_fusion_evaluator
+        if self._settings.LIVENESS_FUSION_ENABLED and self._hybrid_fusion_evaluator is None:
+            self._hybrid_fusion_evaluator = HybridFusionEvaluator(
+                threshold=self._settings.LIVENESS_FUSION_THRESHOLD
+            )
 
         logger.info("LiveCameraAnalysisUseCase initialized")
 
@@ -103,14 +118,15 @@ class LiveCameraAnalysisUseCase:
             # Step 1: Detect face (required for all modes)
             try:
                 detection = await self._detector.detect(image)
+                bbox = self._extract_detection_bbox(detection)
                 response.face = FaceDetectionResult(
                     detected=True,
                     confidence=detection.confidence,
                     bbox={
-                        "x": detection.x,
-                        "y": detection.y,
-                        "width": detection.width,
-                        "height": detection.height,
+                        "x": bbox[0],
+                        "y": bbox[1],
+                        "width": bbox[2],
+                        "height": bbox[3],
                     },
                     landmarks=detection.landmarks if hasattr(detection, 'landmarks') else None,
                 )
@@ -172,7 +188,11 @@ class LiveCameraAnalysisUseCase:
                 AnalysisMode.FULL_ANALYSIS,
             ]:
                 if self._liveness_detector:
-                    liveness = await self._analyze_liveness(face_region)
+                    liveness = await self._analyze_liveness(
+                        face_image=face_region,
+                        frame_image=image,
+                        face_bounding_box=bbox,
+                    )
                     response.liveness = liveness
                 else:
                     response.liveness = LivenessResult(
@@ -336,7 +356,13 @@ class LiveCameraAnalysisUseCase:
             emotion_scores=None,
         )
 
-    async def _analyze_liveness(self, face_image: np.ndarray) -> LivenessResult:
+    async def _analyze_liveness(
+        self,
+        *,
+        face_image: np.ndarray,
+        frame_image: np.ndarray,
+        face_bounding_box: Optional[tuple[int, int, int, int]],
+    ) -> LivenessResult:
         """Analyze liveness from image.
 
         Args:
@@ -477,6 +503,38 @@ class LiveCameraAnalysisUseCase:
                     scores["liveness_score"] = float(effective_score)
                     scores["rppg_adjusted_liveness_score"] = float(effective_score)
 
+            if self._settings.LIVENESS_FUSION_ENABLED and self._hybrid_fusion_evaluator is not None:
+                fusion_result = self._apply_hybrid_fusion(
+                    frame_image=frame_image,
+                    face_image=face_image,
+                    face_bounding_box=face_bounding_box,
+                    detector_result=liveness_result,
+                    rppg_result=rppg_result,
+                )
+                if fusion_result is not None:
+                    effective_is_live = not fusion_result.is_spoof
+                    effective_confidence = fusion_result.confidence
+                    effective_score = (1.0 - fusion_result.spoof_score) * 100.0
+                    method = "hybrid_fusion"
+                    checks["hybrid_fusion_enabled"] = True
+                    checks["hybrid_fusion_is_spoof"] = fusion_result.is_spoof
+                    scores.setdefault("base_liveness_score", float(liveness_result.score))
+                    scores["hybrid_fusion_spoof_score"] = fusion_result.spoof_score * 100.0
+                    scores["hybrid_fusion_live_score"] = effective_score
+                    scores["liveness_score"] = effective_score
+                    metadata["hybrid_fusion_reasoning"] = fusion_result.reasoning
+                    metadata["hybrid_fusion_breakdown"] = fusion_result.breakdown
+                    logger.info(
+                        "Hybrid fusion result: %s",
+                        fusion_result.reasoning,
+                        extra={
+                            "spoof_score": fusion_result.spoof_score,
+                            "breakdown": fusion_result.breakdown,
+                        },
+                    )
+            else:
+                checks["hybrid_fusion_enabled"] = False
+
             return LivenessResult(
                 is_live=effective_is_live,
                 confidence=effective_confidence,
@@ -497,6 +555,99 @@ class LiveCameraAnalysisUseCase:
                 scores={},
                 metadata={"error": str(e)},
             )
+
+    def _apply_hybrid_fusion(
+        self,
+        *,
+        frame_image: np.ndarray,
+        face_image: np.ndarray,
+        face_bounding_box: Optional[tuple[int, int, int, int]],
+        detector_result,
+        rppg_result: Optional[dict[str, float | str | None | int]],
+    ):
+        if self._hybrid_fusion_evaluator is None:
+            return None
+
+        device_spoof_details = self._analyze_device_spoof(
+            frame_image=frame_image,
+            face_image=face_image,
+            face_bounding_box=face_bounding_box,
+        )
+        pretrained_spoof_score = self._resolve_pretrained_spoof_score(detector_result)
+        custom_signals = self._build_hybrid_custom_signals(
+            device_spoof_details=device_spoof_details,
+            rppg_result=rppg_result,
+        )
+        return self._hybrid_fusion_evaluator.evaluate(
+            pretrained_spoof_score=pretrained_spoof_score,
+            custom_signals=custom_signals,
+        )
+
+    def _analyze_device_spoof(
+        self,
+        *,
+        frame_image: np.ndarray,
+        face_image: np.ndarray,
+        face_bounding_box: Optional[tuple[int, int, int, int]],
+    ) -> dict[str, Any]:
+        if self._device_spoof_risk_evaluator is None:
+            return {}
+        assessment = self._device_spoof_risk_evaluator.evaluate(
+            frame_bgr=frame_image,
+            face_region_bgr=face_image,
+            face_bounding_box=face_bounding_box,
+        )
+        return {
+            **assessment.to_dict(),
+            **assessment.details,
+        }
+
+    def _build_hybrid_custom_signals(
+        self,
+        *,
+        device_spoof_details: dict[str, Any],
+        rppg_result: Optional[dict[str, float | str | None | int]],
+    ) -> dict[str, Any]:
+        rppg_live_signal: Optional[bool] = None
+        rppg_available = False
+        if rppg_result is not None:
+            rppg_available = rppg_result["reason"] != "insufficient_frames"
+            if rppg_available:
+                bpm = rppg_result["bpm"]
+                bpm_ok = bpm is None or 40.0 <= float(bpm) <= 180.0
+                rppg_live_signal = bool(
+                    rppg_result["reason"] == "pulse_detected"
+                    and float(rppg_result["score"]) >= 0.60
+                    and float(rppg_result["signal_strength"]) >= 0.25
+                    and bpm_ok
+                )
+
+        return {
+            "flash_response_score": device_spoof_details.get("flash_response_score"),
+            "flash_response_samples": device_spoof_details.get("flash_response_sample_count"),
+            "rppg_available": rppg_available,
+            "rppg_live_signal": rppg_live_signal,
+            "rppg_score": None if rppg_result is None else rppg_result.get("score"),
+            "moire_score": device_spoof_details.get("moire_risk"),
+            "device_replay_score": device_spoof_details.get("device_replay_risk"),
+            "flicker_score": device_spoof_details.get("flicker_risk"),
+            "reflect_compact": device_spoof_details.get("reflection_compact_highlight_score"),
+        }
+
+    def _resolve_pretrained_spoof_score(self, detector_result) -> float:
+        details = detector_result.details or {}
+        if "pretrained_spoof_score" in details:
+            return self._clamp01(float(details["pretrained_spoof_score"]))
+
+        backend_score = details.get("backend_score")
+        if backend_score is not None:
+            return self._clamp01(1.0 - float(backend_score))
+
+        return self._clamp01(1.0 - (float(detector_result.score) / 100.0))
+
+    @staticmethod
+    def _clamp01(value: float) -> float:
+        return max(0.0, min(1.0, float(value)))
 
     def _analyze_rppg(
         self,
@@ -562,6 +713,17 @@ class LiveCameraAnalysisUseCase:
         safe_width = max(1, width)
         safe_height = max(1, height)
         return [(landmark.x / safe_width, landmark.y / safe_height) for landmark in landmarks]
+
+    def _extract_detection_bbox(self, detection) -> tuple[int, int, int, int]:
+        if hasattr(detection, "bounding_box") and detection.bounding_box is not None:
+            x, y, width, height = detection.bounding_box
+            return int(x), int(y), int(width), int(height)
+        return (
+            int(getattr(detection, "x")),
+            int(getattr(detection, "y")),
+            int(getattr(detection, "width")),
+            int(getattr(detection, "height")),
+        )
 
     def _check_enrollment_ready(
         self, response: LiveAnalysisResponse, quality_threshold: float

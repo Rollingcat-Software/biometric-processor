@@ -2,11 +2,11 @@
 
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import cv2
 import numpy as np
 import pytest
-from unittest.mock import Mock
 
 from app.application.services.background_active_reaction_evaluator import (
     BackgroundActiveReactionEvaluator,
@@ -62,7 +62,22 @@ class _StaticLivenessDetector:
         return 80.0
 
 
-def _preview_face_frame(*, occlude_lower_face: bool = False) -> np.ndarray:
+def _preview_face_frame(
+    *,
+    occlude_lower_face: bool = False,
+    occlude_nose: bool = False,
+    occlude_mouth: bool = False,
+    occlude_eyes: bool = False,
+    dark_face: bool = False,
+    shadow_left: bool = False,
+) -> np.ndarray:
+    # face_roi = frame[20:140, 20:140] (120x120) for bbox=(20, 20, 120, 120)
+    # Ratio regions → face_roi → frame coords (with 1-2px margin):
+    #   mouth      → frame[95:116, 53:108]
+    #   nose       → frame[61:92,  66:94]
+    #   left_eye   → frame[48:68,  36:67]
+    #   right_eye  → frame[48:68,  93:124]
+    #   lower_face → frame[86:129, 41:120]
     frame = np.full((160, 160, 3), (92, 126, 168), dtype=np.uint8)
     frame[20:140, 20:140] = (122, 162, 201)
     frame[30:130:5, 30:130:6] = (138, 176, 214)
@@ -71,8 +86,19 @@ def _preview_face_frame(*, occlude_lower_face: bool = False) -> np.ndarray:
     cv2.line(frame, (80, 74), (80, 98), (80, 105, 130), 3)
     cv2.ellipse(frame, (80, 110), (24, 10), 0, 0, 180, (44, 58, 84), 3)
     frame[86:134:6, 34:126:7] = (150, 187, 223)
+    if occlude_eyes:
+        frame[48:68, 36:67] = (40, 40, 40)
+        frame[48:68, 93:124] = (40, 40, 40)
+    if occlude_nose:
+        frame[61:92, 66:94] = (40, 40, 40)
+    if occlude_mouth:
+        frame[95:116, 53:108] = (40, 40, 40)
     if occlude_lower_face:
-        frame[88:140, 34:126] = (40, 40, 40)
+        frame[86:129, 41:120] = (40, 40, 40)
+    if dark_face:
+        frame[20:140, 20:140] = np.clip(frame[20:140, 20:140] * 0.30, 0, 255).astype(np.uint8)
+    if shadow_left:
+        frame[20:140, 20:80] = np.clip(frame[20:140, 20:80] * 0.40, 0, 255).astype(np.uint8)
     return frame
 
 
@@ -104,6 +130,7 @@ def _force_occluded_critical_details() -> dict[str, object]:
         "critical_occ_score": 0.68,
         "critical_occ_regions": ["mouth", "lower_face", "nose"],
         "critical_occ_reason": "critical_region_occluded",
+        "face_usability_override_status": "NO_FACE",
         "critical_vis_left_eye": 0.88,
         "critical_vis_right_eye": 0.88,
         "critical_vis_nose": 0.22,
@@ -211,25 +238,179 @@ def test_preview_processor_skips_liveness_when_critical_region_is_occluded():
     liveness_detector = _StaticLivenessDetector(
         LivenessResult(is_live=True, score=91.0, challenge="blink", challenge_completed=True, confidence=0.91)
     )
-    landmark_detector = Mock()
     processor = LivenessPreviewFrameProcessor(
         face_detector=face_detector,
         liveness_detector=liveness_detector,
-        landmark_detector=landmark_detector,
+        landmark_detector=None,
         settings=settings,
     )
 
     result = processor.process_frame(_preview_face_frame(occlude_lower_face=True))
 
-    assert result.face_detected is False
+    assert result.face_detected is True
     assert result.raw_score == 0.0
     assert result.passive_score == 0.0
     assert result.active_score == 0.0
     assert result.details["face_usable"] == 0.0
     assert result.details["face_usability_reason"] == "critical_face_region_occluded"
+    assert result.details["face_usability_override_status"] == "INSUFFICIENT_EVIDENCE"
     assert result.details["liveness_skipped_due_to_face_usability"] == 1.0
     assert liveness_detector.calls == 0
-    assert landmark_detector.detect.call_count == 0
+
+
+def test_preview_processor_skips_liveness_when_nose_is_occluded():
+    settings = Settings(_env_file=None, JWT_ENABLED=False)
+    face_detector = _StaticFaceDetector(
+        FaceDetectionResult(found=True, bounding_box=(20, 20, 120, 120), landmarks=None, confidence=0.95)
+    )
+    liveness_detector = _StaticLivenessDetector(
+        LivenessResult(is_live=True, score=91.0, challenge="blink", challenge_completed=True, confidence=0.91)
+    )
+    processor = LivenessPreviewFrameProcessor(
+        face_detector=face_detector,
+        liveness_detector=liveness_detector,
+        landmark_detector=None,
+        settings=settings,
+    )
+
+    result = processor.process_frame(_preview_face_frame(occlude_nose=True))
+
+    assert result.details["face_usable"] == 0.0
+    assert result.details["nose_visible"] == 0.0
+    assert result.details["face_usability_reason"] == "critical_face_region_occluded"
+    assert "nose" in result.details["critical_occ_regions"]
+    assert liveness_detector.calls == 0
+
+
+def test_preview_processor_skips_liveness_when_mouth_is_occluded():
+    settings = Settings(_env_file=None, JWT_ENABLED=False)
+    face_detector = _StaticFaceDetector(
+        FaceDetectionResult(found=True, bounding_box=(20, 20, 120, 120), landmarks=None, confidence=0.95)
+    )
+    liveness_detector = _StaticLivenessDetector(
+        LivenessResult(is_live=True, score=91.0, challenge="blink", challenge_completed=True, confidence=0.91)
+    )
+    processor = LivenessPreviewFrameProcessor(
+        face_detector=face_detector,
+        liveness_detector=liveness_detector,
+        landmark_detector=None,
+        settings=settings,
+    )
+
+    result = processor.process_frame(_preview_face_frame(occlude_mouth=True))
+
+    assert result.details["face_usable"] == 0.0
+    assert result.details["mouth_visible"] == 0.0
+    assert result.details["face_usability_reason"] == "critical_face_region_occluded"
+    assert "mouth" in result.details["critical_occ_regions"] or "lower_face" in result.details["critical_occ_regions"]
+    assert liveness_detector.calls == 0
+
+
+def test_preview_processor_does_not_block_dark_face_as_low_quality():
+    # Darkness alone is face quality, not physical occlusion — should not block LIVE.
+    # The quality gate data is still collected, but it does not override usability.
+    settings = Settings(_env_file=None, JWT_ENABLED=False)
+    face_detector = _StaticFaceDetector(
+        FaceDetectionResult(found=True, bounding_box=(20, 20, 120, 120), landmarks=None, confidence=0.95)
+    )
+    liveness_detector = _StaticLivenessDetector(
+        LivenessResult(is_live=True, score=91.0, challenge="blink", challenge_completed=True, confidence=0.91)
+    )
+    processor = LivenessPreviewFrameProcessor(
+        face_detector=face_detector,
+        liveness_detector=liveness_detector,
+        landmark_detector=None,
+        settings=settings,
+    )
+
+    result = processor.process_frame(_preview_face_frame(dark_face=True))
+
+    assert result.details["face_usable"] == 1.0
+    assert result.details["face_usability_reason"] == "face_usable"
+    assert result.details["physical_occlusion_confirmed"] == 0.0
+    assert result.details["liveness_skipped_due_to_face_usability"] == 0.0
+    assert result.details.get("face_usability_override_status") != "LOW_QUALITY"
+    assert result.details["face_quality_gate_status"] == "LOW_QUALITY"
+    assert liveness_detector.calls == 1
+
+
+def test_preview_aggregator_does_not_block_illumination_low_quality():
+    # Illumination quality (shadow, uneven lighting) is a data signal only.
+    # It must NOT cause LOW_QUALITY decision state — only physical occlusion or
+    # truly unusable frames (too small, too blurry, extreme brightness) should block.
+    aggregator = TemporalLivenessAggregator(window_seconds=2.0, baseline_seconds=0.5, max_entries=20, ema_alpha=0.3)
+    frame = _frame_metrics(raw_score=79.0, confidence=0.74, timestamp=1.0)
+    dark_uneven = replace(
+        frame,
+        details={
+            **frame.details,
+            "face_quality_gate_status": "LOW_QUALITY",
+            "face_quality_reason": "uneven_face_lighting",
+            "illumination_gate_failed": 1.0,
+            "illumination_score": 0.82,
+            "brightness_uniformity": 0.69,
+            "shadow_asymmetry": 0.66,
+        },
+    )
+
+    result = aggregator.add(dark_uneven)
+
+    assert result.face_usable is True
+    assert result.low_quality is False
+    assert result.decision_state != "LOW_QUALITY"
+    assert result.face_usability_reason == "face_usable"
+    assert result.face_usability_blocked is False
+
+
+def test_preview_processor_does_not_block_shadowed_face_as_no_face():
+    settings = Settings(_env_file=None, JWT_ENABLED=False)
+    face_detector = _StaticFaceDetector(
+        FaceDetectionResult(found=True, bounding_box=(20, 20, 120, 120), landmarks=None, confidence=0.95)
+    )
+    liveness_detector = _StaticLivenessDetector(
+        LivenessResult(is_live=True, score=91.0, challenge="blink", challenge_completed=True, confidence=0.91)
+    )
+    processor = LivenessPreviewFrameProcessor(
+        face_detector=face_detector,
+        liveness_detector=liveness_detector,
+        landmark_detector=None,
+        settings=settings,
+    )
+
+    result = processor.process_frame(_preview_face_frame(shadow_left=True))
+
+    assert result.details["face_usable"] == 1.0
+    assert result.details["face_usability_reason"] == "face_usable"
+    assert result.details["physical_occlusion_confirmed"] == 0.0
+    assert result.details["liveness_skipped_due_to_face_usability"] == 0.0
+    assert result.details.get("face_usability_override_status") != "NO_FACE"
+    assert liveness_detector.calls == 1
+
+
+def test_preview_processor_prioritizes_physical_occlusion_over_low_quality():
+    settings = Settings(_env_file=None, JWT_ENABLED=False)
+    face_detector = _StaticFaceDetector(
+        FaceDetectionResult(found=True, bounding_box=(20, 20, 120, 120), landmarks=None, confidence=0.95)
+    )
+    liveness_detector = _StaticLivenessDetector(
+        LivenessResult(is_live=True, score=91.0, challenge="blink", challenge_completed=True, confidence=0.91)
+    )
+    processor = LivenessPreviewFrameProcessor(
+        face_detector=face_detector,
+        liveness_detector=liveness_detector,
+        landmark_detector=None,
+        settings=settings,
+    )
+
+    result = processor.process_frame(_preview_face_frame(occlude_mouth=True, occlude_nose=True, dark_face=True))
+
+    assert result.details["face_usability_reason"] == "critical_face_region_occluded"
+    assert result.details["face_usability_override_status"] == "INSUFFICIENT_EVIDENCE"
+    assert result.details["physical_occlusion_regions"] != []
+    assert result.details["physical_occlusion_confirmed"] == 1.0
+    assert result.details["final_gate_priority"] == "PHYSICAL_OCCLUSION"
+    assert result.details["skipped_liveness_reason"] == "critical_face_region_occluded"
+    assert liveness_detector.calls == 0
 
 
 def test_preview_processor_requires_clear_frames_before_resuming_after_occlusion():
@@ -250,16 +431,53 @@ def test_preview_processor_requires_clear_frames_before_resuming_after_occlusion
     blocked = processor.process_frame(_preview_face_frame(occlude_lower_face=True))
     recover_1 = processor.process_frame(_preview_face_frame())
     recover_2 = processor.process_frame(_preview_face_frame())
+    recover_3 = processor.process_frame(_preview_face_frame())
     recovered = processor.process_frame(_preview_face_frame())
 
     assert blocked.details["face_usability_reason"] == "critical_face_region_occluded"
+    assert blocked.details["face_usability_override_status"] == "INSUFFICIENT_EVIDENCE"
     assert recover_1.details["face_usability_reason"] == "recovering_face_usability"
     assert recover_2.details["face_usability_reason"] == "recovering_face_usability"
-    assert recover_1.face_detected is False
-    assert recover_2.face_detected is False
+    assert recover_3.details["face_usability_reason"] == "recovering_face_usability"
+    assert recover_1.details["face_usability_override_status"] == "INSUFFICIENT_EVIDENCE"
+    assert recover_2.details["face_usability_override_status"] == "INSUFFICIENT_EVIDENCE"
+    assert recover_3.details["face_usability_override_status"] == "INSUFFICIENT_EVIDENCE"
+    assert recover_1.face_detected is True
+    assert recover_2.face_detected is True
+    assert recover_3.face_detected is True
     assert recovered.face_detected is True
     assert recovered.details["face_usable"] == 1.0
+    assert recovered.details["face_usability_override_status"] == "-"
     assert recovered.details["liveness_skipped_due_to_face_usability"] == 0.0
+    assert liveness_detector.calls == 1
+
+
+def test_preview_processor_requires_long_recovery_after_persistent_occlusion_no_face():
+    settings = Settings(_env_file=None, JWT_ENABLED=False)
+    face_detector = _StaticFaceDetector(
+        FaceDetectionResult(found=True, bounding_box=(20, 20, 120, 120), landmarks=None, confidence=0.95)
+    )
+    liveness_detector = _StaticLivenessDetector(
+        LivenessResult(is_live=True, score=91.0, challenge="blink", challenge_completed=True, confidence=0.91)
+    )
+    processor = LivenessPreviewFrameProcessor(
+        face_detector=face_detector,
+        liveness_detector=liveness_detector,
+        landmark_detector=None,
+        settings=settings,
+    )
+
+    occluded_results = [processor.process_frame(_preview_face_frame(occlude_lower_face=True)) for _ in range(6)]
+    recovering_results = [processor.process_frame(_preview_face_frame()) for _ in range(4)]
+    recovered = processor.process_frame(_preview_face_frame())
+
+    assert occluded_results[1].details["face_usability_override_status"] == "INSUFFICIENT_EVIDENCE"
+    assert occluded_results[-1].details["face_usability_override_status"] == "NO_FACE"
+    assert occluded_results[-1].details["face_usability_state"] == "OCCLUDED_NO_FACE"
+    assert all(result.details["face_usability_reason"] == "recovering_face_usability" for result in recovering_results)
+    assert all(result.details["face_usability_override_status"] == "INSUFFICIENT_EVIDENCE" for result in recovering_results)
+    assert recovered.details["face_usable"] == 1.0
+    assert recovered.details["face_usability_override_status"] == "-"
     assert liveness_detector.calls == 1
 
 
@@ -1253,8 +1471,8 @@ def test_preview_debug_decision_layer_adds_post_no_face_cooldown():
 
     assert no_face_result.decision_state == "NO_FACE"
     assert live_result.decision_state == "INSUFFICIENT_EVIDENCE"
-    assert live_result.no_face_cooldown_active is True
     # POST_NO_FACE_COOLDOWN is added only when a LIVE decision is blocked; with 1 frame it stays INSUFFICIENT_EVIDENCE
+    assert live_result.no_face_cooldown_active is False
 
 
 
@@ -1807,6 +2025,59 @@ def test_critical_region_occlusion_override_marks_blocked_frames_as_no_face():
     assert blocked_result.face_usability_blocked is True
     assert blocked_result.liveness_skipped_due_to_face_usability is True
     assert blocked_result.original_status_before_occ_gate != blocked_result.final_status_after_occ_gate
+
+
+def test_critical_region_occlusion_override_marks_temporary_block_as_insufficient_evidence():
+    aggregator = TemporalLivenessAggregator(
+        window_seconds=2.0,
+        baseline_seconds=0.5,
+        max_entries=20,
+        ema_alpha=0.3,
+    )
+
+    visible = _frame_metrics(raw_score=92.0, confidence=0.88, timestamp=1.0)
+    visible = FrameMetrics(
+        **{
+            **visible.__dict__,
+            "details": {
+                **visible.details,
+                "smile": 48.0,
+            },
+        }
+    )
+    for index in range(6):
+        aggregator.add(
+            FrameMetrics(
+                **{
+                    **visible.__dict__,
+                    "timestamp": 1.0 + index * 0.1,
+                }
+            )
+        )
+
+    blocked_result = aggregator.add(
+        FrameMetrics(
+            **{
+                **visible.__dict__,
+                "timestamp": 1.8,
+                "details": {
+                    **visible.details,
+                    **_force_occluded_critical_details(),
+                    "face_usable": 0.0,
+                    "face_usability_reason": "critical_face_region_occluded",
+                    "face_usability_state": "OCCLUDED_CONFIRMED",
+                    "face_usability_blocked": 1.0,
+                    "face_usability_override_status": "INSUFFICIENT_EVIDENCE",
+                    "liveness_skipped_due_to_face_usability": 1.0,
+                },
+            }
+        )
+    )
+
+    assert blocked_result.decision_state == "INSUFFICIENT_EVIDENCE"
+    assert blocked_result.final_status_after_occ_gate == "INSUFFICIENT_EVIDENCE"
+    assert blocked_result.face_usability_blocked is True
+    assert blocked_result.liveness_skipped_due_to_face_usability is True
 
 
 def test_critical_region_occlusion_skips_liveness_scores_in_debug_aggregate():

@@ -83,6 +83,32 @@ All documentation is organized in the `docs/` directory:
 - **Configurable Thresholds**: Environment-based configuration
 - **Comprehensive Error Handling**: Domain-specific exceptions with proper HTTP mapping
 
+## Hybrid Fusion Liveness
+
+The live analysis pipeline supports an optional hybrid fusion layer that combines:
+
+- **Backend detector output**: the primary liveness backend score, including UniFace MiniFASNet when enabled
+- **Flash response**: replay suspicion from flash-based skin response metrics
+- **rPPG**: pulse-like temporal color variation from the face ROI
+- **Moire pattern risk**: display artifact detection
+- **Device replay risk**: fused replay/device cues from the full frame
+
+Enable it with:
+
+```env
+LIVENESS_FUSION_ENABLED=true
+LIVENESS_FUSION_THRESHOLD=0.55
+```
+
+When enabled, the `live_camera_analysis` response exposes:
+
+- `checks.hybrid_fusion_enabled`
+- `checks.hybrid_fusion_is_spoof`
+- `scores.hybrid_fusion_spoof_score`
+- `scores.hybrid_fusion_live_score`
+- `metadata.hybrid_fusion_reasoning`
+- `metadata.hybrid_fusion_breakdown`
+
 ## Architecture
 
 The project follows **Clean Architecture** principles with four distinct layers:

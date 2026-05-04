@@ -28,6 +28,8 @@ class DeviceSpoofRiskAssessment:
     flash_response_strength: float
     flash_response_consistency: float
     flash_replay_risk: float
+    flash_channel_response: float
+    flash_peak_shift: float
     hole_cutout_risk: float
     focal_blur_anomaly_risk: float
     cutout_spoof_support: float
@@ -45,6 +47,8 @@ class DeviceSpoofRiskAssessment:
             "flash_response_strength": self.flash_response_strength,
             "flash_response_consistency": self.flash_response_consistency,
             "flash_replay_risk": self.flash_replay_risk,
+            "flash_channel_response": self.flash_channel_response,
+            "flash_peak_shift": self.flash_peak_shift,
             "hole_cutout_risk": self.hole_cutout_risk,
             "focal_blur_anomaly_risk": self.focal_blur_anomaly_risk,
             "cutout_spoof_support": self.cutout_spoof_support,
@@ -154,6 +158,8 @@ class DeviceSpoofRiskEvaluator:
                 flash_response_strength=0.0,
                 flash_response_consistency=0.0,
                 flash_replay_risk=0.0,
+                flash_channel_response=0.0,
+                flash_peak_shift=0.0,
                 hole_cutout_risk=0.0,
                 focal_blur_anomaly_risk=0.0,
                 cutout_spoof_support=0.0,
@@ -203,6 +209,8 @@ class DeviceSpoofRiskEvaluator:
             flash_response_strength=flash_metrics["flash_response_strength"],
             flash_response_consistency=flash_metrics["flash_response_consistency"],
             flash_replay_risk=flash_metrics["flash_replay_risk"],
+            flash_channel_response=float(flash_metrics.get("flash_channel_response") or 0.0),
+            flash_peak_shift=float(flash_metrics.get("flash_peak_shift") or 0.0),
             hole_cutout_risk=cutout_assessment.hole_cutout_risk,
             focal_blur_anomaly_risk=cutout_assessment.focal_blur_anomaly_risk,
             cutout_spoof_support=cutout_assessment.cutout_spoof_support,
@@ -240,6 +248,8 @@ class DeviceSpoofRiskEvaluator:
             flash_response_strength=assessment.flash_response_strength,
             flash_response_consistency=assessment.flash_response_consistency,
             flash_replay_risk=assessment.flash_replay_risk,
+            flash_channel_response=assessment.flash_channel_response,
+            flash_peak_shift=assessment.flash_peak_shift,
             hole_cutout_risk=assessment.hole_cutout_risk,
             focal_blur_anomaly_risk=assessment.focal_blur_anomaly_risk,
             cutout_spoof_support=assessment.cutout_spoof_support,
@@ -598,20 +608,32 @@ class DeviceSpoofRiskEvaluator:
 
     def _summarize_flash_history(self, *, include_current: bool = False) -> dict[str, float]:
         entries = list(self._flash_history)
+        current_peak_shift = 0.0
         if include_current and self._flash_state is not None:
-            entries.append(self._summarize_flash_state(self._flash_state))
+            # Only include current state in history when it has actual observations to avoid
+            # injecting flash_replay_risk=1.0 (worst-case default) before any frames are seen.
+            if self._flash_state.evaluated_samples > 0:
+                entries.append(self._summarize_flash_state(self._flash_state))
+            current_peak_shift = self._flash_state.peak_shift
         if not entries:
             return {
                 "flash_response_score": 0.0,
                 "flash_response_strength": 0.0,
                 "flash_response_consistency": 0.0,
                 "flash_replay_risk": 0.0,
+                "flash_channel_response": min(1.0, current_peak_shift / 0.18) if current_peak_shift > 0 else 0.0,
+                "flash_peak_shift": current_peak_shift,
             }
+        flash_channel_response = min(1.0, current_peak_shift / 0.18) if current_peak_shift > 0 else float(
+            np.mean([entry.response_strength for entry in entries])
+        )
         return {
             "flash_response_score": float(np.mean([entry.response_score for entry in entries])),
             "flash_response_strength": float(np.mean([entry.response_strength for entry in entries])),
             "flash_response_consistency": float(np.mean([entry.response_consistency for entry in entries])),
             "flash_replay_risk": float(np.mean([entry.replay_risk for entry in entries])),
+            "flash_channel_response": flash_channel_response,
+            "flash_peak_shift": current_peak_shift,
         }
 
     def _summarize_flash_state(self, state: _FlashChallengeState) -> _FlashChallengeResult:
@@ -652,7 +674,7 @@ class DeviceSpoofRiskEvaluator:
             + 0.12 * state.best_diffuse_response_score
             + 0.08 * state.best_geometry_response_consistency
         )
-        replay_risk = _clamp01(
+        raw_replay_risk = _clamp01(
             1.0
             - (
                 0.38 * response_score
@@ -661,8 +683,21 @@ class DeviceSpoofRiskEvaluator:
                 + 0.10 * state.best_geometry_response_consistency
             )
             + 0.12 * state.best_specular_hotspot_risk
-            + 0.08 * state.best_planar_surface_risk
+            # planar_surface_risk is excluded: screen-based flash is a planar source so
+            # planar_surface_risk is always high even for real faces — it cannot distinguish
+            # flat photos from real skin when the flash origin is the display itself.
         )
+        # When the camera's auto-white-balance converts the colored flash into a
+        # brightness-only change (peak_shift > 0 but color_match < 0.30), the flash
+        # analysis cannot distinguish real skin from replay. Treat as neutral rather
+        # than false-positive spoof. This is different from a genuine no-response
+        # case (peak_shift ≈ 0) where high replay risk is appropriate.
+        awb_canceled = (
+            state.evaluated_samples > 0
+            and state.best_color_match_score < 0.30
+            and state.peak_shift > 0.05
+        )
+        replay_risk = 0.5 if awb_canceled else raw_replay_risk
         return _FlashChallengeResult(
             response_score=response_score,
             response_strength=strength,

@@ -35,6 +35,7 @@ class FaceSignalMetrics:
     cheek_depth_asymmetry: Optional[float]
     depth_flat_risk: Optional[float]
     landmark_model: Optional[str] = None
+    landmark_result: Optional[LandmarkResult] = None
 
     def to_dict(self) -> dict[str, float | bool | str | None]:
         """Serialize to a flat calibration/debug payload."""
@@ -86,6 +87,7 @@ def extract_face_signal_metrics(
             cheek_depth_asymmetry=None,
             depth_flat_risk=None,
             landmark_model=None,
+            landmark_result=None,
         )
 
     try:
@@ -109,6 +111,7 @@ def extract_face_signal_metrics(
             cheek_depth_asymmetry=None,
             depth_flat_risk=None,
             landmark_model=None,
+            landmark_result=None,
         )
     except Exception as exc:
         logger.debug("Unexpected landmark extraction failure: %s", exc)
@@ -128,6 +131,7 @@ def extract_face_signal_metrics(
             cheek_depth_asymmetry=None,
             depth_flat_risk=None,
             landmark_model=None,
+            landmark_result=None,
         )
 
     ear_current = _compute_ear(landmark_result)
@@ -155,6 +159,7 @@ def extract_face_signal_metrics(
         cheek_depth_asymmetry=cheek_depth_asymmetry,
         depth_flat_risk=depth_flat_risk,
         landmark_model=landmark_result.model,
+        landmark_result=landmark_result,
     )
 
 

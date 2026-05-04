@@ -189,6 +189,16 @@ class Settings(BaseSettings):
             "combined liveness mode when no explicit LIVENESS_BACKEND override is set."
         ),
     )
+    LIVENESS_FUSION_ENABLED: bool = Field(
+        default=False,
+        description="Enable hybrid fusion of backend liveness with custom spoof signals.",
+    )
+    LIVENESS_FUSION_THRESHOLD: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=1.0,
+        description="Spoof threshold used by the hybrid fusion evaluator.",
+    )
     LIVENESS_CALIBRATION_LOG_PATH: str = Field(
         default="logs/liveness_calibration.jsonl",
         description="Dedicated JSONL sink for liveness calibration events.",
