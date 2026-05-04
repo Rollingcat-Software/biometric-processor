@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -43,6 +44,9 @@ from app.infrastructure.ml.liveness.quality_assessor_factory import QualityAsses
 from app.infrastructure.ml.liveness.rppg_analyzer import RPPGAnalyzer
 
 logger = logging.getLogger(__name__)
+# Confidence smoothing window (rolling average over last N frames)
+_CONFIDENCE_WINDOW_SIZE = 5
+_MIN_CONFIDENCE_FOR_DETECTION = 0.50
 
 
 class TestDataCollector:
@@ -84,6 +88,7 @@ class TestDataCollector:
         )
 
         self.frame_count = {"live": 0, "spoof": 0}
+        self.confidence_history = deque(maxlen=_CONFIDENCE_WINDOW_SIZE)
 
     async def collect_from_camera(self):
         """Interactive camera capture loop."""
@@ -91,6 +96,11 @@ class TestDataCollector:
         if not cap.isOpened():
             print("❌ Camera not available")
             return
+
+        # Camera settings
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_FPS, 30)
 
         print("\n" + "=" * 60)
         print("TEST DATA COLLECTOR - Hybrid Fusion Validation")
@@ -100,10 +110,15 @@ class TestDataCollector:
         print("  1      → Label as LIVE")
         print("  2      → Label as SPOOF")
         print("  Q      → Quit")
+        print("\nTroubleshooting:")
+        print("  • If stuck on 'No Face': move closer/farther from camera")
+        print("  • Ensure good lighting (not backlighting)")
+        print("  • Center your face in the frame")
         print("\n" + "=" * 60 + "\n")
 
         captured_frame = None
         frame_number = 0
+        last_detection = None
 
         while True:
             ret, frame = cap.read()
@@ -111,6 +126,22 @@ class TestDataCollector:
                 break
 
             frame_number += 1
+
+            # Try to detect face with tolerance for fluctuations
+            try:
+                detection = await self.detector.detect(frame)
+                self.confidence_history.append(detection.confidence)
+                last_detection = detection
+                avg_confidence = np.mean(list(self.confidence_history)) if self.confidence_history else 0
+                detection_ok = avg_confidence >= _MIN_CONFIDENCE_FOR_DETECTION
+            except FaceNotDetectedError:
+                # Use historical average if available
+                if self.confidence_history and np.mean(list(self.confidence_history)) >= _MIN_CONFIDENCE_FOR_DETECTION:
+                    # Face was detected recently - likely temporary glitch
+                    detection_ok = True
+                else:
+                    detection_ok = False
+                    last_detection = None
 
             # Show captured frame highlight
             display_frame = frame.copy()
@@ -125,6 +156,26 @@ class TestDataCollector:
                     (0, 255, 0),
                     2,
                 )
+
+            # Detection status
+            face_status = "✓ FACE DETECTED" if detection_ok else "✗ NO FACE"
+            face_color = (0, 255, 0) if detection_ok else (0, 0, 255)
+
+            if self.confidence_history:
+                avg_conf = np.mean(list(self.confidence_history))
+                conf_text = f"{face_status} ({avg_conf:.2f})"
+            else:
+                conf_text = face_status
+
+            cv2.putText(
+                display_frame,
+                conf_text,
+                (10, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                face_color,
+                2,
+            )
 
             # Status text
             status = (
@@ -147,9 +198,13 @@ class TestDataCollector:
 
             # SPACE - Capture frame
             if key == ord(" "):
-                captured_frame = frame.copy()
-                print(f"\n✓ Frame captured (#{frame_number})")
-                print("  Press 1 (LIVE) or 2 (SPOOF) to label")
+                if not detection_ok:
+                    print(f"\n⚠️  Cannot capture: No face detected")
+                    print("  Move closer/farther or improve lighting")
+                else:
+                    captured_frame = frame.copy()
+                    print(f"\n✓ Frame captured (#{frame_number})")
+                    print("  Press 1 (LIVE) or 2 (SPOOF) to label")
 
             # 1 - Label as LIVE
             elif key == ord("1") and captured_frame is not None:

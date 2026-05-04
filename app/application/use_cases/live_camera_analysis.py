@@ -52,6 +52,10 @@ class LiveCameraAnalysisUseCase:
     - Facial landmarks
     """
 
+    # Confidence smoothing for detector flickering (rolling average)
+    _CONFIDENCE_HISTORY_SIZE = 5
+    _MIN_CONFIDENCE_THRESHOLD = 0.50
+
     def __init__(
         self,
         detector: IFaceDetector,
@@ -86,7 +90,39 @@ class LiveCameraAnalysisUseCase:
                 threshold=self._settings.LIVENESS_FUSION_THRESHOLD
             )
 
+        # Detector confidence history for smoothing flickering
+        self._detector_confidence_history: Any = []
+
         logger.info("LiveCameraAnalysisUseCase initialized")
+
+    async def _detect_face_with_smoothing(self, image: np.ndarray) -> Optional[Any]:
+        """Detect face with confidence smoothing to handle detector flickering.
+
+        Maintains a history of detection confidences and uses rolling average
+        to avoid spurious FaceNotDetectedError when confidence temporarily drops.
+        """
+        try:
+            detection = await self._detector.detect(image)
+            self._detector_confidence_history.append(detection.confidence)
+            # Keep only recent history
+            if len(self._detector_confidence_history) > self._CONFIDENCE_HISTORY_SIZE:
+                self._detector_confidence_history.pop(0)
+            return detection
+        except FaceNotDetectedError:
+            # Check if face was recently detected with good confidence
+            if self._detector_confidence_history:
+                avg_confidence = np.mean(self._detector_confidence_history)
+                if avg_confidence >= self._MIN_CONFIDENCE_THRESHOLD:
+                    # Likely a temporary glitch - retry once
+                    try:
+                        detection = await self._detector.detect(image)
+                        self._detector_confidence_history.append(detection.confidence)
+                        return detection
+                    except FaceNotDetectedError:
+                        pass
+            # Clear history if face truly lost
+            self._detector_confidence_history.clear()
+            raise
 
     async def analyze_frame(
         self,
@@ -117,7 +153,7 @@ class LiveCameraAnalysisUseCase:
         try:
             # Step 1: Detect face (required for all modes)
             try:
-                detection = await self._detector.detect(image)
+                detection = await self._detect_face_with_smoothing(image)
                 bbox = self._extract_detection_bbox(detection)
                 response.face = FaceDetectionResult(
                     detected=True,
