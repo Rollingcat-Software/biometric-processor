@@ -119,6 +119,7 @@ class TestDataCollector:
         captured_frame = None
         frame_number = 0
         last_detection = None
+        detection_frame_skip = 0  # Only detect every 3rd frame to avoid blocking
 
         while True:
             ret, frame = cap.read()
@@ -126,22 +127,28 @@ class TestDataCollector:
                 break
 
             frame_number += 1
+            detection_ok = False
 
-            # Try to detect face with tolerance for fluctuations
-            try:
-                detection = await self.detector.detect(frame)
-                self.confidence_history.append(detection.confidence)
-                last_detection = detection
-                avg_confidence = np.mean(list(self.confidence_history)) if self.confidence_history else 0
-                detection_ok = avg_confidence >= _MIN_CONFIDENCE_FOR_DETECTION
-            except FaceNotDetectedError:
-                # Use historical average if available
-                if self.confidence_history and np.mean(list(self.confidence_history)) >= _MIN_CONFIDENCE_FOR_DETECTION:
-                    # Face was detected recently - likely temporary glitch
-                    detection_ok = True
-                else:
-                    detection_ok = False
-                    last_detection = None
+            # Try to detect face every 3rd frame (to avoid blocking event loop)
+            if frame_number % 3 == 0:
+                try:
+                    detection = await self.detector.detect(frame)
+                    self.confidence_history.append(detection.confidence)
+                    last_detection = detection
+                    avg_confidence = np.mean(list(self.confidence_history)) if self.confidence_history else 0
+                    detection_ok = avg_confidence >= _MIN_CONFIDENCE_FOR_DETECTION
+                except FaceNotDetectedError:
+                    # Use historical average if available
+                    if self.confidence_history and np.mean(list(self.confidence_history)) >= _MIN_CONFIDENCE_FOR_DETECTION:
+                        # Face was detected recently - likely temporary glitch
+                        detection_ok = True
+                    else:
+                        detection_ok = False
+                        last_detection = None
+            else:
+                # Use last detection result for smooth display
+                if last_detection:
+                    detection_ok = np.mean(list(self.confidence_history)) >= _MIN_CONFIDENCE_FOR_DETECTION if self.confidence_history else False
 
             # Show captured frame highlight
             display_frame = frame.copy()
