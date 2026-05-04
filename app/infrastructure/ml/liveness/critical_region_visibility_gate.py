@@ -43,8 +43,11 @@ _PHYSICAL_OCCLUSION_REASON_TOKENS = frozenset(
         "mouth_replaced_by_skin_like_surface",
         "nose_replaced_by_skin_like_surface",
         "nose_structure_missing",
-        "mouth_roi_color_invalid",
-        "mouth_chrominance_anomaly",
+        # "mouth_roi_color_invalid" excluded: fires when hijab/headscarf border enters the mouth ROI,
+        #   causing false occlusion for covered-hair users whose mouth is fully visible.
+        #   Stronger tokens (lip_color_signature_missing, mouth_structure_weakened) are sufficient.
+        # "mouth_chrominance_anomaly" excluded: same issue — hijab fabric at face border causes
+        #   chrominance shift without true mouth occlusion.
         # "facial_detail_missing" excluded: generic quality signal — fires under shadow/low contrast
         # "lower_face_texture_drop" excluded: relative heuristic — unreliable under uneven illumination
     }
