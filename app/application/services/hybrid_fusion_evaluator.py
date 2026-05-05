@@ -12,18 +12,16 @@ import numpy as np
 class FusionWeights:
     """Weights for combining model and heuristic spoof signals."""
 
-    pretrained_model: float = 0.25
-    flash_response: float = 0.25
-    rppg_signal: float = 0.20
-    moire_pattern: float = 0.15
-    device_replay: float = 0.15
+    pretrained_model: float = 0.30
+    flash_response: float = 0.30
+    moire_pattern: float = 0.20
+    device_replay: float = 0.20
 
     def __post_init__(self) -> None:
         total = sum(
             (
                 self.pretrained_model,
                 self.flash_response,
-                self.rppg_signal,
                 self.moire_pattern,
                 self.device_replay,
             )
@@ -46,7 +44,7 @@ class FusionResult:
 class HybridFusionEvaluator:
     """Fuse pretrained liveness output with replay- and physiology-based signals."""
 
-    def __init__(self, weights: Optional[FusionWeights] = None, threshold: float = 0.55) -> None:
+    def __init__(self, weights: Optional[FusionWeights] = None, threshold: float = 0.45) -> None:
         self.weights = weights or FusionWeights()
         self.threshold = float(threshold)
 
@@ -57,11 +55,37 @@ class HybridFusionEvaluator:
     ) -> FusionResult:
         """Combine all signals into a final spoof decision."""
         pretrained_score = self._clamp01(pretrained_spoof_score)
+        flicker_score = self._resolve_numeric_signal(
+            custom_signals.get("flicker_score"),
+            neutral=0.0,
+        )
+        device_replay_score = self._resolve_numeric_signal(
+            custom_signals.get("device_replay_score"),
+            neutral=0.0,
+        )
+        if flicker_score > 0.85 or (flicker_score > 0.75 and device_replay_score > 0.55):
+            reasoning = (
+                f"High flicker ({flicker_score:.2f}) + device replay ({device_replay_score:.2f})"
+                if flicker_score <= 0.85
+                else f"Very high flicker detected ({flicker_score:.2f})"
+            )
+            return FusionResult(
+                is_spoof=True,
+                confidence=0.90,
+                spoof_score=0.90,
+                breakdown={
+                    "pretrained": pretrained_score,
+                    "flicker": flicker_score,
+                    "device_replay": device_replay_score,
+                    **custom_signals,
+                },
+                reasoning=reasoning,
+            )
+
         signal_scores = self._compute_signal_scores(custom_signals)
         final_spoof_score = self._clamp01(
             self.weights.pretrained_model * pretrained_score
             + self.weights.flash_response * signal_scores["flash"]
-            + self.weights.rppg_signal * signal_scores["rppg"]
             + self.weights.moire_pattern * signal_scores["moire"]
             + self.weights.device_replay * signal_scores["device"]
         )
@@ -86,7 +110,6 @@ class HybridFusionEvaluator:
 
     def _compute_signal_scores(self, signals: dict[str, Any]) -> dict[str, float]:
         flash_score = self._resolve_flash_score(signals)
-        rppg_score = self._resolve_rppg_score(signals)
         moire_score = self._resolve_numeric_signal(
             signals.get("moire_score", signals.get("moire_risk")),
             neutral=0.5,
@@ -97,7 +120,6 @@ class HybridFusionEvaluator:
         )
         return {
             "flash": flash_score,
-            "rppg": rppg_score,
             "moire": moire_score,
             "device": device_score,
         }
@@ -117,22 +139,6 @@ class HybridFusionEvaluator:
         if flash_response is None:
             return 0.5
         return self._normalize_flash_score(flash_response)
-
-    def _resolve_rppg_score(self, signals: dict[str, Any]) -> float:
-        available = signals.get("rppg_available")
-        if available is False:
-            return 0.5
-
-        if "rppg_live_signal" in signals:
-            value = signals["rppg_live_signal"]
-            if value is None:
-                return 0.5
-            return 0.0 if bool(value) else 1.0
-
-        score = self._coerce_float(signals.get("rppg_score"))
-        if score is None:
-            return 0.5
-        return self._clamp01(1.0 - score)
 
     def _resolve_numeric_signal(self, value: Any, *, neutral: float) -> float:
         numeric = self._coerce_float(value)

@@ -204,6 +204,105 @@ def _frame_metrics(*, raw_score: float, confidence: float, is_live: bool = True,
     )
 
 
+def test_temporal_liveness_aggregator_uses_hybrid_fusion_for_early_flicker_spoof() -> None:
+    aggregator = TemporalLivenessAggregator(window_seconds=2.0, max_entries=10, ema_alpha=0.5)
+
+    aggregate = None
+    for index in range(4):
+        metrics = replace(
+            _frame_metrics(raw_score=92.0, confidence=0.96, is_live=True, timestamp=0.1 * index),
+            device_spoof=_device_spoof(
+                flicker_risk=0.92,
+                moire_risk=0.08,
+                flash_response_score=0.95,
+                device_replay_risk=0.12,
+            ),
+            details={
+                **_frame_metrics(raw_score=92.0, confidence=0.96, is_live=True, timestamp=0.1 * index).details,
+                "flicker_risk": 0.92,
+                "moire_risk": 0.08,
+                "flash_response_score": 0.95,
+                "device_replay_risk": 0.12,
+            },
+        )
+        aggregate = aggregator.add(metrics)
+
+    assert aggregate is not None
+    assert aggregate.fusion_applied is True
+    assert aggregate.fusion_is_spoof is True
+    assert aggregate.decision_state == "SPOOF"
+    assert aggregate.fusion_spoof_score == pytest.approx(0.95)
+    assert aggregate.fusion_reasoning == "Extreme flicker"
+
+
+def test_temporal_liveness_aggregator_uses_replay_reflection_cascade_for_spoof() -> None:
+    aggregator = TemporalLivenessAggregator(window_seconds=2.0, max_entries=10, ema_alpha=0.5)
+
+    aggregate = None
+    for index in range(4):
+        base_metrics = _frame_metrics(raw_score=88.0, confidence=0.95, is_live=True, timestamp=0.1 * index)
+        metrics = replace(
+            base_metrics,
+            device_spoof=_device_spoof(
+                flicker_risk=0.20,
+                moire_risk=0.18,
+                reflection_risk=0.72,
+                flash_response_score=0.80,
+                device_replay_risk=0.62,
+            ),
+            details={
+                **base_metrics.details,
+                "flicker_risk": 0.20,
+                "moire_risk": 0.18,
+                "reflection_risk": 0.72,
+                "flash_response_score": 0.80,
+                "device_replay_risk": 0.62,
+            },
+        )
+        aggregate = aggregator.add(metrics)
+
+    assert aggregate is not None
+    assert aggregate.fusion_applied is True
+    assert aggregate.fusion_is_spoof is True
+    assert aggregate.decision_state == "SPOOF"
+    assert aggregate.fusion_reasoning == "Device replay + reflection"
+    assert aggregate.fusion_breakdown["reflection"] == pytest.approx(0.72)
+    assert aggregate.fusion_breakdown["device"] == pytest.approx(0.62)
+
+
+def test_temporal_liveness_aggregator_promotes_confident_live_result_via_hybrid_fusion() -> None:
+    aggregator = TemporalLivenessAggregator(window_seconds=2.0, max_entries=20, ema_alpha=0.3)
+
+    aggregate = None
+    for index in range(10):
+        base_metrics = _frame_metrics(raw_score=74.0, confidence=0.98, is_live=True, timestamp=0.1 * index)
+        metrics = replace(
+            base_metrics,
+            device_spoof=_device_spoof(
+                flicker_risk=0.05,
+                moire_risk=0.08,
+                flash_response_score=0.96,
+                device_replay_risk=0.10,
+            ),
+            details={
+                **base_metrics.details,
+                "flicker_risk": 0.05,
+                "moire_risk": 0.08,
+                "flash_response_score": 0.96,
+                "device_replay_risk": 0.10,
+            },
+        )
+        aggregate = aggregator.add(metrics)
+
+    assert aggregate is not None
+    assert aggregate.fusion_applied is True
+    assert aggregate.fusion_is_spoof is False
+    assert aggregate.fusion_spoof_score < 0.45
+    assert aggregate.window_confidence >= 0.75
+    assert aggregate.decision_state == "LIVE"
+    assert aggregate.fusion_reasoning.startswith("LIVE verified")
+
+
 def test_preview_processor_returns_no_face_when_detector_finds_no_bbox():
     settings = Settings(_env_file=None, JWT_ENABLED=False)
     face_detector = _StaticFaceDetector(

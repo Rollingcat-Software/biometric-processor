@@ -56,6 +56,46 @@ def test_hybrid_fusion_evaluator_detects_clear_live_case() -> None:
     assert "LIVE verified" in result.reasoning
 
 
+def test_hybrid_fusion_evaluator_flicker_override_forces_spoof() -> None:
+    evaluator = HybridFusionEvaluator()
+
+    result = evaluator.evaluate(
+        pretrained_spoof_score=0.05,
+        custom_signals={
+            "flicker_score": 0.91,
+            "flash_response_score": 0.95,
+            "flash_response_samples": 2,
+            "moire_score": 0.05,
+            "device_replay_score": 0.10,
+        },
+    )
+
+    assert result.is_spoof is True
+    assert result.spoof_score == pytest.approx(0.90)
+    assert result.confidence == pytest.approx(0.90)
+    assert result.breakdown["flicker"] == pytest.approx(0.91)
+    assert result.reasoning == "High flicker detected (0.91)"
+
+
+def test_hybrid_fusion_evaluator_flicker_below_override_uses_normal_fusion() -> None:
+    evaluator = HybridFusionEvaluator()
+
+    result = evaluator.evaluate(
+        pretrained_spoof_score=0.05,
+        custom_signals={
+            "flicker_score": 0.65,
+            "flash_response_score": 0.95,
+            "flash_response_samples": 2,
+            "moire_score": 0.10,
+            "device_replay_score": 0.15,
+        },
+    )
+
+    assert result.is_spoof is False
+    assert result.spoof_score < 0.30
+    assert "LIVE verified" in result.reasoning
+
+
 def test_hybrid_fusion_evaluator_weak_minifasnet_neutral_signals_should_remain_live() -> None:
     """Critical edge case: Live face with weak MiniFASNet but missing custom signals.
 
@@ -204,15 +244,13 @@ def test_hybrid_fusion_evaluator_weights_normalize_correctly() -> None:
     weights = FusionWeights(
         pretrained_model=0.30,
         flash_response=0.30,
-        rppg_signal=0.20,
-        moire_pattern=0.10,
-        device_replay=0.10,
+        moire_pattern=0.20,
+        device_replay=0.20,
     )
 
     assert abs(sum([
         weights.pretrained_model,
         weights.flash_response,
-        weights.rppg_signal,
         weights.moire_pattern,
         weights.device_replay,
     ]) - 1.0) < 1e-6
@@ -224,7 +262,6 @@ def test_hybrid_fusion_evaluator_invalid_weights_raise() -> None:
         FusionWeights(
             pretrained_model=0.5,  # Sum will be > 1.0
             flash_response=0.5,
-            rppg_signal=0.2,
             moire_pattern=0.1,
             device_replay=0.1,
         )

@@ -745,11 +745,12 @@ class DeviceSpoofRiskEvaluator:
             "pre_flash_captured": float(state is not None and state.baseline_frame_bgr.size > 0),
             "flash_frame_captured": float(state.analysis_frames_captured > 0) if state is not None else 0.0,
         }
-        persisted_analysis = (
-            state.latest_analysis_details
-            if state is not None and state.latest_analysis_details
-            else self._last_flash_analysis_details
-        )
+        if state is None:
+            details["flash_analysis_fresh"] = 0.0
+            return details
+
+        persisted_analysis = state.latest_analysis_details
+        details["flash_analysis_fresh"] = float(bool(persisted_analysis))
         if persisted_analysis:
             details.update(persisted_analysis)
         if state is not None and state.latest_analysis_details:

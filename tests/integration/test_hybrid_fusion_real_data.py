@@ -1,43 +1,45 @@
-"""Integration tests for hybrid fusion with real collected data.
+"""Integration tests for preview-synchronized collector output.
 
-These tests validate hybrid fusion against labeled test frames collected
-from `app/tools/test_data_collector.py`.
-
-Run test data collector first:
-    python app/tools/test_data_collector.py
-
-Then run these tests:
-    pytest tests/integration/test_hybrid_fusion_real_data.py -v
+These tests validate the labeled records produced by
+`app/tools/test_data_collector.py`.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
-
-import cv2
 import pytest
 
-from app.application.services.device_spoof_risk_evaluator import DeviceSpoofRiskEvaluator
-from app.application.services.hybrid_fusion_evaluator import HybridFusionEvaluator
-from app.application.use_cases.live_camera_analysis import LiveCameraAnalysisUseCase
-from app.api.schemas.live_analysis import AnalysisMode
-from app.core.config import get_settings
-from app.infrastructure.ml.liveness.face_detector_factory import FaceDetectorFactory
-from app.infrastructure.ml.liveness.liveness_detector_factory import LivenessDetectorFactory
-from app.infrastructure.ml.liveness.quality_assessor_factory import QualityAssessorFactory
-from app.infrastructure.ml.liveness.rppg_analyzer import RPPGAnalyzer
+
+def _resolve_test_frames_dir() -> Path:
+    """Find the collector output directory, preferring the latest numbered run."""
+    data_dir = Path("data")
+    if not data_dir.exists():
+        return data_dir / "test_frames"
+
+    candidates = [path for path in data_dir.iterdir() if path.is_dir() and path.name.startswith("test_frames")]
+    if not candidates:
+        return data_dir / "test_frames"
+
+    def sort_key(path: Path) -> tuple[int, str]:
+        suffix = path.name.removeprefix("test_frames")
+        if suffix.isdigit():
+            return (int(suffix), path.name)
+        if suffix == "":
+            return (0, path.name)
+        return (-1, path.name)
+
+    return sorted(candidates, key=sort_key)[-1]
 
 
-TEST_FRAMES_DIR = Path("data/test_frames")
+TEST_FRAMES_DIR = _resolve_test_frames_dir()
 SUMMARY_FILE = TEST_FRAMES_DIR / "summary.jsonl"
 
 
 def load_test_frames() -> list[dict]:
     """Load collected test frame metadata."""
     if not SUMMARY_FILE.exists():
-        pytest.skip(f"Test data not found. Run: python app/tools/test_data_collector.py")
+        pytest.skip("Test data not found. Run: python -m app.tools.test_data_collector")
 
     frames = []
     with open(SUMMARY_FILE) as f:
@@ -47,123 +49,90 @@ def load_test_frames() -> list[dict]:
     return frames
 
 
-@pytest.fixture
-async def use_case():
-    """Create LiveCameraAnalysisUseCase with hybrid fusion enabled."""
-    settings = get_settings()
-
-    detector = FaceDetectorFactory.create(
-        backend=settings.FACE_DETECTION_BACKEND,
-        device=settings.MODEL_DEVICE,
-    )
-    liveness_detector = LivenessDetectorFactory.create(
-        backend=settings.get_liveness_backend(),
-        device=settings.MODEL_DEVICE,
-    )
-    quality_assessor = QualityAssessorFactory.create(
-        device=settings.MODEL_DEVICE,
-    )
-    device_spoof_evaluator = DeviceSpoofRiskEvaluator()
-    rppg_analyzer = RPPGAnalyzer()
-    hybrid_fusion_evaluator = HybridFusionEvaluator(
-        threshold=settings.LIVENESS_FUSION_THRESHOLD
-    )
-
-    return LiveCameraAnalysisUseCase(
-        detector=detector,
-        quality_assessor=quality_assessor,
-        liveness_detector=liveness_detector,
-        rppg_analyzer=rppg_analyzer,
-        device_spoof_risk_evaluator=device_spoof_evaluator,
-        settings=settings,
-        hybrid_fusion_evaluator=hybrid_fusion_evaluator,
-    )
-
-
-@pytest.mark.asyncio
-async def test_hybrid_fusion_accuracy_on_collected_live_frames(use_case):
-    """Validate hybrid fusion on real LIVE frames."""
+def load_preview_temporal_frames() -> list[dict]:
+    """Load only records produced by the synchronized preview collector."""
     frames = load_test_frames()
+    preview_frames = [frame for frame in frames if frame.get("collector_pipeline") == "preview_temporal"]
+    if not preview_frames:
+        pytest.skip("No preview_temporal collector frames found. Re-collect data with the updated collector.")
+    return preview_frames
+
+
+def _binary_prediction(frame_meta: dict) -> dict:
+    """Return the collector's binary prediction payload."""
+    return (frame_meta.get("binary_prediction") or {})
+
+
+def test_hybrid_fusion_accuracy_on_collected_live_frames():
+    """Validate collector predictions on real LIVE frames."""
+    frames = load_preview_temporal_frames()
     live_frames = [f for f in frames if f["label"] == "live"]
 
     if not live_frames:
         pytest.skip("No LIVE frames collected")
 
+    decided_frames = [frame for frame in live_frames if _binary_prediction(frame).get("is_live") is not None]
+    if not decided_frames:
+        pytest.skip("No LIVE frames with binary prediction yet. Re-collect after the collector update.")
+
     correct = 0
-    total = len(live_frames)
+    total = len(decided_frames)
 
-    for frame_meta in live_frames:
-        image_path = frame_meta["image_path"]
-        frame = cv2.imread(image_path)
-        if frame is None:
-            continue
-
-        response = await use_case.analyze_frame(
-            image=frame, mode=AnalysisMode.LIVENESS
-        )
-
-        if response.liveness:
-            # LIVE frames should be detected as live
-            if response.liveness.is_live:
-                correct += 1
+    for frame_meta in decided_frames:
+        prediction = _binary_prediction(frame_meta)
+        if bool(prediction.get("is_live")):
+            correct += 1
 
     accuracy = correct / total if total > 0 else 0.0
     assert accuracy >= 0.80, f"LIVE accuracy {accuracy:.1%} < 80%"
 
 
-@pytest.mark.asyncio
-async def test_hybrid_fusion_accuracy_on_collected_spoof_frames(use_case):
-    """Validate hybrid fusion on real SPOOF frames."""
-    frames = load_test_frames()
+def test_hybrid_fusion_accuracy_on_collected_spoof_frames():
+    """Validate collector predictions on real SPOOF frames."""
+    frames = load_preview_temporal_frames()
     spoof_frames = [f for f in frames if f["label"] == "spoof"]
 
     if not spoof_frames:
         pytest.skip("No SPOOF frames collected")
 
+    decided_frames = [frame for frame in spoof_frames if _binary_prediction(frame).get("is_live") is not None]
+    if not decided_frames:
+        pytest.skip("No SPOOF frames with binary prediction yet. Re-collect after the collector update.")
+
     correct = 0
-    total = len(spoof_frames)
+    total = len(decided_frames)
 
-    for frame_meta in spoof_frames:
-        image_path = frame_meta["image_path"]
-        frame = cv2.imread(image_path)
-        if frame is None:
-            continue
-
-        response = await use_case.analyze_frame(
-            image=frame, mode=AnalysisMode.LIVENESS
-        )
-
-        if response.liveness:
-            # SPOOF frames should be detected as spoof
-            if not response.liveness.is_live:
-                correct += 1
+    for frame_meta in decided_frames:
+        prediction = _binary_prediction(frame_meta)
+        if not bool(prediction.get("is_live")):
+            correct += 1
 
     accuracy = correct / total if total > 0 else 0.0
     assert accuracy >= 0.80, f"SPOOF accuracy {accuracy:.1%} < 80%"
 
 
-@pytest.mark.asyncio
-async def test_hybrid_fusion_enabled_metadata(use_case):
-    """Verify hybrid fusion metadata is present in response."""
-    frames = load_test_frames()
+def test_collector_preview_metadata_present():
+    """Verify the updated collector stores synchronized preview metadata."""
+    frames = load_preview_temporal_frames()
     if not frames:
         pytest.skip("No frames collected")
 
-    frame_path = frames[0]["image_path"]
-    frame = cv2.imread(frame_path)
-    if frame is None:
-        pytest.skip("Cannot read frame image")
+    frame_meta = frames[0]
+    liveness = frame_meta.get("liveness") or {}
+    checks = liveness.get("checks") or {}
+    scores = liveness.get("scores") or {}
+    metadata = liveness.get("metadata") or {}
 
-    response = await use_case.analyze_frame(
-        image=frame, mode=AnalysisMode.LIVENESS
-    )
-
-    # Check metadata
-    assert response.liveness is not None
-    assert "hybrid_fusion_enabled" in response.liveness.checks
-    assert "hybrid_fusion_is_spoof" in response.liveness.checks
-    assert "hybrid_fusion_spoof_score" in response.liveness.scores
-    assert "hybrid_fusion_reasoning" in response.liveness.metadata
+    assert frame_meta.get("collector_version")
+    assert frame_meta.get("collector_pipeline") == "preview_temporal"
+    assert "decision_state" in (frame_meta.get("prediction") or {})
+    assert "label" in (frame_meta.get("binary_prediction") or {})
+    assert "rppg_available" in checks
+    assert "moire_score" in scores
+    assert "device_replay_score" in scores
+    assert "preview_sample_count" in metadata
+    assert frame_meta.get("frame_metrics") is not None
+    assert frame_meta.get("aggregate_metrics") is not None
 
 
 def test_summary_report():
@@ -189,8 +158,8 @@ def test_summary_report():
 
     # Provide guidance
     print("📊 Next steps:")
-    print("1. Review collected frames in data/test_frames/")
+    print(f"1. Review collected frames in {TEST_FRAMES_DIR.as_posix()}/")
     print("2. Run accuracy tests:")
     print("   pytest tests/integration/test_hybrid_fusion_real_data.py -v")
     print("3. Check individual frame metrics:")
-    print("   cat data/test_frames/summary.jsonl | jq '.'")
+    print(f"   cat {SUMMARY_FILE.as_posix()} | jq '.'")

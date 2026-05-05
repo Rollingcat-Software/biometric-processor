@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import pickle
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field, fields, replace
+from pathlib import Path
 from statistics import pvariance
 from typing import Any, Optional
 
@@ -23,6 +25,10 @@ from app.application.services.device_spoof_risk_evaluator import (
     DeviceSpoofRiskEvaluator,
 )
 from app.application.services.face_signal_metrics import extract_face_signal_metrics
+from app.application.services.hybrid_fusion_evaluator import (
+    FusionWeights,
+    HybridFusionEvaluator,
+)
 from app.application.services.live_session_baseline_calibrator import (
     BaselineCalibrationFrame,
     LiveSessionBaselineCalibrator,
@@ -43,6 +49,29 @@ from app.infrastructure.ml.liveness.face_usability_gate import FaceUsabilityGate
 from app.infrastructure.ml.liveness.rppg_analyzer import RPPGAnalyzer
 
 logger = logging.getLogger(__name__)
+_RPPG_FUSION_ENABLED = False
+_ROOT_DIR = Path(__file__).resolve().parents[2]
+_SPOOF_CLASSIFIER_PATH = _ROOT_DIR / "models" / "spoof_classifier.pkl"
+
+
+def open_camera_capture(camera_index: int) -> cv2.VideoCapture:
+    """Open webcam with backend fallback for Windows/OpenCV MSMF issues."""
+    attempts: list[tuple[str, cv2.VideoCapture]] = [("default", cv2.VideoCapture(camera_index))]
+    if hasattr(cv2, "CAP_DSHOW"):
+        attempts.append(("dshow", cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)))
+
+    last_capture = attempts[-1][1]
+    for backend_name, capture in attempts:
+        if capture.isOpened():
+            logger.info("Opened webcam %s with backend=%s", camera_index, backend_name)
+            return capture
+        try:
+            capture.release()
+        except cv2.error:
+            pass
+    logger.warning("Could not open webcam %s with default or DSHOW backend", camera_index)
+    return last_capture
+
 PREVIEW_SECURITY_PROFILE = "standard"
 # Occlusion state-machine thresholds (frame counts at ~25 fps)
 _OCCLUSION_INSUFFICIENT_FRAMES = 2   # frames before INSUFFICIENT_EVIDENCE
@@ -234,6 +263,16 @@ class AggregatedMetrics:
     passive_window_score: float
     active_frame_score_mean: float
     active_frame_evidence_mean: float
+    fusion_applied: bool
+    fusion_is_spoof: bool
+    fusion_spoof_score: float
+    fusion_confidence: float
+    fusion_reasoning: str
+    fusion_breakdown: dict[str, float]
+    fusion_window_samples: int
+    fusion_pretrained_spoof_score: float
+    fusion_smoothed_flicker: float
+    fusion_smoothed_screen_frame: float
     rppg_live_signal: bool = False
     background_reaction_ms: float = 0.0
     temporal_aggregation_ms: float = 0.0
@@ -284,6 +323,17 @@ class TemporalLivenessAggregator:
             if self._settings.DEV_LIVENESS_PREVIEW_PUZZLE_ENABLED
             else None
         )
+        self._hybrid_fusion_evaluator = HybridFusionEvaluator(
+            weights=FusionWeights(
+                pretrained_model=0.30,
+                flash_response=0.30,
+                moire_pattern=0.20,
+                device_replay=0.20,
+            ),
+            threshold=0.45,
+        )
+        self._spoof_classifier_bundle: Optional[dict[str, Any]] = None
+        self._spoof_classifier_load_attempted = False
         self._ema_score: Optional[float] = None
         self._debug_decision_history: deque[str] = deque(maxlen=8)
         self._last_debug_decision_state: Optional[str] = None
@@ -466,6 +516,17 @@ class TemporalLivenessAggregator:
             consecutive_no_face_frames=consecutive_no_face_frames,
         )
         debug_decision_summary.update(
+            self._apply_hybrid_fusion_layer(
+                metrics=metrics,
+                effective_entries=effective_entries,
+                sufficient_evidence=sufficient_evidence,
+                window_confidence=window_confidence,
+                low_quality=low_quality,
+                current_decision_state=str(debug_decision_summary["debug_decision_state"]),
+                spoof_reason_explicit=bool(debug_decision_summary.get("spoof_reason_explicit")),
+            )
+        )
+        debug_decision_summary.update(
             self._apply_critical_region_visibility_override(
                 original_status=str(debug_decision_summary["debug_decision_state"]),
                 face_usable=face_usable,
@@ -603,6 +664,252 @@ class TemporalLivenessAggregator:
         """Reset the current preview puzzle session."""
         if self._puzzle_controller is not None:
             self._puzzle_controller.reset()
+
+    def _apply_hybrid_fusion_layer(
+        self,
+        *,
+        metrics: FrameMetrics,
+        effective_entries: list[FrameMetrics],
+        sufficient_evidence: bool,
+        window_confidence: float,
+        low_quality: bool,
+        current_decision_state: str,
+        spoof_reason_explicit: bool,
+    ) -> dict[str, Any]:
+        fusion_defaults = {
+            "fusion_applied": False,
+            "fusion_is_spoof": False,
+            "fusion_spoof_score": 0.0,
+            "fusion_confidence": 0.0,
+            "fusion_reasoning": "-",
+            "fusion_breakdown": {},
+            "fusion_window_samples": len(effective_entries),
+            "fusion_pretrained_spoof_score": 0.0,
+            "fusion_smoothed_flicker": 0.0,
+            "fusion_smoothed_screen_frame": 0.0,
+        }
+        if not effective_entries:
+            return fusion_defaults
+        if current_decision_state in {"NO_FACE", "LOW_QUALITY"}:
+            return fusion_defaults
+        if low_quality or not metrics.face_detected or metrics.held_from_previous:
+            return fusion_defaults
+        face_usability_blocked = bool(_maybe_float(metrics.details.get("face_usability_blocked")) or 0.0)
+        if face_usability_blocked:
+            return fusion_defaults
+
+        smoothed_flicker = self._smoothed_device_spoof_signal(effective_entries, "flicker_risk")
+        fusion_defaults["fusion_smoothed_flicker"] = smoothed_flicker
+        smoothed_screen_frame_risk = self._smoothed_device_spoof_signal(
+            effective_entries,
+            "screen_frame_risk",
+        )
+        fusion_defaults["fusion_smoothed_screen_frame"] = smoothed_screen_frame_risk
+        smoothed_device_replay_risk = self._smoothed_device_spoof_signal(
+            effective_entries,
+            "device_replay_risk",
+        )
+        smoothed_moire_risk = self._smoothed_device_spoof_signal(effective_entries, "moire_risk")
+        smoothed_reflection_risk = self._smoothed_device_spoof_signal(
+            effective_entries,
+            "reflection_risk",
+        )
+        sample_count = len(effective_entries)
+        early_cascade_candidate = (
+            smoothed_screen_frame_risk > 0.28
+            or smoothed_reflection_risk > 0.55
+            or smoothed_flicker > 0.40
+            or smoothed_device_replay_risk > 0.50
+        )
+        should_evaluate = sample_count >= 10 or (sample_count >= 4 and early_cascade_candidate)
+        if not should_evaluate:
+            return fusion_defaults
+
+        cascade_reasoning: Optional[str] = None
+        cascade_confidence = 0.0
+
+        if smoothed_screen_frame_risk > 0.40:
+            cascade_reasoning = "High screen frame score (primary)"
+            cascade_confidence = 0.90
+        elif smoothed_reflection_risk > 0.75:
+            cascade_reasoning = "High reflection (secondary)"
+            cascade_confidence = 0.85
+        elif smoothed_flicker > 0.75:
+            cascade_reasoning = "High flicker (tertiary)"
+            cascade_confidence = 0.80
+        elif smoothed_screen_frame_risk > 0.28 and smoothed_reflection_risk > 0.50:
+            cascade_reasoning = "Screen frame + reflection"
+            cascade_confidence = 0.82
+        elif smoothed_screen_frame_risk > 0.28 and smoothed_flicker > 0.40:
+            cascade_reasoning = "Screen frame + flicker"
+            cascade_confidence = 0.82
+        elif smoothed_reflection_risk > 0.55 and smoothed_device_replay_risk > 0.55:
+            cascade_reasoning = "Reflection + device replay"
+            cascade_confidence = 0.82
+
+        if cascade_reasoning is not None:
+            return {
+                "fusion_applied": True,
+                "fusion_is_spoof": True,
+                "fusion_spoof_score": cascade_confidence,
+                "fusion_confidence": cascade_confidence,
+                "fusion_reasoning": cascade_reasoning,
+                "fusion_breakdown": {
+                    "flicker": smoothed_flicker,
+                    "device": smoothed_device_replay_risk,
+                    "moire": smoothed_moire_risk,
+                    "reflection": smoothed_reflection_risk,
+                    "screen_frame": smoothed_screen_frame_risk,
+                },
+                "fusion_window_samples": sample_count,
+                "fusion_pretrained_spoof_score": 0.0,
+                "fusion_smoothed_flicker": smoothed_flicker,
+                "fusion_smoothed_screen_frame": smoothed_screen_frame_risk,
+                "debug_decision_state": "SPOOF",
+            }
+
+        ml_is_spoof, ml_confidence = self._predict_spoof_with_ml_model(
+            screen_frame_score=smoothed_screen_frame_risk,
+            flicker_score=smoothed_flicker,
+            reflection_score=smoothed_reflection_risk,
+            device_replay_score=smoothed_device_replay_risk,
+            moire_score=smoothed_moire_risk,
+            rppg_score=0.0,
+        )
+        if ml_is_spoof is not None and ml_confidence > 0.70:
+            return {
+                "fusion_applied": True,
+                "fusion_is_spoof": ml_is_spoof,
+                "fusion_spoof_score": ml_confidence,
+                "fusion_confidence": ml_confidence,
+                "fusion_reasoning": f"ML model ({'SPOOF' if ml_is_spoof else 'LIVE'}, conf={ml_confidence:.2f})",
+                "fusion_breakdown": {
+                    "screen_frame": smoothed_screen_frame_risk,
+                    "flicker": smoothed_flicker,
+                    "reflection": smoothed_reflection_risk,
+                    "device": smoothed_device_replay_risk,
+                    "moire": smoothed_moire_risk,
+                    "rppg": smoothed_rppg_score,
+                    "ml_confidence": ml_confidence,
+                },
+                "fusion_window_samples": sample_count,
+                "fusion_pretrained_spoof_score": 0.0,
+                "fusion_smoothed_flicker": smoothed_flicker,
+                "fusion_smoothed_screen_frame": smoothed_screen_frame_risk,
+                "debug_decision_state": "SPOOF" if ml_is_spoof else "LIVE",
+            }
+
+        smoothed_flash_response_score = self._smoothed_device_spoof_signal(
+            effective_entries,
+            "flash_response_score",
+        )
+        pretrained_live_score = _mean([entry.raw_score for entry in effective_entries]) or 0.0
+        pretrained_spoof_score = _clamp01(1.0 - (pretrained_live_score / 100.0)) or 0.0
+
+        fusion_result = self._hybrid_fusion_evaluator.evaluate(
+            pretrained_spoof_score=pretrained_spoof_score,
+            custom_signals={
+                "flash_response_score": smoothed_flash_response_score,
+                "flash_response_samples": float(sample_count),
+                "moire_score": smoothed_moire_risk,
+                "device_replay_score": smoothed_device_replay_risk,
+                "flicker_score": smoothed_flicker,
+            },
+        )
+
+        fusion_summary = {
+            "fusion_applied": True,
+            "fusion_is_spoof": fusion_result.is_spoof,
+            "fusion_spoof_score": fusion_result.spoof_score,
+            "fusion_confidence": fusion_result.confidence,
+            "fusion_reasoning": fusion_result.reasoning,
+            "fusion_breakdown": dict(fusion_result.breakdown),
+            "fusion_window_samples": sample_count,
+            "fusion_pretrained_spoof_score": pretrained_spoof_score,
+            "fusion_smoothed_flicker": smoothed_flicker,
+            "fusion_smoothed_screen_frame": smoothed_screen_frame_risk,
+        }
+
+        next_decision_state = current_decision_state
+        if fusion_result.is_spoof:
+            next_decision_state = "SPOOF"
+        elif (
+            sample_count >= 10
+            and sufficient_evidence
+            and window_confidence >= 0.75
+            and current_decision_state in {"INSUFFICIENT_EVIDENCE", "SPOOF"}
+            and not spoof_reason_explicit
+        ):
+            next_decision_state = "LIVE"
+
+        if next_decision_state != current_decision_state:
+            fusion_summary["debug_decision_state"] = next_decision_state
+
+        return fusion_summary
+
+    @staticmethod
+    def _smoothed_device_spoof_signal(entries: list[FrameMetrics], field_name: str) -> float:
+        values: list[float] = []
+        for entry in entries:
+            numeric = _device_spoof_value(entry, field_name)
+            if numeric is not None:
+                values.append(float(numeric))
+        return float(_mean(values) or 0.0)
+
+    def _get_spoof_classifier_bundle(self) -> Optional[dict[str, Any]]:
+        if self._spoof_classifier_bundle is not None:
+            return self._spoof_classifier_bundle
+        if self._spoof_classifier_load_attempted:
+            return None
+        self._spoof_classifier_load_attempted = True
+        try:
+            with open(_SPOOF_CLASSIFIER_PATH, "rb") as model_file:
+                loaded = pickle.load(model_file)
+            if isinstance(loaded, dict) and loaded.get("model") is not None:
+                self._spoof_classifier_bundle = loaded
+                return loaded
+        except Exception as exc:
+            logger.warning("Could not load spoof classifier from %s: %s", _SPOOF_CLASSIFIER_PATH, exc)
+        return None
+
+    def _predict_spoof_with_ml_model(
+        self,
+        *,
+        screen_frame_score: float,
+        flicker_score: float,
+        reflection_score: float,
+        device_replay_score: float,
+        moire_score: float,
+        rppg_score: float,
+    ) -> tuple[Optional[bool], float]:
+        bundle = self._get_spoof_classifier_bundle()
+        if not bundle:
+            return (None, 0.0)
+
+        model = bundle.get("model")
+        feature_names = bundle.get("feature_names") or []
+        feature_values = {
+            "screen_frame_score": screen_frame_score,
+            "flicker_score": flicker_score,
+            "reflection_score": reflection_score,
+            "device_replay_score": device_replay_score,
+            "moire_score": moire_score,
+            "rppg_score": rppg_score,
+        }
+        try:
+            row = np.array([[float(feature_values.get(name, 0.0)) for name in feature_names]], dtype=float)
+            if hasattr(model, "predict_proba"):
+                spoof_probability = float(model.predict_proba(row)[0][1])
+            elif hasattr(model, "decision_function"):
+                decision = float(model.decision_function(row)[0])
+                spoof_probability = 1.0 / (1.0 + np.exp(-decision))
+            else:
+                prediction = int(model.predict(row)[0])
+                spoof_probability = 1.0 if prediction == 1 else 0.0
+            return (spoof_probability >= 0.5, max(spoof_probability, 1.0 - spoof_probability))
+        except Exception as exc:
+            logger.warning("Spoof classifier prediction failed: %s", exc)
+            return (None, 0.0)
 
     def _evaluate_puzzle(
         self,
@@ -2177,7 +2484,7 @@ class LiveLivenessPreview:
             self._settings.DEV_LIVENESS_PREVIEW_LANDMARK_EVERY_N_FRAMES,
             self._settings.DEV_LIVENESS_PREVIEW_LIVENESS_EVERY_N_FRAMES,
         )
-        capture = cv2.VideoCapture(self._settings.DEV_LIVENESS_PREVIEW_CAMERA_INDEX)
+        capture = open_camera_capture(self._settings.DEV_LIVENESS_PREVIEW_CAMERA_INDEX)
         if not capture.isOpened():
             logger.warning("Dev liveness preview could not open webcam %s", self._settings.DEV_LIVENESS_PREVIEW_CAMERA_INDEX)
             return
@@ -2378,7 +2685,7 @@ class LiveLivenessPreview:
                     f"reflect_glossy={_format_optional(_maybe_float(frame_metrics.details.get('reflection_glossy_patch_ratio')))}",
                     f"flicker={_format_optional(_device_spoof_value(frame_metrics, 'flicker_risk'))}",
                     f"device_replay={_format_optional(_device_spoof_value(frame_metrics, 'device_replay_risk'))}",
-                    f"rppg_score={_format_optional(_maybe_float(frame_metrics.details.get('rppg_score')))}",
+                    f"rppg_score={_format_optional(_maybe_float(frame_metrics.details.get('rppg_score')))}{' [obs-only]' if not _RPPG_FUSION_ENABLED else ''}",
                     f"rppg_bpm={_format_optional(_maybe_float(frame_metrics.details.get('rppg_bpm')))}",
                     f"rppg_sig={_format_optional(_maybe_float(frame_metrics.details.get('rppg_signal_strength')))}",
                     f"rppg_n={int(_maybe_float(frame_metrics.details.get('rppg_frame_count')) or 0)}",
@@ -2546,6 +2853,9 @@ class LiveLivenessPreview:
                 ("Final active", f"{aggregate.final_active_score:5.1f}"),
                 ("Device replay", _format_optional(_device_spoof_value(frame_metrics, "device_replay_risk"))),
                 ("Replay veto", str(int(aggregate.replay_veto))),
+                ("Fusion", "SPOOF" if aggregate.fusion_is_spoof else ("LIVE" if aggregate.fusion_applied else "-")),
+                ("Fusion spoof", f"{aggregate.fusion_spoof_score:0.2f}" if aggregate.fusion_applied else "-"),
+                ("Fusion conf.", f"{aggregate.fusion_confidence:0.2f}" if aggregate.fusion_applied else "-"),
                 ("Adjusted score", f"{aggregate.adjusted_score:5.1f}"),
                 ("Puzzle req.", str(int(aggregate.puzzle_required))),
                 ("Puzzle result", _format_optional(aggregate.puzzle_result)),
@@ -2594,7 +2904,20 @@ class LiveLivenessPreview:
                     ("Pre-flash cap.", str(int(_maybe_float(frame_metrics.details.get("pre_flash_captured")) or 0.0))),
                     ("Flash frame cap.", str(int(_maybe_float(frame_metrics.details.get("flash_frame_captured")) or 0.0))),
                     ("Device replay", _format_optional(_device_spoof_value(frame_metrics, "device_replay_risk"))),
-                    ("rPPG score", _format_optional(_maybe_float(frame_metrics.details.get("rppg_score")))),
+                    ("--- Hybrid Fusion ---", ""),
+                    ("Fusion applied", str(int(aggregate.fusion_applied))),
+                    ("Fusion decision", "SPOOF" if aggregate.fusion_is_spoof else ("LIVE" if aggregate.fusion_applied else "-")),
+                    ("Fusion spoof", f"{aggregate.fusion_spoof_score:0.2f}"),
+                    ("Fusion conf.", f"{aggregate.fusion_confidence:0.2f}"),
+                    ("Fusion reason", aggregate.fusion_reasoning),
+                    ("Fusion samples", str(aggregate.fusion_window_samples)),
+                    ("Fusion pretrained", f"{aggregate.fusion_pretrained_spoof_score:0.2f}"),
+                    ("Fusion flicker", f"{aggregate.fusion_smoothed_flicker:0.2f}"),
+                    ("Fusion flash", _format_optional(aggregate.fusion_breakdown.get("flash")) if aggregate.fusion_applied else "-"),
+                    ("Fusion moire", _format_optional(aggregate.fusion_breakdown.get("moire")) if aggregate.fusion_applied else "-"),
+                    ("Fusion device", _format_optional(aggregate.fusion_breakdown.get("device")) if aggregate.fusion_applied else "-"),
+                    ("Fusion reflect", _format_optional(aggregate.fusion_breakdown.get("reflection")) if aggregate.fusion_applied else "-"),
+                    ("rPPG score", _format_optional(_maybe_float(frame_metrics.details.get("rppg_score"))) + (" [obs-only]" if not _RPPG_FUSION_ENABLED else "")),
                     ("rPPG BPM", _format_optional(_maybe_float(frame_metrics.details.get("rppg_bpm")))),
                     ("rPPG signal", _format_optional(_maybe_float(frame_metrics.details.get("rppg_signal_strength")))),
                     ("rPPG frames", str(int(_maybe_float(frame_metrics.details.get("rppg_frame_count")) or 0))),
