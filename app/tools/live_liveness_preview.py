@@ -790,7 +790,8 @@ class TemporalLivenessAggregator:
         cascade_reasoning: Optional[str] = None
         cascade_confidence = 0.0
 
-        if smoothed_screen_frame_risk > 0.40:
+        _screen_geom_confirmed = _is_confirmed_screen_device(metrics)
+        if smoothed_screen_frame_risk > 0.40 and (_screen_geom_confirmed or smoothed_screen_frame_risk > 0.55):
             cascade_reasoning = "High screen frame score (primary, ML importance: 0.39-0.55)"
             cascade_confidence = 0.90
         elif smoothed_reflection_risk > 0.60:
@@ -1200,7 +1201,7 @@ class TemporalLivenessAggregator:
         # Paper/phone: region_std ≈ 0.03-0.07, nose_cheek ≈ 0.02-0.05 (uniform flat response).
         # Real 3D face: region_std ≈ 0.12-0.18, nose_cheek ≈ 0.08-0.15 (nose protrudes, gets more flash).
         flash_planar_spoof = bool(
-            flash_samples >= 1.0
+            flash_samples >= 2.0
             and flash_planar_risk >= 0.72
             and flash_region_std <= 0.10
             and flash_nose_cheek <= 0.07
@@ -4375,8 +4376,9 @@ def _resolve_decision_state(
     if face_usability_blocked:
         logger.info("CASCADE: skipped because face_usability_blocked=1")
     else:
-        if screen_frame_score is not None and screen_frame_score > 0.40:
-            logger.info("CASCADE 1 TRIGGERED: screen_frame=%.2f > 0.40", screen_frame_score)
+        _screen_geom_confirmed = _is_confirmed_screen_device(current_frame)
+        if screen_frame_score is not None and screen_frame_score > 0.40 and (_screen_geom_confirmed or screen_frame_score > 0.55):
+            logger.info("CASCADE 1 TRIGGERED: screen_frame=%.2f > 0.40, geom_confirmed=%s", screen_frame_score, _screen_geom_confirmed)
             return "SPOOF"
         if reflection_score is not None and reflection_score > 0.60:
             logger.info("CASCADE 2 TRIGGERED: reflection=%.2f > 0.60", reflection_score)
