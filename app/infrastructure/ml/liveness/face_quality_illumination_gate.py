@@ -161,8 +161,13 @@ class FaceQualityIlluminationGate:
         elif (
             global_face_brightness > _GLOBAL_BRIGHTNESS_HIGH
             or overexposed_ratio >= 0.35
-            or shadow_asymmetry >= 0.26
             or brightness_uniformity < 0.44
+            # Hard block: severe asymmetry regardless of overall score.
+            or shadow_asymmetry >= 0.55
+            # Soft block: moderate asymmetry only when the overall illumination
+            # score is also poor. Mild one-sided shadows (natural webcam setups,
+            # right_eye slightly underlit) pass when illumination_score >= 0.75.
+            or (shadow_asymmetry >= 0.40 and illumination_score < 0.75)
         ):
             quality_ok = False
             quality_reason = "uneven_face_lighting"

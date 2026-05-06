@@ -391,8 +391,18 @@ class TemporalLivenessAggregator:
             item for item in effective_entries
             if not bool(_maybe_float(item.details.get("liveness_skipped_due_to_face_usability")) or 0.0)
         ]
-        scores = [item.raw_score for item in (_scored_entries or effective_entries)]
-        score_mean = float(np.mean(scores))
+        _entries_for_mean = _scored_entries or effective_entries
+        scores = [item.raw_score for item in _entries_for_mean]
+        # Recency-weighted mean: frames older than 4 s get weight as low as 0.1 so the
+        # session-startup low-score history doesn't suppress LIVE decisions for many
+        # seconds after the detector has settled into a stable high score.
+        if _entries_for_mean:
+            _now = metrics.timestamp
+            _weights = [max(0.1, 1.0 - max(0.0, _now - e.timestamp) / 4.0) for e in _entries_for_mean]
+            _total_w = sum(_weights)
+            score_mean = sum(s * w for s, w in zip(scores, _weights)) / _total_w
+        else:
+            score_mean = 0.0
         # Keep score smoothing tied only to score history so it remains a temporal
         # stabilization of liveness, not a proxy for decision trustworthiness.
         smoothed_score = 0.65 * float(self._ema_score or 0.0) + 0.35 * score_mean
