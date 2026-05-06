@@ -3573,19 +3573,30 @@ def _is_screen_frame_corroborated_from_details(
         details,
         screen_frame_risk=resolved_screen_frame_risk,
     )
-    independent_spoof_cues = sum(
+    hard_spoof_cues = sum(
         (
-            int(resolved_device_replay_risk >= 0.45),
-            int(resolved_moire_risk >= 0.55),
-            int(resolved_reflection_risk >= 0.55),
+            int(resolved_device_replay_risk >= 0.60),
+            int(_is_detail_moire_high(details)),
+            int(resolved_reflection_risk >= 0.60),
             int(resolved_flicker_risk >= 0.45),
         )
     )
     return bool(
         confirmed_screen
-        or (resolved_device_replay_risk >= 0.48 and weighted_support_score >= 2.0)
-        or (resolved_device_replay_risk >= 0.42 and support_streak >= 2 and independent_spoof_cues >= 1)
-        or (resolved_screen_frame_risk >= 0.60 and independent_spoof_cues >= 1)
+        or (
+            resolved_screen_frame_risk >= 0.72
+            and resolved_device_replay_risk >= 0.60
+        )
+        or (
+            resolved_screen_frame_risk >= 0.55
+            and hard_spoof_cues >= 1
+        )
+        or (
+            resolved_screen_frame_risk >= 0.45
+            and support_streak >= 3
+            and weighted_support_score >= 3.0
+            and hard_spoof_cues >= 1
+        )
     )
 
 
