@@ -791,7 +791,7 @@ class TemporalLivenessAggregator:
             cascade_confidence = 0.80
         any_cascade_triggered = cascade_reasoning is not None
         logger.info(
-            "CASCADE OUTPUT: screen_frame=%.2f (>0.50?), reflection=%.2f (>0.60?), flicker=%.2f (>0.45?), cascade_triggered=%s, cascade_reasoning=%s",
+            "CASCADE OUTPUT: screen_frame=%.2f (>0.40?), reflection=%.2f (>0.60?), flicker=%.2f (>0.45?), cascade_triggered=%s, cascade_reasoning=%s",
             smoothed_screen_frame_risk,
             smoothed_reflection_risk,
             smoothed_flicker,
@@ -1135,7 +1135,7 @@ class TemporalLivenessAggregator:
         # Natural co-occurring micro-expressions (blink + smile together) count as
         # live-active even when the explicit challenge hasn't been completed.
         _natural_expressions_detected = _blink_ev >= 0.25 and _smile_ev >= 0.20
-        live_active_ready = bool(debug_active_score > 50.0 or _natural_expressions_detected)
+        live_active_ready = bool(debug_active_score > 60.0 or _natural_expressions_detected)
         reflect_compact = _maybe_float(metrics.details.get("reflection_compact_highlight_score")) or 0.0
         motion_anomaly_score = float(temporal_signal_summary.get("motion_anomaly_score") or 0.0)
         signal_inconsistency_score = float(temporal_signal_summary.get("signal_inconsistency_score") or 0.0)
