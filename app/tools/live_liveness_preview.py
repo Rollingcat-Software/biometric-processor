@@ -791,8 +791,12 @@ class TemporalLivenessAggregator:
         if smoothed_screen_frame_risk > 0.40 and screen_frame_corroborated:
             cascade_reasoning = "High screen frame score (primary, ML importance: 0.39-0.55)"
             cascade_confidence = 0.90
-        elif smoothed_reflection_risk > 0.60:
-            cascade_reasoning = "High reflection (secondary)"
+        elif smoothed_reflection_risk > 0.60 and (
+            smoothed_screen_frame_risk > 0.25
+            or smoothed_moire_risk > 0.45
+            or smoothed_device_replay_risk > 0.45
+        ):
+            cascade_reasoning = "High reflection with corroboration (secondary)"
             cascade_confidence = 0.85
         elif (
             smoothed_flicker > 0.75
@@ -806,7 +810,7 @@ class TemporalLivenessAggregator:
             cascade_confidence = 0.80
         any_cascade_triggered = cascade_reasoning is not None
         logger.info(
-            "CASCADE OUTPUT: screen_frame=%.2f (>0.40? corroborated=%s), reflection=%.2f (>0.60?), flicker=%.2f (>0.75 with corroboration?), cascade_triggered=%s, cascade_reasoning=%s",
+            "CASCADE OUTPUT: screen_frame=%.2f (>0.40? corroborated=%s), reflection=%.2f (>0.60 + corroborated?), flicker=%.2f (>0.75 with corroboration?), cascade_triggered=%s, cascade_reasoning=%s",
             smoothed_screen_frame_risk,
             "YES" if screen_frame_corroborated else "NO",
             smoothed_reflection_risk,
@@ -4510,8 +4514,19 @@ def _resolve_decision_state(
                 screen_frame_score,
             )
             return "SPOOF"
-        if reflection_score is not None and reflection_score > 0.60:
-            logger.info("CASCADE 2 TRIGGERED: reflection=%.2f > 0.60", reflection_score)
+        reflection_corroborated = bool(
+            (screen_frame_score is not None and screen_frame_score > 0.25)
+            or (moire_score is not None and moire_score > 0.45)
+            or (device_replay_score is not None and device_replay_score > 0.45)
+        )
+        if reflection_score is not None and reflection_score > 0.60 and reflection_corroborated:
+            logger.info(
+                "CASCADE 2 TRIGGERED: reflection=%.2f > 0.60 with corroboration (screen=%.2f, moire=%.2f, device=%.2f)",
+                reflection_score,
+                screen_frame_score or 0.0,
+                moire_score or 0.0,
+                device_replay_score or 0.0,
+            )
             return "SPOOF"
         flicker_corroborated = bool(
             (device_replay_score is not None and device_replay_score > 0.60)
