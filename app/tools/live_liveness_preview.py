@@ -628,7 +628,7 @@ class TemporalLivenessAggregator:
             sample_count=len(effective_entries),
             window_seconds=self._window_seconds,
             decision_state=decision_state,
-            ema_score=float(self._ema_score),
+            ema_score=float(self._ema_score or 0.0),
             score_mean=score_mean,
             supported_score=float(
                 temporal_signal_summary.get("final_supported_score")
