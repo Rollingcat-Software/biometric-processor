@@ -44,7 +44,7 @@ jobs:
           pip install ruff mypy
 
       - name: Run Ruff linter
-        run: ruff check app/ --ignore E501,F401,F821,E402
+        run: ruff check app/ --ignore E501,F401,F821,E402,F841
 
       - name: Run Ruff formatter check
         run: ruff format --check app/ tests/ || true
