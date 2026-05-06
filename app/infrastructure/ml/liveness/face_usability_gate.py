@@ -143,36 +143,26 @@ class FaceUsabilityGate:
         )
         left_eye_score = visibility.visibility_scores.get("left_eye", 1.0)
         right_eye_score = visibility.visibility_scores.get("right_eye", 1.0)
-        left_eye_visible = left_eye_score >= 0.60
-        right_eye_visible = right_eye_score >= 0.60
-        nose_visible = visibility.visibility_scores.get("nose", 1.0) >= 0.65
-        mouth_visible = visibility.visibility_scores.get("mouth", 1.0) >= 0.65
-        lower_face_visible = visibility.visibility_scores.get("lower_face", 1.0) >= 0.60
         both_eyes_unreliable = bool(
             left_eye_score < _EYE_STRICT_UNRELIABLE_THRESHOLD
             and right_eye_score < _EYE_STRICT_UNRELIABLE_THRESHOLD
         )
-        derived_occluded_regions: list[str] = list(visibility.occluded_regions)
-        if both_eyes_unreliable or (not left_eye_visible and not right_eye_visible):
+        # Use the visibility gate's physical-blocking sets rather than raw visibility
+        # score thresholds. Raw scores drop during head turns (pose foreshortening)
+        # even when nothing is physically blocking the face — using them directly would
+        # flag a slight left/right turn as an occlusion event and escalate to NO_FACE.
+        # blocking_regions only contains regions confirmed by physical-occlusion signal
+        # tokens (texture, edge, colour), so head-turn foreshortening never appears there.
+        blocking = set(visibility.blocking_regions)
+        derived_occluded_regions: list[str] = list(blocking)
+        if both_eyes_unreliable:
             derived_occluded_regions.extend(["left_eye", "right_eye"])
-        if not nose_visible:
-            derived_occluded_regions.append("nose")
-        if not mouth_visible:
-            derived_occluded_regions.append("mouth")
-        if not lower_face_visible:
-            derived_occluded_regions.append("lower_face")
         derived_occluded_regions = list(dict.fromkeys(derived_occluded_regions))
 
-        structural_occlusion_now = bool(
-            both_eyes_unreliable
-            or (not left_eye_visible and not right_eye_visible)
-            or (not nose_visible)
-            or (not mouth_visible and not lower_face_visible)
-            or (
-                visibility.occlusion_score >= 0.58
-                and ((not mouth_visible) or (not nose_visible) or (not lower_face_visible))
-            )
-        )
+        # Structural occlusion: only fire when the visibility gate has confirmed a
+        # physical block OR both eye scores are completely unreliable (hard safety net
+        # for extreme pose / very heavy occlusion that overwhelms the signal detectors).
+        structural_occlusion_now = both_eyes_unreliable
         occluded_now = bool(visibility.is_critical_occluded or structural_occlusion_now)
         if occluded_now:
             self._quality_streak = 0
