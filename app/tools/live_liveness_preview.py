@@ -332,14 +332,15 @@ class TemporalLivenessAggregator:
             ),
             threshold=0.45,
         )
-        self._spoof_classifier_bundle: Optional[dict[str, Any]] = None
-        self._spoof_classifier_load_attempted = False
+        self._ml_model: Any = None
+        self._ml_feature_names: Optional[list[str]] = None
         self._ema_score: Optional[float] = None
         self._debug_decision_history: deque[str] = deque(maxlen=8)
         self._last_debug_decision_state: Optional[str] = None
         self._no_face_live_cooldown_frames = 0
         self._stable_live_hold_frames = 0
         self._low_quality_recovery_frames = 0
+        self._load_ml_model()
 
     def add(self, metrics: FrameMetrics) -> AggregatedMetrics:
         """Add a frame result and return the updated temporal summary."""
@@ -546,6 +547,26 @@ class TemporalLivenessAggregator:
             )
         )
         temporal_signal_summary.update(debug_decision_summary)
+        smoothed_screen_frame_risk = self._smoothed_device_spoof_signal(
+            effective_entries,
+            "screen_frame_risk",
+        )
+        smoothed_reflection_risk = self._smoothed_device_spoof_signal(
+            effective_entries,
+            "reflection_risk",
+        )
+        smoothed_flicker_risk = self._smoothed_device_spoof_signal(
+            effective_entries,
+            "flicker_risk",
+        )
+        smoothed_device_replay_risk = self._smoothed_device_spoof_signal(
+            effective_entries,
+            "device_replay_risk",
+        )
+        smoothed_moire_risk = self._smoothed_device_spoof_signal(
+            effective_entries,
+            "moire_risk",
+        )
         decision_state = _resolve_decision_state(
             recent_entries=effective_entries,
             current_frame=metrics,
@@ -559,6 +580,13 @@ class TemporalLivenessAggregator:
             smoothed_score=float(debug_decision_summary["adjusted_score"]),
             decision_confidence=window_confidence,
             no_face_consecutive_threshold=self._no_face_consecutive_threshold,
+            ml_model=self._ml_model,
+            ml_feature_names=self._ml_feature_names,
+            screen_frame_score=smoothed_screen_frame_risk,
+            reflection_score=smoothed_reflection_risk,
+            flicker_score=smoothed_flicker_risk,
+            device_replay_score=smoothed_device_replay_risk,
+            moire_score=smoothed_moire_risk,
         )
         # Apply critical-region visibility gate override to the authoritative decision.
         # _resolve_decision_state only considers face_detected=False for NO_FACE; it
@@ -570,6 +598,12 @@ class TemporalLivenessAggregator:
         if occ_gate_status and occ_gate_status != str(temporal_signal_summary.get("original_status_before_occ_gate") or ""):
             if _OCC_RESTRICTIVENESS.get(occ_gate_status, 1) < _OCC_RESTRICTIVENESS.get(decision_state, 1):
                 decision_state = occ_gate_status
+        logger.info(
+            "FINAL STATUS: '%s', original_before_occ='%s', after_occ='%s'",
+            decision_state,
+            str(temporal_signal_summary.get("original_status_before_occ_gate") or ""),
+            str(temporal_signal_summary.get("final_status_after_occ_gate") or ""),
+        )
         self._update_debug_state(decision_state)
         aggregation_elapsed_ms = (time.perf_counter() - aggregation_started) * 1000.0
         aggregate_field_names = {item.name for item in fields(AggregatedMetrics)}
@@ -696,6 +730,7 @@ class TemporalLivenessAggregator:
             return fusion_defaults
         face_usability_blocked = bool(_maybe_float(metrics.details.get("face_usability_blocked")) or 0.0)
         if face_usability_blocked:
+            logger.info("CASCADE OUTPUT: skipped because face_usability_blocked=1")
             return fusion_defaults
 
         smoothed_flicker = self._smoothed_device_spoof_signal(effective_entries, "flicker_risk")
@@ -729,23 +764,23 @@ class TemporalLivenessAggregator:
         cascade_confidence = 0.0
 
         if smoothed_screen_frame_risk > 0.40:
-            cascade_reasoning = "High screen frame score (primary)"
+            cascade_reasoning = "High screen frame score (primary, ML importance: 0.39-0.55)"
             cascade_confidence = 0.90
-        elif smoothed_reflection_risk > 0.75:
+        elif smoothed_reflection_risk > 0.60:
             cascade_reasoning = "High reflection (secondary)"
             cascade_confidence = 0.85
-        elif smoothed_flicker > 0.75:
+        elif smoothed_flicker > 0.45:
             cascade_reasoning = "High flicker (tertiary)"
             cascade_confidence = 0.80
-        elif smoothed_screen_frame_risk > 0.28 and smoothed_reflection_risk > 0.50:
-            cascade_reasoning = "Screen frame + reflection"
-            cascade_confidence = 0.82
-        elif smoothed_screen_frame_risk > 0.28 and smoothed_flicker > 0.40:
-            cascade_reasoning = "Screen frame + flicker"
-            cascade_confidence = 0.82
-        elif smoothed_reflection_risk > 0.55 and smoothed_device_replay_risk > 0.55:
-            cascade_reasoning = "Reflection + device replay"
-            cascade_confidence = 0.82
+        any_cascade_triggered = cascade_reasoning is not None
+        logger.info(
+            "CASCADE OUTPUT: screen_frame=%.2f (>0.40?), reflection=%.2f (>0.60?), flicker=%.2f (>0.45?), cascade_triggered=%s, cascade_reasoning=%s",
+            smoothed_screen_frame_risk,
+            smoothed_reflection_risk,
+            smoothed_flicker,
+            "YES" if any_cascade_triggered else "NO",
+            cascade_reasoning if cascade_reasoning else "none",
+        )
 
         if cascade_reasoning is not None:
             return {
@@ -856,21 +891,32 @@ class TemporalLivenessAggregator:
                 values.append(float(numeric))
         return float(_mean(values) or 0.0)
 
-    def _get_spoof_classifier_bundle(self) -> Optional[dict[str, Any]]:
-        if self._spoof_classifier_bundle is not None:
-            return self._spoof_classifier_bundle
-        if self._spoof_classifier_load_attempted:
-            return None
-        self._spoof_classifier_load_attempted = True
+    def _load_ml_model(self) -> None:
+        """Load trained ML spoof classifier."""
+        if self._ml_model is not None:
+            return
+        if not _SPOOF_CLASSIFIER_PATH.exists():
+            logger.warning("ML model not found at %s", _SPOOF_CLASSIFIER_PATH)
+            return
         try:
             with open(_SPOOF_CLASSIFIER_PATH, "rb") as model_file:
-                loaded = pickle.load(model_file)
-            if isinstance(loaded, dict) and loaded.get("model") is not None:
-                self._spoof_classifier_bundle = loaded
-                return loaded
+                model_data = pickle.load(model_file)
+            if not isinstance(model_data, dict) or model_data.get("model") is None:
+                logger.warning("ML model bundle at %s is invalid", _SPOOF_CLASSIFIER_PATH)
+                return
+            self._ml_model = model_data["model"]
+            feature_names = model_data.get("feature_names")
+            self._ml_feature_names = list(feature_names) if isinstance(feature_names, (list, tuple)) else None
+            logger.info(
+                "Loaded ML model: %s, accuracy=%.3f, auc=%.3f",
+                model_data.get("model_name", type(self._ml_model).__name__),
+                float(model_data.get("test_accuracy") or 0.0),
+                float(model_data.get("auc") or 0.0),
+            )
         except Exception as exc:
-            logger.warning("Could not load spoof classifier from %s: %s", _SPOOF_CLASSIFIER_PATH, exc)
-        return None
+            logger.error("Failed to load ML model: %s", exc)
+            self._ml_model = None
+            self._ml_feature_names = None
 
     def _predict_spoof_with_ml_model(
         self,
@@ -882,12 +928,9 @@ class TemporalLivenessAggregator:
         moire_score: float,
         rppg_score: float,
     ) -> tuple[Optional[bool], float]:
-        bundle = self._get_spoof_classifier_bundle()
-        if not bundle:
+        if self._ml_model is None:
             return (None, 0.0)
 
-        model = bundle.get("model")
-        feature_names = bundle.get("feature_names") or []
         feature_values = {
             "screen_frame_score": screen_frame_score,
             "flicker_score": flicker_score,
@@ -897,14 +940,22 @@ class TemporalLivenessAggregator:
             "rppg_score": rppg_score,
         }
         try:
+            feature_names = self._ml_feature_names or [
+                "flicker_score",
+                "device_replay_score",
+                "moire_score",
+                "reflection_score",
+                "screen_frame_score",
+                "rppg_score",
+            ]
             row = np.array([[float(feature_values.get(name, 0.0)) for name in feature_names]], dtype=float)
-            if hasattr(model, "predict_proba"):
-                spoof_probability = float(model.predict_proba(row)[0][1])
-            elif hasattr(model, "decision_function"):
-                decision = float(model.decision_function(row)[0])
+            if hasattr(self._ml_model, "predict_proba"):
+                spoof_probability = float(self._ml_model.predict_proba(row)[0][1])
+            elif hasattr(self._ml_model, "decision_function"):
+                decision = float(self._ml_model.decision_function(row)[0])
                 spoof_probability = 1.0 / (1.0 + np.exp(-decision))
             else:
-                prediction = int(model.predict(row)[0])
+                prediction = int(self._ml_model.predict(row)[0])
                 spoof_probability = 1.0 if prediction == 1 else 0.0
             return (spoof_probability >= 0.5, max(spoof_probability, 1.0 - spoof_probability))
         except Exception as exc:
@@ -1228,7 +1279,15 @@ class TemporalLivenessAggregator:
             raw_decision = "INSUFFICIENT_EVIDENCE"
             suspicion_reasons.append("POST_NO_FACE_COOLDOWN")
 
-        if (
+        # Temporary: bypass debug decision guards so the cascade/ML path can be
+        # evaluated without non-data-driven suppression to INSUFFICIENT_EVIDENCE.
+        logger.info(
+            "DEBUG LAYER INPUT: spoof_reason_explicit=%s, strong_spoof_evidence=%s, unstable_non_spoof=%s, guard_bypassed=True",
+            spoof_reason_explicit,
+            strong_spoof_evidence,
+            unstable_non_spoof,
+        )
+        if False and (
             raw_decision == "SPOOF"
             and unstable_non_spoof_case
             and spoof_gate == 1
@@ -1241,7 +1300,7 @@ class TemporalLivenessAggregator:
             decision_guard_reason = "unstable_non_spoof_guard"
             spoof_streak_frozen = True
             high_replay_risk_blocked = True
-        elif (
+        elif False and (
             raw_decision == "SPOOF"
             and unstable_non_spoof_case
             and not replay_veto
@@ -1254,7 +1313,7 @@ class TemporalLivenessAggregator:
             decision_guard_reason = "unstable_non_spoof_guard"
             spoof_streak_frozen = True
             high_replay_risk_blocked = True
-        if (
+        if False and (
             raw_decision == "SPOOF"
             and not spoof_reason_explicit
             and recovery_after_low_quality
@@ -1262,7 +1321,7 @@ class TemporalLivenessAggregator:
             raw_decision = "INSUFFICIENT_EVIDENCE"
             decision_guard_reason = "recovery_after_low_quality"
             high_replay_risk_blocked = True
-        elif (
+        elif False and (
             raw_decision == "SPOOF"
             and not spoof_reason_explicit
             and unstable_non_spoof
@@ -1270,7 +1329,7 @@ class TemporalLivenessAggregator:
             raw_decision = "INSUFFICIENT_EVIDENCE"
             decision_guard_reason = "unstable_non_spoof"
             high_replay_risk_blocked = True
-        elif (
+        elif False and (
             raw_decision == "SPOOF"
             and not spoof_reason_explicit
             and not strong_spoof_evidence
@@ -1290,6 +1349,12 @@ class TemporalLivenessAggregator:
             raw_decision = "LIVE"
             stable_live_hold_active = True
             suspicion_reasons.append("LIVE_HOLD")
+
+        logger.info(
+            "DEBUG LAYER OUTPUT: debug_decision_state='%s', decision_guard_reason='%s'",
+            raw_decision,
+            decision_guard_reason,
+        )
 
         return {
             "replay_veto": replay_veto,
@@ -4229,26 +4294,122 @@ def _resolve_decision_state(
     smoothed_score: float,
     decision_confidence: float,
     no_face_consecutive_threshold: int,
+    ml_model: Any = None,
+    ml_feature_names: Optional[list[str]] = None,
+    screen_frame_score: Optional[float] = None,
+    reflection_score: Optional[float] = None,
+    flicker_score: Optional[float] = None,
+    device_replay_score: Optional[float] = None,
+    moire_score: Optional[float] = None,
 ) -> str:
     debug_decision_state = temporal_signal_summary.get("debug_decision_state")
-    if isinstance(debug_decision_state, str) and debug_decision_state:
-        return debug_decision_state
-    if consecutive_no_face_frames >= no_face_consecutive_threshold or face_present_ratio <= 0.15:
-        if _should_treat_no_face_as_insufficient(
-            recent_entries=recent_entries,
-            current_frame=current_frame,
-            face_present_ratio=face_present_ratio,
-            consecutive_no_face_frames=consecutive_no_face_frames,
-            baseline_sample_count=baseline_sample_count,
-            no_face_consecutive_threshold=no_face_consecutive_threshold,
-        ):
-            return "INSUFFICIENT_EVIDENCE"
-        return "NO_FACE"
+    deferred_debug_state: Optional[str] = None
+    logger.info(
+        "RESOLVE INPUT: debug_decision='%s', screen_frame=%s, reflection=%s, flicker=%s",
+        debug_decision_state,
+        screen_frame_score,
+        reflection_score,
+        flicker_score,
+    )
+    if debug_decision_state == "NO_FACE":
+        if consecutive_no_face_frames >= no_face_consecutive_threshold or face_present_ratio <= 0.15:
+            if _should_treat_no_face_as_insufficient(
+                recent_entries=recent_entries,
+                current_frame=current_frame,
+                face_present_ratio=face_present_ratio,
+                consecutive_no_face_frames=consecutive_no_face_frames,
+                baseline_sample_count=baseline_sample_count,
+                no_face_consecutive_threshold=no_face_consecutive_threshold,
+            ):
+                logger.info("NO_FACE -> INSUFFICIENT_EVIDENCE (detector miss suspected)")
+                return "INSUFFICIENT_EVIDENCE"
+            logger.info("RESOLVE OUTPUT (NO_FACE): Genuine no face detected")
+            return "NO_FACE"
+    elif debug_decision_state == "INSUFFICIENT_EVIDENCE":
+        deferred_debug_state = "INSUFFICIENT_EVIDENCE"
+        logger.info("DEBUG HINT: INSUFFICIENT_EVIDENCE, checking CASCADE...")
+    elif debug_decision_state == "LOW_QUALITY":
+        deferred_debug_state = "LOW_QUALITY"
+        logger.info("DEBUG HINT: LOW_QUALITY, checking CASCADE...")
+    elif debug_decision_state in {"LIVE", "SPOOF"}:
+        logger.info("DEBUG HINT: debug_decision='%s', checking CASCADE...", debug_decision_state)
     quality_reason = _quality_block_reason(current_frame)
     quality_blocked = quality_reason != "-"
-    if low_quality and quality_reason == "face_too_small":
-        return "LOW_QUALITY"
+    face_usability_blocked = bool(_maybe_float(current_frame.details.get("face_usability_blocked")) or 0.0)
+
+    # ML-guided cascade.
+    if face_usability_blocked:
+        logger.info("CASCADE: skipped because face_usability_blocked=1")
+    else:
+        if screen_frame_score is not None and screen_frame_score > 0.40:
+            logger.info("CASCADE 1 TRIGGERED: screen_frame=%.2f > 0.40", screen_frame_score)
+            return "SPOOF"
+        if reflection_score is not None and reflection_score > 0.60:
+            logger.info("CASCADE 2 TRIGGERED: reflection=%.2f > 0.60", reflection_score)
+            return "SPOOF"
+        if flicker_score is not None and flicker_score > 0.45:
+            logger.info("CASCADE 3 TRIGGERED: flicker=%.2f > 0.45", flicker_score)
+            return "SPOOF"
+    if ml_model is not None:
+        try:
+            feature_order = ml_feature_names or [
+                "flicker_score",
+                "device_replay_score",
+                "moire_score",
+                "reflection_score",
+                "screen_frame_score",
+                "rppg_score",
+            ]
+            feature_values = {
+                "flicker_score": float(flicker_score or 0.0),
+                "device_replay_score": float(device_replay_score or 0.0),
+                "moire_score": float(moire_score or 0.0),
+                "reflection_score": float(reflection_score or 0.0),
+                "screen_frame_score": float(screen_frame_score or 0.0),
+                "rppg_score": 1.0,
+            }
+            features = np.array(
+                [[float(feature_values.get(name, 0.0)) for name in feature_order]],
+                dtype=float,
+            )
+            prediction = int(ml_model.predict(features)[0])
+            if hasattr(ml_model, "predict_proba"):
+                probabilities = ml_model.predict_proba(features)[0]
+                confidence = float(probabilities[prediction])
+            elif hasattr(ml_model, "decision_function"):
+                decision = float(ml_model.decision_function(features)[0])
+                spoof_probability = 1.0 / (1.0 + np.exp(-decision))
+                confidence = spoof_probability if prediction == 1 else 1.0 - spoof_probability
+            else:
+                confidence = 1.0
+
+            logger.info(
+                "ML CASCADE: prediction=%s, confidence=%.3f, features=[flicker=%.2f, device_replay=%.2f, screen_frame=%.2f]",
+                prediction,
+                confidence,
+                feature_values["flicker_score"],
+                feature_values["device_replay_score"],
+                feature_values["screen_frame_score"],
+            )
+
+            if confidence > 0.70:
+                is_spoof = prediction == 1
+                logger.info(
+                    "ML CASCADE: prediction=%s, confidence=%.3f, decision=%s",
+                    prediction,
+                    confidence,
+                    "SPOOF" if is_spoof else "LIVE",
+                )
+                return "SPOOF" if is_spoof else "LIVE"
+            logger.info(
+                "ML CASCADE: Low confidence (%.3f), continuing to fallback logic",
+                confidence,
+            )
+        except Exception as exc:
+            logger.warning("ML cascade prediction failed: %s", exc)
+
     spoof_gate_active = _is_device_replay_spoof_detected(current_frame)
+    logger.info("SPOOF GATE: active=%s, reason='none'", spoof_gate_active)
     strict_hard_block = bool(temporal_signal_summary.get("strict_hard_block"))
     puzzle_fusion_active = bool(temporal_signal_summary.get("puzzle_fusion_active"))
     puzzle_success = bool(temporal_signal_summary.get("puzzle_success"))
@@ -4271,21 +4432,36 @@ def _resolve_decision_state(
         and puzzle_status in {"running", "failed", "timed_out"}
     )
     if not sufficient_evidence and early_live_ready:
+        logger.info("RESOLVE OUTPUT (FALLBACK): final_decision='LIVE', reason='early_live_ready'")
         return "LIVE"
     if strict_hard_block:
+        logger.info("RESOLVE OUTPUT (FALLBACK): final_decision='SPOOF', reason='strict_hard_block'")
         return "SPOOF"
     if spoof_gate_active:
+        logger.info("RESOLVE OUTPUT (FALLBACK): final_decision='SPOOF', reason='spoof_gate_active'")
         return "SPOOF"
+    if deferred_debug_state == "LOW_QUALITY":
+        logger.info("RESOLVE OUTPUT (FALLBACK): final_decision='LOW_QUALITY', reason='deferred_debug_state'")
+        return "LOW_QUALITY"
+    if deferred_debug_state == "INSUFFICIENT_EVIDENCE" and not spoof_ready_despite_evidence:
+        logger.info(
+            "RESOLVE OUTPUT (FALLBACK): final_decision='INSUFFICIENT_EVIDENCE', reason='deferred_debug_state'"
+        )
+        return "INSUFFICIENT_EVIDENCE"
     if quality_blocked and not spoof_gate_active:
+        logger.info("RESOLVE OUTPUT (FALLBACK): final_decision='LOW_QUALITY', reason='quality_blocked'")
         return "LOW_QUALITY"
     if not sufficient_evidence and not spoof_ready_despite_evidence:
+        logger.info("RESOLVE OUTPUT (FALLBACK): final_decision='INSUFFICIENT_EVIDENCE', reason='insufficient_evidence'")
         return "INSUFFICIENT_EVIDENCE"
     if low_quality:
+        logger.info("RESOLVE OUTPUT (FALLBACK): final_decision='LOW_QUALITY', reason='low_quality'")
         return "LOW_QUALITY"
 
     live_score_threshold = 68.0 if warm_recovery else 80.0
     live_conf_threshold = 0.50 if warm_recovery else 0.65
     if not challenge_live_block and smoothed_score >= live_score_threshold and decision_confidence >= live_conf_threshold:
+        logger.info("RESOLVE OUTPUT (FALLBACK): final_decision='LIVE', reason='score_conf_threshold'")
         return "LIVE"
     if (
         not challenge_live_block
@@ -4294,9 +4470,12 @@ def _resolve_decision_state(
         and smoothed_score >= (66.0 if warm_recovery else 70.0)
         and decision_confidence >= (0.46 if warm_recovery else 0.72)
     ):
+        logger.info("RESOLVE OUTPUT (FALLBACK): final_decision='LIVE', reason='current_frame_live'")
         return "LIVE"
     if smoothed_score < 55.0 and decision_confidence >= 0.55:
+        logger.info("RESOLVE OUTPUT (FALLBACK): final_decision='SPOOF', reason='low_smoothed_score'")
         return "SPOOF"
+    logger.info("RESOLVE OUTPUT (FALLBACK): final_decision='INSUFFICIENT_EVIDENCE', reason='default_fallback'")
     return "INSUFFICIENT_EVIDENCE"
 
 
