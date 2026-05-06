@@ -716,9 +716,26 @@ def _is_critical_occluded(
     if {"left_eye", "right_eye"}.issubset(blocked):
         return True
 
-    # Nose or mouth individually blocked by a physical signal.
-    if "nose" in blocked or "mouth" in blocked:
+    # Mouth blocked by a physical signal — always critical (scarf pulled up, mask).
+    if "mouth" in blocked:
         return True
+
+    # Nose blocked — require corroboration from mouth or lower_face being degraded.
+    # A slight head turn foreshortens the nose (texture/edge drop → nose_structure_missing
+    # can fire) WITHOUT affecting the mouth or lower face. Real hand/scarf occlusion
+    # always covers more than just the nose bridge, so mouth or lower_face will be
+    # at least suspicious. Nose-alone physical blocking is therefore not critical.
+    if "nose" in blocked:
+        mouth_degraded = (
+            "mouth" in suspicious
+            or visibility_scores.get("mouth", 1.0) < _MOUTH_VISIBILITY_THRESHOLD
+        )
+        lower_face_degraded = (
+            "lower_face" in suspicious
+            or visibility_scores.get("lower_face", 1.0) < _LOWER_FACE_VISIBILITY_THRESHOLD
+        )
+        if mouth_degraded or lower_face_degraded:
+            return True
 
     # Lower face covered: both nose AND mouth degraded simultaneously AND at least
     # one carries a physical occlusion signal (not mere illumination degradation).
