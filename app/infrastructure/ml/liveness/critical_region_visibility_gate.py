@@ -39,17 +39,19 @@ _PHYSICAL_OCCLUSION_REASON_TOKENS = frozenset(
         "hand_overlap_signal",
         "eye_occluded",
         "lip_color_signature_missing",
-        "mouth_structure_weakened",
+        # "mouth_structure_weakened" excluded: fires at redness-delta < 6.0 (warning level) with
+        #   only ONE of texture/edge flat — too sensitive for a physical-block decision.
+        #   Natural lighting changes, slightly closed lips, or mild shadows can trigger it on a
+        #   live uncovered face. Real hand/mask occlusion is caught by the stronger tokens:
+        #   lip_color_signature_missing (delta < 3.5 + BOTH flat) and
+        #   mouth_replaced_by_skin_like_surface.
         "mouth_replaced_by_skin_like_surface",
         "nose_replaced_by_skin_like_surface",
         "nose_structure_missing",
-        # "mouth_roi_color_invalid" excluded: fires when hijab/headscarf border enters the mouth ROI,
-        #   causing false occlusion for covered-hair users whose mouth is fully visible.
-        #   Stronger tokens (lip_color_signature_missing, mouth_structure_weakened) are sufficient.
-        # "mouth_chrominance_anomaly" excluded: same issue — hijab fabric at face border causes
-        #   chrominance shift without true mouth occlusion.
-        # "facial_detail_missing" excluded: generic quality signal — fires under shadow/low contrast
-        # "lower_face_texture_drop" excluded: relative heuristic — unreliable under uneven illumination
+        # "mouth_roi_color_invalid" excluded: fires when hijab/headscarf border enters the mouth ROI.
+        # "mouth_chrominance_anomaly" excluded: same issue — fabric at face border.
+        # "facial_detail_missing" excluded: generic quality signal — fires under shadow/low contrast.
+        # "lower_face_texture_drop" excluded: relative heuristic — unreliable under uneven lighting.
     }
 )
 

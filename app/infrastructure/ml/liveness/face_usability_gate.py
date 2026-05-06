@@ -146,7 +146,11 @@ class FaceUsabilityGate:
         left_eye_visible = left_eye_score >= 0.60
         right_eye_visible = right_eye_score >= 0.60
         nose_visible = visibility.visibility_scores.get("nose", 1.0) >= 0.65
-        mouth_visible = visibility.visibility_scores.get("mouth", 1.0) >= 0.65
+        # Use 0.45 — matches _MOUTH_VISIBILITY_THRESHOLD in the pixel gate.
+        # The old 0.65 value caused scores of 0.45–0.65 to be treated as "not visible"
+        # here while the pixel gate classified them as visible, triggering false
+        # structural_occlusion_now on a live uncovered face.
+        mouth_visible = visibility.visibility_scores.get("mouth", 1.0) >= 0.45
         lower_face_visible = visibility.visibility_scores.get("lower_face", 1.0) >= 0.60
         both_eyes_unreliable = bool(
             left_eye_score < _EYE_STRICT_UNRELIABLE_THRESHOLD
@@ -163,29 +167,17 @@ class FaceUsabilityGate:
             derived_occluded_regions.append("lower_face")
         derived_occluded_regions = list(dict.fromkeys(derived_occluded_regions))
 
-        lower_face_regions_missing = sum(
-            int(flag)
-            for flag in (
-                not nose_visible,
-                not mouth_visible,
-                not lower_face_visible,
-            )
-        )
         structural_occlusion_now = bool(
             both_eyes_unreliable
             or (not left_eye_visible and not right_eye_visible)
+            # Both lower-face regions simultaneously invisible AND overall occlusion
+            # score is high — catches hand/scarf covering the full lower face.
+            # Requires BOTH mouth and lower_face below their thresholds so a single
+            # region's natural score dip (head tilt, shadow) never fires this.
             or (
-                (not mouth_visible and not lower_face_visible)
-                and visibility.occlusion_score >= 0.55
-            )
-            or (
-                lower_face_regions_missing >= 2
+                not mouth_visible
+                and not lower_face_visible
                 and visibility.occlusion_score >= 0.60
-            )
-            or (
-                visibility.occlusion_score >= 0.58
-                and lower_face_regions_missing >= 1
-                and ((not mouth_visible) or (not lower_face_visible))
             )
         )
         occluded_now = bool(visibility.is_critical_occluded or structural_occlusion_now)
