@@ -628,7 +628,7 @@ class TemporalLivenessAggregator:
             sample_count=len(effective_entries),
             window_seconds=self._window_seconds,
             decision_state=decision_state,
-            ema_score=float(self._ema_score),
+            ema_score=float(self._ema_score if self._ema_score is not None else score_mean),
             score_mean=score_mean,
             supported_score=float(
                 temporal_signal_summary.get("final_supported_score")
@@ -791,7 +791,7 @@ class TemporalLivenessAggregator:
             cascade_confidence = 0.80
         any_cascade_triggered = cascade_reasoning is not None
         logger.info(
-            "CASCADE OUTPUT: screen_frame=%.2f (>0.40?), reflection=%.2f (>0.60?), flicker=%.2f (>0.45?), cascade_triggered=%s, cascade_reasoning=%s",
+            "CASCADE OUTPUT: screen_frame=%.2f (>0.50?), reflection=%.2f (>0.60?), flicker=%.2f (>0.45?), cascade_triggered=%s, cascade_reasoning=%s",
             smoothed_screen_frame_risk,
             smoothed_reflection_risk,
             smoothed_flicker,
@@ -1130,7 +1130,12 @@ class TemporalLivenessAggregator:
             or device_replay_risk >= 0.70
         )
         debug_active_score = float(temporal_signal_summary.get("final_active_score") or 0.0)
-        live_active_ready = bool(debug_active_score > 60.0)
+        _blink_ev = float(temporal_signal_summary.get("blink_evidence") or 0.0)
+        _smile_ev = float(temporal_signal_summary.get("smile_evidence") or 0.0)
+        # Natural co-occurring micro-expressions (blink + smile together) count as
+        # live-active even when the explicit challenge hasn't been completed.
+        _natural_expressions_detected = _blink_ev >= 0.25 and _smile_ev >= 0.20
+        live_active_ready = bool(debug_active_score > 50.0 or _natural_expressions_detected)
         reflect_compact = _maybe_float(metrics.details.get("reflection_compact_highlight_score")) or 0.0
         motion_anomaly_score = float(temporal_signal_summary.get("motion_anomaly_score") or 0.0)
         signal_inconsistency_score = float(temporal_signal_summary.get("signal_inconsistency_score") or 0.0)
@@ -1762,7 +1767,7 @@ class LivenessPreviewFrameProcessor:
                 brightness=face_region_brightness,
                 blur_score=blur_score,
                 face_detected=True,
-                error=self._face_usability_error_message(face_usability.reason),
+                error=self._face_usability_error_message(face_usability.reason, face_usability.underexposed_regions),
                 profiling=profiling,
                 inference_scale=inference_scale,
                 extra_details=self._face_usability_details(
@@ -2469,8 +2474,14 @@ class LivenessPreviewFrameProcessor:
         return details
 
     @staticmethod
-    def _face_usability_error_message(reason: str) -> str:
+    def _face_usability_error_message(reason: str, underexposed_regions: tuple[str, ...] = ()) -> str:
         if reason in {"poor_face_illumination", "uneven_face_lighting"}:
+            right_dark = "right_eye" in underexposed_regions
+            left_dark = "left_eye" in underexposed_regions
+            if right_dark and not left_dark:
+                return "Please turn slightly left or move toward the light."
+            if left_dark and not right_dark:
+                return "Please turn slightly right or move toward the light."
             return "Please improve lighting on your face."
         if reason == "recovering_face_usability":
             return "Please hold still while face visibility recovers."
@@ -3176,9 +3187,46 @@ class LiveLivenessPreview:
             )
 
         self._draw_face_bbox(overlay, frame_metrics, status_color)
+        self._draw_warmup_progress(overlay, frame_metrics, aggregate)
         border_color = status_color
         cv2.rectangle(overlay, (0, 0), (overlay.shape[1] - 1, overlay.shape[0] - 1), border_color, 4)
         return overlay
+
+    def _draw_warmup_progress(
+        self,
+        overlay: np.ndarray,
+        frame_metrics: FrameMetrics,
+        aggregate: AggregatedMetrics,
+    ) -> None:
+        """Draw a warm-up confidence progress bar at the bottom-right of the frame."""
+        if not frame_metrics.face_detected:
+            return
+        if aggregate.decision_state in {"LIVE", "NO_FACE"}:
+            return
+        target = 0.50
+        progress = min(1.0, aggregate.stable_live_ratio / target)
+        bar_w = 160
+        bar_h = 14
+        margin = 10
+        x0 = overlay.shape[1] - bar_w - margin
+        y0 = overlay.shape[0] - bar_h - margin - 18
+        fill = int(bar_w * progress)
+        fill_color = (60, 200, 60) if progress >= 0.80 else (40, 160, 220)
+        cv2.rectangle(overlay, (x0, y0), (x0 + bar_w, y0 + bar_h), (30, 30, 30), -1)
+        if fill > 0:
+            cv2.rectangle(overlay, (x0, y0), (x0 + fill, y0 + bar_h), fill_color, -1)
+        cv2.rectangle(overlay, (x0, y0), (x0 + bar_w, y0 + bar_h), (160, 160, 160), 1)
+        label = f"Confidence {int(progress * 100)}%"
+        cv2.putText(
+            overlay,
+            label,
+            (x0, y0 - 4),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.40,
+            (220, 220, 220),
+            1,
+            cv2.LINE_AA,
+        )
 
     def _apply_flash_debug_stimulus(self, overlay: np.ndarray) -> None:
         flash_state = self._frame_processor.get_flash_visual_state()

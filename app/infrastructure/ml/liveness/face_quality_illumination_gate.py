@@ -147,6 +147,14 @@ class FaceQualityIlluminationGate:
 
         quality_reason = "face_quality_ok"
         quality_ok = True
+        # Tier the shadow asymmetry check:
+        #   > 0.55                              → hard block regardless of illumination_score
+        #   0.40–0.55 + illumination_score < 0.75 → soft block
+        #   0.40–0.55 + illumination_score >= 0.75 → warning-only, liveness proceeds
+        #   < 0.40                              → always pass
+        shadow_blocks = shadow_asymmetry > 0.55 or (
+            0.40 <= shadow_asymmetry <= 0.55 and illumination_score < 0.75
+        )
         if (
             global_face_brightness < _GLOBAL_BRIGHTNESS_LOW
             or underexposed_ratio >= 0.40
@@ -161,7 +169,7 @@ class FaceQualityIlluminationGate:
         elif (
             global_face_brightness > _GLOBAL_BRIGHTNESS_HIGH
             or overexposed_ratio >= 0.35
-            or shadow_asymmetry >= 0.26
+            or shadow_blocks
             or brightness_uniformity < 0.44
         ):
             quality_ok = False
