@@ -1130,10 +1130,7 @@ class TemporalLivenessAggregator:
             or device_replay_risk >= 0.70
         )
         debug_active_score = float(temporal_signal_summary.get("final_active_score") or 0.0)
-        # Threshold lowered from 60→50: bg_active_score hovers at 55 from natural
-        # micro-expressions (blink_ev≈0.32, smile_ev≈0.27) even without an explicit
-        # challenge completion. 60 was calibrated assuming full puzzle completion.
-        live_active_ready = bool(debug_active_score > 50.0)
+        live_active_ready = bool(debug_active_score > 60.0)
         reflect_compact = _maybe_float(metrics.details.get("reflection_compact_highlight_score")) or 0.0
         motion_anomaly_score = float(temporal_signal_summary.get("motion_anomaly_score") or 0.0)
         signal_inconsistency_score = float(temporal_signal_summary.get("signal_inconsistency_score") or 0.0)
@@ -1198,17 +1195,8 @@ class TemporalLivenessAggregator:
             and flash_region_std <= 0.10
             and flash_nose_cheek <= 0.07
         )
-        # flash_planar_risk alone at 0.65 fires on real faces under flat frontal webcam
-        # lighting (uniform gradient → looks "planar"). Require ≥3 flash samples and
-        # raise the planar threshold to 0.80 so a single-sample ambient reading cannot
-        # set spoof_reason_explicit=True on its own. reflect_compact branch is unchanged
-        # (specular highlights are a reliable screen indicator at any sample count).
         flash_replay_strong = bool(
-            (
-                negative_flash_response
-                and flash_samples >= 3.0
-                and (reflect_compact >= 0.55 or flash_planar_risk >= 0.80)
-            )
+            (negative_flash_response and (reflect_compact >= 0.55 or flash_planar_risk >= 0.65))
             or flash_planar_spoof
         )
         motion_spoof = False
