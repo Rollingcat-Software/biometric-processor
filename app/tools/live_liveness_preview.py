@@ -794,12 +794,19 @@ class TemporalLivenessAggregator:
         elif smoothed_reflection_risk > 0.60:
             cascade_reasoning = "High reflection (secondary)"
             cascade_confidence = 0.85
-        elif smoothed_flicker > 0.45:
-            cascade_reasoning = "High flicker (tertiary)"
+        elif (
+            smoothed_flicker > 0.75
+            and (
+                smoothed_device_replay_risk > 0.60
+                or smoothed_screen_frame_risk > 0.40
+                or smoothed_reflection_risk > 0.55
+            )
+        ):
+            cascade_reasoning = "High flicker with corroborated replay cues (tertiary)"
             cascade_confidence = 0.80
         any_cascade_triggered = cascade_reasoning is not None
         logger.info(
-            "CASCADE OUTPUT: screen_frame=%.2f (>0.40? corroborated=%s), reflection=%.2f (>0.60?), flicker=%.2f (>0.45?), cascade_triggered=%s, cascade_reasoning=%s",
+            "CASCADE OUTPUT: screen_frame=%.2f (>0.40? corroborated=%s), reflection=%.2f (>0.60?), flicker=%.2f (>0.75 with corroboration?), cascade_triggered=%s, cascade_reasoning=%s",
             smoothed_screen_frame_risk,
             "YES" if screen_frame_corroborated else "NO",
             smoothed_reflection_risk,
@@ -4506,8 +4513,27 @@ def _resolve_decision_state(
         if reflection_score is not None and reflection_score > 0.60:
             logger.info("CASCADE 2 TRIGGERED: reflection=%.2f > 0.60", reflection_score)
             return "SPOOF"
-        if flicker_score is not None and flicker_score > 0.45:
-            logger.info("CASCADE 3 TRIGGERED: flicker=%.2f > 0.45", flicker_score)
+        flicker_corroborated = bool(
+            (device_replay_score is not None and device_replay_score > 0.60)
+            or (screen_frame_score is not None and screen_frame_score > 0.40)
+            or (reflection_score is not None and reflection_score > 0.55)
+        )
+        live_evidence_present = bool(
+            current_frame.face_detected
+            and current_frame.is_live
+            and (_maybe_float(current_frame.details.get("rppg_score")) or 0.0) >= 0.60
+            and (_maybe_float(current_frame.details.get("preview_frame_active_evidence")) or 0.0) >= 0.30
+        )
+        if (
+            flicker_score is not None
+            and flicker_score > 0.75
+            and flicker_corroborated
+            and not live_evidence_present
+        ):
+            logger.info(
+                "CASCADE 3 TRIGGERED: flicker=%.2f > 0.75 with corroboration",
+                flicker_score,
+            )
             return "SPOOF"
     if ml_model is not None:
         try:
@@ -4602,7 +4628,20 @@ def _resolve_decision_state(
     if deferred_debug_state == "LOW_QUALITY":
         logger.info("RESOLVE OUTPUT (FALLBACK): final_decision='LOW_QUALITY', reason='deferred_debug_state'")
         return "LOW_QUALITY"
+    live_recovery_ready = (
+        current_frame.face_detected
+        and current_frame.is_live
+        and not face_usability_blocked
+        and not challenge_live_block
+        and decision_confidence >= 0.72
+        and smoothed_score >= 76.0
+    )
     if deferred_debug_state == "INSUFFICIENT_EVIDENCE" and not spoof_ready_despite_evidence:
+        if live_recovery_ready:
+            logger.info(
+                "RESOLVE OUTPUT (FALLBACK): final_decision='LIVE', reason='live_recovery_ready'"
+            )
+            return "LIVE"
         logger.info(
             "RESOLVE OUTPUT (FALLBACK): final_decision='INSUFFICIENT_EVIDENCE', reason='deferred_debug_state'"
         )

@@ -18,8 +18,8 @@ from app.infrastructure.ml.liveness.face_quality_illumination_gate import (
 LOW_QUALITY_CONFIRM_FRAMES = 2
 OCCLUSION_CONFIRM_FRAMES = 2
 NO_FACE_CONFIRM_FRAMES = 6
-TEMP_CLEAR_CONFIRM_FRAMES = 2
-CLEAR_CONFIRM_FRAMES = 5
+TEMP_CLEAR_CONFIRM_FRAMES = 1
+CLEAR_CONFIRM_FRAMES = 2
 
 _EYE_STRICT_UNRELIABLE_THRESHOLD = 0.60
 
@@ -163,14 +163,29 @@ class FaceUsabilityGate:
             derived_occluded_regions.append("lower_face")
         derived_occluded_regions = list(dict.fromkeys(derived_occluded_regions))
 
+        lower_face_regions_missing = sum(
+            int(flag)
+            for flag in (
+                not nose_visible,
+                not mouth_visible,
+                not lower_face_visible,
+            )
+        )
         structural_occlusion_now = bool(
             both_eyes_unreliable
             or (not left_eye_visible and not right_eye_visible)
-            or (not nose_visible)
-            or (not mouth_visible and not lower_face_visible)
+            or (
+                (not mouth_visible and not lower_face_visible)
+                and visibility.occlusion_score >= 0.55
+            )
+            or (
+                lower_face_regions_missing >= 2
+                and visibility.occlusion_score >= 0.60
+            )
             or (
                 visibility.occlusion_score >= 0.58
-                and ((not mouth_visible) or (not nose_visible) or (not lower_face_visible))
+                and lower_face_regions_missing >= 1
+                and ((not mouth_visible) or (not lower_face_visible))
             )
         )
         occluded_now = bool(visibility.is_critical_occluded or structural_occlusion_now)

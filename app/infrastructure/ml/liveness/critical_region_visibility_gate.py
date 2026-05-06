@@ -652,9 +652,12 @@ def _apply_preview_heuristics(
                         / max(_LOWER_FACE_TEXTURE_OCCLUDED_RATIO, 1e-6),
                     ),
                 )
-                affected_regions = ("mouth", "lower_face", "nose")
-                visibility_floor = 0.18
-                score_floor = 0.38
+                # Lower-face texture is too noisy to directly suppress the nose. Keep this
+                # heuristic scoped to mouth/lower-face so beard, smile shape, and lighting
+                # changes do not manufacture a full lower-face occlusion.
+                affected_regions = ("mouth", "lower_face")
+                visibility_floor = 0.34
+                score_floor = 0.26
             else:
                 severity = max(
                     0.0,
@@ -668,8 +671,8 @@ def _apply_preview_heuristics(
                     ),
                 )
                 affected_regions = ("mouth", "lower_face")
-                visibility_floor = 0.42
-                score_floor = 0.24
+                visibility_floor = 0.52
+                score_floor = 0.18
             for region_name in affected_regions:
                 current = visibility_scores.get(region_name, 1.0)
                 visibility_scores[region_name] = min(
@@ -680,21 +683,21 @@ def _apply_preview_heuristics(
                     occluded_regions.append(region_name)
                 if visibility_scores[region_name] < _region_visibility_threshold(region_name):
                     region_reasons[region_name] = _merge_reason(region_reasons.get(region_name), "lower_face_texture_drop")
-            occlusion_score = max(occlusion_score, score_floor + 0.45 * severity)
+            occlusion_score = max(occlusion_score, score_floor + 0.25 * severity)
 
     if quality_occlusion is not None and quality_occlusion < _QUALITY_OCCLUSION_THRESHOLD:
         severity = max(
             0.0,
             min(1.0, (_QUALITY_OCCLUSION_THRESHOLD - quality_occlusion) / 24.0),
         )
-        for region_name in ("nose", "mouth", "lower_face"):
+        for region_name in ("mouth", "lower_face"):
             current = visibility_scores.get(region_name, 1.0)
-            visibility_scores[region_name] = min(current, max(0.0, 1.0 - severity))
+            visibility_scores[region_name] = min(current, max(0.45, 1.0 - 0.6 * severity))
             if visibility_scores[region_name] < _region_visibility_threshold(region_name) and region_name not in occluded_regions:
                 occluded_regions.append(region_name)
             if visibility_scores[region_name] < _region_visibility_threshold(region_name):
                 region_reasons[region_name] = _merge_reason(region_reasons.get(region_name), "quality_occlusion_signal")
-        occlusion_score = max(occlusion_score, 0.32 + 0.50 * severity)
+        occlusion_score = max(occlusion_score, 0.20 + 0.25 * severity)
 
     return occluded_regions, visibility_scores, region_reasons, occlusion_score
 
