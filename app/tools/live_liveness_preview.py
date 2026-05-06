@@ -780,7 +780,15 @@ class TemporalLivenessAggregator:
         cascade_reasoning: Optional[str] = None
         cascade_confidence = 0.0
 
-        if smoothed_screen_frame_risk > 0.40:
+        screen_frame_corroborated = _is_screen_frame_corroborated_from_details(
+            metrics.details,
+            screen_frame_risk=smoothed_screen_frame_risk,
+            device_replay_risk=smoothed_device_replay_risk,
+            moire_risk=smoothed_moire_risk,
+            reflection_risk=smoothed_reflection_risk,
+            flicker_risk=smoothed_flicker,
+        )
+        if smoothed_screen_frame_risk > 0.40 and screen_frame_corroborated:
             cascade_reasoning = "High screen frame score (primary, ML importance: 0.39-0.55)"
             cascade_confidence = 0.90
         elif smoothed_reflection_risk > 0.60:
@@ -791,8 +799,9 @@ class TemporalLivenessAggregator:
             cascade_confidence = 0.80
         any_cascade_triggered = cascade_reasoning is not None
         logger.info(
-            "CASCADE OUTPUT: screen_frame=%.2f (>0.40?), reflection=%.2f (>0.60?), flicker=%.2f (>0.45?), cascade_triggered=%s, cascade_reasoning=%s",
+            "CASCADE OUTPUT: screen_frame=%.2f (>0.40? corroborated=%s), reflection=%.2f (>0.60?), flicker=%.2f (>0.45?), cascade_triggered=%s, cascade_reasoning=%s",
             smoothed_screen_frame_risk,
+            "YES" if screen_frame_corroborated else "NO",
             smoothed_reflection_risk,
             smoothed_flicker,
             "YES" if any_cascade_triggered else "NO",
@@ -3488,17 +3497,31 @@ def _is_screen_frame_high(frame_metrics: FrameMetrics) -> bool:
 
 
 def _is_confirmed_screen_device(frame_metrics: FrameMetrics) -> bool:
-    screen_source = _maybe_float(frame_metrics.details.get("screen_frame_source")) or 0.0
     screen_frame_risk = _device_spoof_value(frame_metrics, "screen_frame_risk") or 0.0
-    candidate_found = _maybe_float(frame_metrics.details.get("boundary_candidate_found")) or 0.0
-    partial_candidate_found = _maybe_float(frame_metrics.details.get("boundary_partial_candidate_found")) or 0.0
-    candidate_score = _maybe_float(frame_metrics.details.get("screen_frame_candidate_score")) or 0.0
-    contour_score = _maybe_float(frame_metrics.details.get("boundary_contour_score")) or 0.0
-    partial_score = _maybe_float(frame_metrics.details.get("boundary_partial_score")) or 0.0
-    aspect_score = _maybe_float(frame_metrics.details.get("screen_frame_aspect_score")) or 0.0
-    face_center_inside = _maybe_float(frame_metrics.details.get("screen_frame_face_center_inside")) or 0.0
-    contour_area_ratio = _maybe_float(frame_metrics.details.get("screen_frame_area_ratio")) or 0.0
-    partial_area_ratio = _maybe_float(frame_metrics.details.get("boundary_partial_candidate_area_ratio")) or 0.0
+    return _is_confirmed_screen_device_from_details(
+        frame_metrics.details,
+        screen_frame_risk=screen_frame_risk,
+    )
+
+
+def _is_confirmed_screen_device_from_details(
+    details: dict[str, Any],
+    *,
+    screen_frame_risk: Optional[float] = None,
+) -> bool:
+    screen_source = _maybe_float(details.get("screen_frame_source")) or 0.0
+    resolved_screen_frame_risk = (
+        screen_frame_risk if screen_frame_risk is not None else (_maybe_float(details.get("screen_frame_risk")) or 0.0)
+    )
+    candidate_found = _maybe_float(details.get("boundary_candidate_found")) or 0.0
+    partial_candidate_found = _maybe_float(details.get("boundary_partial_candidate_found")) or 0.0
+    candidate_score = _maybe_float(details.get("screen_frame_candidate_score")) or 0.0
+    contour_score = _maybe_float(details.get("boundary_contour_score")) or 0.0
+    partial_score = _maybe_float(details.get("boundary_partial_score")) or 0.0
+    aspect_score = _maybe_float(details.get("screen_frame_aspect_score")) or 0.0
+    face_center_inside = _maybe_float(details.get("screen_frame_face_center_inside")) or 0.0
+    contour_area_ratio = _maybe_float(details.get("screen_frame_area_ratio")) or 0.0
+    partial_area_ratio = _maybe_float(details.get("boundary_partial_candidate_area_ratio")) or 0.0
     candidate_area_ratio = max(contour_area_ratio, partial_area_ratio)
     any_candidate_found = candidate_found >= 0.5 or partial_candidate_found >= 0.5
     strong_geometry = contour_score >= 0.58 or partial_score >= 0.68
@@ -3516,12 +3539,54 @@ def _is_confirmed_screen_device(frame_metrics: FrameMetrics) -> bool:
         and centered_candidate
         and large_enough_candidate
         and plausible_device_shape
-        and screen_frame_risk >= 0.62
+        and resolved_screen_frame_risk >= 0.62
         and candidate_score >= 0.58
         and strong_geometry
     )
 
     return bool(detector_confirmed or geometric_confirmed)
+
+
+def _is_screen_frame_corroborated_from_details(
+    details: dict[str, Any],
+    *,
+    screen_frame_risk: Optional[float] = None,
+    device_replay_risk: Optional[float] = None,
+    moire_risk: Optional[float] = None,
+    reflection_risk: Optional[float] = None,
+    flicker_risk: Optional[float] = None,
+) -> bool:
+    resolved_screen_frame_risk = (
+        screen_frame_risk if screen_frame_risk is not None else (_maybe_float(details.get("screen_frame_risk")) or 0.0)
+    )
+    resolved_device_replay_risk = (
+        device_replay_risk if device_replay_risk is not None else (_maybe_float(details.get("device_replay_risk")) or 0.0)
+    )
+    resolved_moire_risk = moire_risk if moire_risk is not None else (_maybe_float(details.get("moire_risk")) or 0.0)
+    resolved_reflection_risk = (
+        reflection_risk if reflection_risk is not None else (_maybe_float(details.get("reflection_risk")) or 0.0)
+    )
+    resolved_flicker_risk = flicker_risk if flicker_risk is not None else (_maybe_float(details.get("flicker_risk")) or 0.0)
+    weighted_support_score = _maybe_float(details.get("preview_weighted_spoof_support_score")) or 0.0
+    support_streak = int(_maybe_float(details.get("preview_spoof_support_streak")) or 0.0)
+    confirmed_screen = _is_confirmed_screen_device_from_details(
+        details,
+        screen_frame_risk=resolved_screen_frame_risk,
+    )
+    independent_spoof_cues = sum(
+        (
+            int(resolved_device_replay_risk >= 0.45),
+            int(resolved_moire_risk >= 0.55),
+            int(resolved_reflection_risk >= 0.55),
+            int(resolved_flicker_risk >= 0.45),
+        )
+    )
+    return bool(
+        confirmed_screen
+        or (resolved_device_replay_risk >= 0.48 and weighted_support_score >= 2.0)
+        or (resolved_device_replay_risk >= 0.42 and support_streak >= 2 and independent_spoof_cues >= 1)
+        or (resolved_screen_frame_risk >= 0.60 and independent_spoof_cues >= 1)
+    )
 
 
 def _is_screen_frame_supportive(frame_metrics: FrameMetrics) -> bool:
@@ -4413,8 +4478,19 @@ def _resolve_decision_state(
     if face_usability_blocked:
         logger.info("CASCADE: skipped because face_usability_blocked=1")
     else:
-        if screen_frame_score is not None and screen_frame_score > 0.40:
-            logger.info("CASCADE 1 TRIGGERED: screen_frame=%.2f > 0.40", screen_frame_score)
+        screen_frame_corroborated = _is_screen_frame_corroborated_from_details(
+            current_frame.details,
+            screen_frame_risk=screen_frame_score,
+            device_replay_risk=device_replay_score,
+            moire_risk=moire_score,
+            reflection_risk=reflection_score,
+            flicker_risk=flicker_score,
+        )
+        if screen_frame_score is not None and screen_frame_score > 0.40 and screen_frame_corroborated:
+            logger.info(
+                "CASCADE 1 TRIGGERED: screen_frame=%.2f > 0.40 with corroboration",
+                screen_frame_score,
+            )
             return "SPOOF"
         if reflection_score is not None and reflection_score > 0.60:
             logger.info("CASCADE 2 TRIGGERED: reflection=%.2f > 0.60", reflection_score)
