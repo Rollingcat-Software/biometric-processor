@@ -364,21 +364,38 @@ class TemporalLivenessAggregator:
             )
         )
 
+        # When liveness was skipped because the face was unusable (occluded / recovering),
+        # raw_score=0.0 is a pipeline artifact, not a real liveness measurement.
+        # Injecting it into the EMA collapses the smoothed score after a single
+        # head-turn and keeps the system in SPOOF long after the face recovers.
+        _liveness_skipped = bool(
+            _maybe_float(metrics.details.get("liveness_skipped_due_to_face_usability")) or 0.0
+        )
+
         if self._ema_score is None:
-            self._ema_score = metrics.raw_score
+            if not _liveness_skipped:
+                self._ema_score = metrics.raw_score
         else:
-            self._ema_score = self._ema_alpha * metrics.raw_score + (1.0 - self._ema_alpha) * self._ema_score
+            if not _liveness_skipped:
+                self._ema_score = self._ema_alpha * metrics.raw_score + (1.0 - self._ema_alpha) * self._ema_score
+            # else: hold EMA at its last known-good value
 
         recent_entries = list(self._buffer)
         effective_entries = _effective_entries_for_analysis(
             recent_entries,
             face_return_grace_seconds=self._face_return_grace_seconds,
         )
-        scores = [item.raw_score for item in effective_entries]
+        # Exclude frames where liveness was skipped from the score mean so that
+        # zero-score artifacts don't drag the window average below the LIVE threshold.
+        _scored_entries = [
+            item for item in effective_entries
+            if not bool(_maybe_float(item.details.get("liveness_skipped_due_to_face_usability")) or 0.0)
+        ]
+        scores = [item.raw_score for item in (_scored_entries or effective_entries)]
         score_mean = float(np.mean(scores))
         # Keep score smoothing tied only to score history so it remains a temporal
         # stabilization of liveness, not a proxy for decision trustworthiness.
-        smoothed_score = 0.65 * float(self._ema_score) + 0.35 * score_mean
+        smoothed_score = 0.65 * float(self._ema_score or 0.0) + 0.35 * score_mean
         passive_window_score = _mean([entry.passive_score for entry in effective_entries]) or 0.0
         live_count = sum(1 for item in effective_entries if item.is_live)
         face_present_ratio = sum(1 for item in effective_entries if item.face_detected) / max(len(effective_entries), 1)
@@ -1279,15 +1296,16 @@ class TemporalLivenessAggregator:
             raw_decision = "INSUFFICIENT_EVIDENCE"
             suspicion_reasons.append("POST_NO_FACE_COOLDOWN")
 
-        # Temporary: bypass debug decision guards so the cascade/ML path can be
-        # evaluated without non-data-driven suppression to INSUFFICIENT_EVIDENCE.
         logger.info(
-            "DEBUG LAYER INPUT: spoof_reason_explicit=%s, strong_spoof_evidence=%s, unstable_non_spoof=%s, guard_bypassed=True",
+            "DEBUG LAYER INPUT: spoof_reason_explicit=%s, strong_spoof_evidence=%s, unstable_non_spoof=%s",
             spoof_reason_explicit,
             strong_spoof_evidence,
             unstable_non_spoof,
         )
-        if False and (
+        # Guard tier 1: spoof_gate fired but conditions are known-unstable and no
+        # confirmed replay signal — downgrade to INSUFFICIENT_EVIDENCE so the user
+        # gets another chance rather than an immediate hard rejection.
+        if (
             raw_decision == "SPOOF"
             and unstable_non_spoof_case
             and spoof_gate == 1
@@ -1300,7 +1318,8 @@ class TemporalLivenessAggregator:
             decision_guard_reason = "unstable_non_spoof_guard"
             spoof_streak_frozen = True
             high_replay_risk_blocked = True
-        elif False and (
+        # Guard tier 2: broader unstable case without explicit spoof signal.
+        elif (
             raw_decision == "SPOOF"
             and unstable_non_spoof_case
             and not replay_veto
@@ -1313,7 +1332,9 @@ class TemporalLivenessAggregator:
             decision_guard_reason = "unstable_non_spoof_guard"
             spoof_streak_frozen = True
             high_replay_risk_blocked = True
-        if False and (
+        # Guard tier 3: recovery window after a low-quality block — don't call SPOOF
+        # while the score is still climbing back from zero.
+        if (
             raw_decision == "SPOOF"
             and not spoof_reason_explicit
             and recovery_after_low_quality
@@ -1321,7 +1342,8 @@ class TemporalLivenessAggregator:
             raw_decision = "INSUFFICIENT_EVIDENCE"
             decision_guard_reason = "recovery_after_low_quality"
             high_replay_risk_blocked = True
-        elif False and (
+        # Guard tier 4: signal is unstable and no confirmed reason to call SPOOF.
+        elif (
             raw_decision == "SPOOF"
             and not spoof_reason_explicit
             and unstable_non_spoof
@@ -1329,7 +1351,9 @@ class TemporalLivenessAggregator:
             raw_decision = "INSUFFICIENT_EVIDENCE"
             decision_guard_reason = "unstable_non_spoof"
             high_replay_risk_blocked = True
-        elif False and (
+        # Guard tier 5: no explicit spoof evidence and no strong confirmation — last
+        # safety net before a hard SPOOF verdict reaches the caller.
+        elif (
             raw_decision == "SPOOF"
             and not spoof_reason_explicit
             and not strong_spoof_evidence
