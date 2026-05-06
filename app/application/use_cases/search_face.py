@@ -137,8 +137,21 @@ class SearchFaceUseCase:
         if hasattr(detection, "face_count") and detection.face_count > 1:
             raise MultipleFacesError(count=detection.face_count)
 
-        # Extract embedding
-        embedding = await self._extractor.extract(image)
+        # USER-BUG-4 (2026-05-04): /search must use the cropped face region as
+        # the embedding extractor input, NOT the full frame. Enrollment and
+        # /verify both call ``detection.get_face_region(image)`` and pass the
+        # crop to ``extractor.extract``; the DeepFace extractor runs with
+        # ``enforce_detection=False`` because the upstream pipeline is
+        # responsible for the crop. Passing the full frame here produced a
+        # different embedding than the one stored at enrollment, so cosine
+        # distance against the centroid never crossed the verification
+        # threshold and /search always returned "no matches found" even when
+        # /verify on the same image succeeded.
+        face_region = detection.get_face_region(image)
+
+        # Extract embedding (from the cropped face region — parity with
+        # enroll_face.py and verify_face.py)
+        embedding = await self._extractor.extract(face_region)
 
         # Get threshold from calculator if not provided
         if threshold is None:
