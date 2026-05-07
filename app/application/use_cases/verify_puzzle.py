@@ -42,6 +42,15 @@ class VerifyPuzzleUseCase:
     # Overall pass threshold
     PASS_THRESHOLD = 0.6  # 60% overall score
 
+    # Spot-check anti-replay configuration
+    # Maximum number of spot-check frames to evaluate per request
+    MAX_SPOT_CHECK_FRAMES = 3
+    # Reject the spot-check if at least this many of the inspected frames
+    # fail or cannot be evaluated (decode error / detector exception / not-live).
+    # P0-#9: corrupt frames are treated as failures so attackers cannot
+    # neutralise the spot-check by submitting unparseable JPEGs.
+    MAX_FAILED_SPOT_CHECK_FRAMES = 2
+
     def __init__(
             self,
             puzzle_repository: IPuzzleRepository,
@@ -157,6 +166,17 @@ class VerifyPuzzleUseCase:
     ) -> tuple[bool, str]:
         """Spot-check frames with passive liveness detector.
 
+        Anti-replay (P0-#9):
+            Any frame the server cannot positively confirm as live counts as a
+            failure. This includes:
+              * base64 / JPEG decode errors
+              * detector exceptions
+              * ``is_live=False`` outcomes
+            Without this, an attacker could blind the spot-check by submitting
+            unparseable frames — the loop would ``continue`` on every frame,
+            ``failed_count`` would stay at 0, and the spot-check would return
+            ``True`` despite never having verified a single live frame.
+
         Args:
             spot_frames: List of base64 encoded frames
 
@@ -167,30 +187,55 @@ class VerifyPuzzleUseCase:
             return True, ""
 
         failed_count = 0
+        inspected = spot_frames[: self.MAX_SPOT_CHECK_FRAMES]
 
-        for i, frame_b64 in enumerate(spot_frames[:3]):  # max 3 frame
+        for i, frame_b64 in enumerate(inspected):
             try:
                 frame_bytes = base64.b64decode(frame_b64)
                 np_arr = np.frombuffer(frame_bytes, np.uint8)
                 frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
                 if frame is None:
-                    logger.warning(f"Spot-check frame {i} could not be decoded")
-                    continue
-
-                result = await self._spot_check_detector.check_liveness(frame)
-
-                if not result.is_live:
+                    # Corrupt / unparseable JPEG — count as a failure so
+                    # attackers cannot neutralise the spot-check by sending
+                    # garbage bytes (P0-#9).
                     failed_count += 1
                     logger.warning(
-                        f"Spot-check frame {i} failed: score={result.liveness_score}"
+                        "Spot-check frame %d could not be decoded; "
+                        "counting as failure (failed=%d/%d)",
+                        i, failed_count, len(inspected),
                     )
+                else:
+                    result = await self._spot_check_detector.check_liveness(frame)
+
+                    if not result.is_live:
+                        failed_count += 1
+                        logger.warning(
+                            "Spot-check frame %d failed: score=%s "
+                            "(failed=%d/%d)",
+                            i, result.liveness_score,
+                            failed_count, len(inspected),
+                        )
 
             except Exception as e:
-                logger.warning(f"Spot-check frame {i} error: {e}")
-                continue
+                # Detector / decoder raised — also a failure (P0-#9):
+                # we did not get a positive live verdict for this frame.
+                failed_count += 1
+                logger.warning(
+                    "Spot-check frame %d error: %s; counting as failure "
+                    "(failed=%d/%d)",
+                    i, e, failed_count, len(inspected),
+                )
 
-        if failed_count >= 2:
+            # Hard threshold: short-circuit as soon as we hit the cap.
+            if failed_count >= self.MAX_FAILED_SPOT_CHECK_FRAMES:
+                logger.warning(
+                    "Spot-check aborted after %d/%d failed frames",
+                    failed_count, len(inspected),
+                )
+                return False, "SPOT_CHECK_FAILED"
+
+        if failed_count >= self.MAX_FAILED_SPOT_CHECK_FRAMES:
             return False, "SPOT_CHECK_FAILED"
 
         return True, ""
