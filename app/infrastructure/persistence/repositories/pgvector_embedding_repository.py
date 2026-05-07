@@ -371,15 +371,26 @@ class PgVectorEmbeddingRepository:
 
         Note:
             For multi-tenant systems, both user_id and tenant_id must match.
+
+            GDPR P1.3 (P0-#2 fix, 2026-05-07): the canonical store-of-record
+            is ``embedding_ciphertext`` (Fernet AES-128-CBC + HMAC-SHA256).
+            We SELECT the ciphertext alongside the plaintext ANN column and
+            **prefer the decrypted ciphertext** when present. Falling back to
+            the plaintext ``embedding`` column only happens for legacy rows
+            written before the dual-column schema landed — which should be
+            zero in production but kept for forward-compatibility during
+            roll-out. Once a backfill confirms ciphertext coverage = 100% we
+            can drop the plaintext column (Option B follow-up).
         """
         try:
             pool = await self._ensure_pool()
 
             async with pool.acquire() as conn:
-                # Return centroid (averaged embedding) for verification
+                # Return centroid (averaged embedding) for verification.
+                # Select ciphertext + plaintext; ciphertext is canonical.
                 row = await conn.fetchrow(
                     """
-                    SELECT embedding
+                    SELECT embedding, embedding_ciphertext
                     FROM face_embeddings
                     WHERE user_id = $1
                       AND enrollment_type = 'CENTROID'
@@ -392,7 +403,7 @@ class PgVectorEmbeddingRepository:
                 if not row:
                     row = await conn.fetchrow(
                         """
-                        SELECT embedding
+                        SELECT embedding, embedding_ciphertext
                         FROM face_embeddings
                         WHERE user_id = $1
                           AND deleted_at IS NULL
@@ -403,8 +414,7 @@ class PgVectorEmbeddingRepository:
                     )
 
             if row:
-                # Convert PostgreSQL vector to numpy array
-                embedding = np.array(row["embedding"], dtype=np.float32)
+                embedding = self._decode_row_embedding(row, user_id=user_id)
                 logger.debug(f"Found embedding for user {user_id}")
                 return embedding
             else:
@@ -414,6 +424,29 @@ class PgVectorEmbeddingRepository:
         except Exception as e:
             logger.error(f"Failed to find embedding: {e}", exc_info=True)
             raise RepositoryError(operation="find", reason=str(e))
+
+    def _decode_row_embedding(
+        self, row: "asyncpg.Record", *, user_id: Optional[str] = None
+    ) -> np.ndarray:
+        """Decode an embedding from a row that selects both columns.
+
+        Prefers ``embedding_ciphertext`` (decrypts via Fernet). Falls back to
+        the plaintext ``embedding`` column only when the ciphertext is NULL,
+        which can only happen for pre-P1.3 legacy rows. Falling back logs a
+        warning so we can monitor the residual plaintext-only population and
+        gate the Option B (drop plaintext) follow-up on it reaching zero.
+        """
+        ciphertext = row["embedding_ciphertext"]
+        if ciphertext is not None:
+            return self._cipher.decrypt_vector(bytes(ciphertext))
+
+        # Legacy fallback — should be zero in fresh deployments.
+        logger.warning(
+            "GDPR P1.3 fallback: row for user_id=%s has NULL embedding_ciphertext; "
+            "reading plaintext column. Backfill required.",
+            user_id,
+        )
+        return np.array(row["embedding"], dtype=np.float32)
 
     async def find_similar(
         self,
@@ -818,6 +851,7 @@ class PgVectorEmbeddingRepository:
                     SELECT
                         user_id,
                         embedding,
+                        embedding_ciphertext,
                         quality_score,
                         created_at,
                         updated_at
@@ -832,10 +866,12 @@ class PgVectorEmbeddingRepository:
                     offset,
                 )
 
+            # GDPR P1.3 (P0-#2 fix): decrypt ciphertext per-row; fall back to
+            # plaintext only for legacy rows. See ``_decode_row_embedding``.
             return [
                 {
                     "user_id": row["user_id"],
-                    "embedding": np.array(row["embedding"], dtype=np.float32),
+                    "embedding": self._decode_row_embedding(row, user_id=row["user_id"]),
                     "quality_score": float(row["quality_score"]) if row["quality_score"] else None,
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
