@@ -211,6 +211,11 @@ class PgVectorVoiceRepository:
 
         Returns the CENTROID if available, otherwise falls back to the
         latest INDIVIDUAL enrollment.
+
+        GDPR P1.3 (P0-#2 fix, 2026-05-07): canonical store-of-record is
+        ``embedding_ciphertext`` (Fernet). We select both columns and prefer
+        the decrypted ciphertext; the plaintext column is only consulted for
+        pre-P1.3 legacy rows. See sibling face repo for full rationale.
         """
         try:
             pool = await self._ensure_pool()
@@ -218,7 +223,7 @@ class PgVectorVoiceRepository:
             async with pool.acquire() as conn:
                 row = await conn.fetchrow(
                     """
-                    SELECT embedding
+                    SELECT embedding, embedding_ciphertext
                     FROM voice_enrollments
                     WHERE user_id = $1::varchar
                       AND enrollment_type = 'CENTROID'
@@ -231,7 +236,7 @@ class PgVectorVoiceRepository:
                 if not row:
                     row = await conn.fetchrow(
                         """
-                        SELECT embedding
+                        SELECT embedding, embedding_ciphertext
                         FROM voice_enrollments
                         WHERE user_id = $1::varchar
                           AND enrollment_type = 'INDIVIDUAL'
@@ -245,12 +250,29 @@ class PgVectorVoiceRepository:
                 if not row:
                     return None
 
-                embedding = np.array(row["embedding"], dtype=np.float32)
-                return embedding
+                return self._decode_row_embedding(row, user_id=user_id)
 
         except Exception as e:
             logger.error(f"Failed to find voice embedding: {e}", exc_info=True)
             raise RepositoryError(operation="find_by_user_id", reason=str(e))
+
+    def _decode_row_embedding(
+        self, row: "asyncpg.Record", *, user_id: Optional[str] = None
+    ) -> np.ndarray:
+        """Decode an embedding row, preferring the encrypted column.
+
+        Mirrors :meth:`PgVectorEmbeddingRepository._decode_row_embedding`.
+        """
+        ciphertext = row["embedding_ciphertext"]
+        if ciphertext is not None:
+            return self._cipher.decrypt_vector(bytes(ciphertext))
+
+        logger.warning(
+            "GDPR P1.3 voice fallback: row for user_id=%s has NULL "
+            "embedding_ciphertext; reading plaintext column. Backfill required.",
+            user_id,
+        )
+        return np.array(row["embedding"], dtype=np.float32)
 
     async def delete_by_user_id(self, user_id: str) -> bool:
         """Soft-delete all voice enrollments for a user.
