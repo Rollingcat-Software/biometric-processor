@@ -90,6 +90,37 @@ async def lifespan(app: FastAPI):
     initialize_dependencies()
     logger.info("Dependencies initialized")
 
+    # P0 startup health-check (INVESTIGATION_MASTER_2026-05-07):
+    # Fail boot if the liveness detector cannot be instantiated.
+    # The previous behavior (silent None injection -> use case fail-OPEN
+    # in live_camera_analysis.py) approved every frame on /live-analysis/*
+    # with is_live=True. Aborting at boot converts a runtime silent
+    # fail-open into a deterministic, easy-to-diagnose crash. The use case
+    # itself now also fail-CLOSES if the detector is missing at runtime.
+    from app.core.container import get_liveness_detector
+
+    try:
+        _liveness_health = get_liveness_detector()
+        if _liveness_health is None:
+            raise RuntimeError(
+                "get_liveness_detector() returned None — refusing to boot "
+                "because /live-analysis/* would silently fail-open."
+            )
+        logger.info(
+            "Startup health-check: liveness detector OK (%s)",
+            type(_liveness_health).__name__,
+        )
+    except Exception as exc:
+        logger.critical(
+            "Startup health-check FAILED: liveness detector cannot be "
+            "instantiated (%s). Aborting boot to prevent silent fail-open "
+            "on /live-analysis/* — check LIVENESS_MODE / LIVENESS_BACKEND "
+            "env vars and model files.",
+            exc,
+            exc_info=True,
+        )
+        raise
+
     yield
 
     # Shutdown

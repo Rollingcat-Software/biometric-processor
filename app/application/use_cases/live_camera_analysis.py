@@ -185,11 +185,29 @@ class LiveCameraAnalysisUseCase:
                     liveness = await self._analyze_liveness(face_region)
                     response.liveness = liveness
                 else:
+                    # P0 fail-closed (INVESTIGATION_MASTER_2026-05-07): when DI
+                    # fails to inject a liveness detector (env-var typo, missing
+                    # model file, init exception), the previous default of
+                    # is_live=True silently approved every frame on /live-analysis/*.
+                    # We now return is_live=False with a machine-parseable reason.
+                    # The boot-time health check in app.main.lifespan additionally
+                    # aborts startup when the detector cannot be instantiated, so
+                    # this branch should only ever fire if a route-level dependency
+                    # explicitly bypasses the container — easier to diagnose than
+                    # a silent fail-open.
+                    logger.error(
+                        "Liveness detector unavailable; failing closed for mode=%s. "
+                        "Check container.get_liveness_detector() wiring and "
+                        "LIVENESS_BACKEND/LIVENESS_MODE env vars.",
+                        mode,
+                    )
                     response.liveness = LivenessResult(
-                        is_live=True,  # Default to true if no detector
-                        confidence=0.5,
-                        method="none",
-                        checks={"passive": True},
+                        is_live=False,
+                        confidence=0.0,
+                        method="unavailable",
+                        checks={"detector_available": False},
+                        scores={},
+                        metadata={"reason": "liveness_detector_unavailable"},
                     )
 
             # Step 5: Enrollment readiness check
