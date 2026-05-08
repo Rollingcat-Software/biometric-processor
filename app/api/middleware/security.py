@@ -304,11 +304,14 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
                     logger.warning(
                         f"Request too large: {length} bytes (max: {self._max_content_length})"
                     )
+                    # i18n contract: stable error_code + machine-readable
+                    # limit; clients localize the message. Aligned with
+                    # main.py request_size_guard.
                     return JSONResponse(
                         status_code=413,
                         content={
-                            "error_code": "PAYLOAD_TOO_LARGE",
-                            "message": f"Request body exceeds maximum size of {self._max_content_length} bytes",
+                            "error_code": "FILE_TOO_LARGE",
+                            "max_size_bytes": self._max_content_length,
                         },
                     )
             except ValueError:

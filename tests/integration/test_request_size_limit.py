@@ -60,11 +60,8 @@ def _build_app(max_upload_size: int, api_key: str = "test-key"):
                 return JSONResponse(
                     status_code=413,
                     content={
-                        "error_code": "PAYLOAD_TOO_LARGE",
-                        "message": (
-                            f"Request body exceeds maximum size of "
-                            f"{max_upload_size} bytes"
-                        ),
+                        "error_code": "FILE_TOO_LARGE",
+                        "max_size_bytes": max_upload_size,
                     },
                 )
         return await call_next(request)
@@ -90,8 +87,11 @@ class TestRequestSizeGuard:
 
         assert response.status_code == 413
         payload = response.json()
-        assert payload["error_code"] == "PAYLOAD_TOO_LARGE"
-        assert str(max_upload) in payload["message"]
+        # i18n contract: stable error_code + machine-readable size; no
+        # English message field. Frontend localizes.
+        assert payload["error_code"] == "FILE_TOO_LARGE"
+        assert payload["max_size_bytes"] == max_upload
+        assert "message" not in payload
 
     def test_size_guard_runs_before_api_key_auth(self):
         """413 must fire even without an API key (auth must NOT be reached)."""
