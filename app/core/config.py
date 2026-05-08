@@ -135,6 +135,23 @@ class Settings(BaseSettings):
         description="Minimum antispoof score to accept a face as real"
     )
 
+    # Liveness verdict policy — how to resolve contradictions between
+    # DeepFace anti-spoof ("spoof" label) and the primary liveness backend
+    # (e.g. UniFace). See INVESTIGATION_FAILOPEN_2026-05-07.md.
+    # - "conservative" (default, secure): either backend voting spoof wins.
+    # - "optimistic" (legacy): DeepFace only vetoes when primary backend
+    #   confidence < DEEPFACE_VETO_CONFIDENCE_THRESHOLD; otherwise primary
+    #   backend wins. Contradictions are logged.
+    LIVENESS_VERDICT_POLICY: Literal["conservative", "optimistic"] = Field(
+        default="conservative",
+        description=(
+            "Policy for resolving DeepFace vs primary-backend liveness "
+            "verdict contradictions. 'conservative' = either-vetoes "
+            "(secure default). 'optimistic' = primary backend wins on "
+            "high confidence, log warning on contradiction."
+        ),
+    )
+
     # Thresholds
     VERIFICATION_THRESHOLD: float = Field(default=0.45, ge=0.0, le=1.0)
     LIVENESS_THRESHOLD: float = Field(default=70.0, ge=0.0, le=100.0)

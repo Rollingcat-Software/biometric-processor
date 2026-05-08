@@ -622,3 +622,184 @@ class TestCheckLivenessUseCase:
         # Verify liveness detector received the image
         call_args = mock_liveness_detector.check_liveness.call_args
         assert isinstance(call_args[0][0], np.ndarray)
+
+
+# ============================================================================
+# CheckLivenessUseCase — Verdict Policy Tests
+# ============================================================================
+#
+# Regression: INVESTIGATION_FAILOPEN_2026-05-07.md flagged that when UniFace's
+# liveness confidence was >= 0.85, DeepFace's "spoof" verdict was silently
+# ignored — a fail-open. The fix introduces LIVENESS_VERDICT_POLICY:
+#   - "conservative" (default): either backend voting spoof wins
+#   - "optimistic" (legacy): primary backend wins on high confidence,
+#                           contradiction is logged
+# ============================================================================
+
+
+class TestCheckLivenessVerdictPolicy:
+    """Verify the contradictory-vote scenario across both verdict policies.
+
+    Scenario: DeepFace says spoof with antispoof_score=0.95, primary backend
+    (UniFace) says is_live=True with confidence=0.92 (>= 0.85 veto threshold).
+    """
+
+    @staticmethod
+    def _spoof_detection():
+        from app.domain.entities.face_detection import FaceDetectionResult
+        return FaceDetectionResult(
+            found=True,
+            bounding_box=(50, 50, 100, 100),
+            landmarks=None,
+            confidence=0.95,
+            antispoof_score=0.95,
+            antispoof_label="spoof",
+        )
+
+    @staticmethod
+    def _live_high_confidence_result():
+        # UniFace says "live" with high confidence (>= 0.85)
+        return LivenessResult(
+            is_live=True,
+            score=92.0,
+            challenge="passive",
+            challenge_completed=True,
+            confidence=0.92,
+        )
+
+    @pytest.mark.asyncio
+    async def test_conservative_policy_either_vetoes_spoof(
+        self,
+        temp_image_file,
+    ):
+        """Conservative (default): DeepFace spoof + UniFace live -> spoof."""
+        from app.core.config import get_settings
+
+        settings = get_settings()
+        settings.ANTI_SPOOFING_ENABLED = True
+        settings.LIVENESS_VERDICT_POLICY = "conservative"
+
+        face_detector = Mock()
+        face_detector.detect = AsyncMock(return_value=self._spoof_detection())
+
+        liveness_detector = Mock()
+        liveness_detector.check_liveness = AsyncMock(
+            return_value=self._live_high_confidence_result()
+        )
+
+        use_case = CheckLivenessUseCase(
+            detector=face_detector,
+            liveness_detector=liveness_detector,
+        )
+
+        with patch("cv2.imread") as mock_imread:
+            mock_imread.return_value = np.random.randint(
+                0, 255, (200, 200, 3), dtype=np.uint8
+            )
+            result = await use_case.execute(image_path=temp_image_file)
+
+        # The conservative policy must override UniFace and reject as spoof.
+        assert result.is_live is False, (
+            "Conservative policy must let DeepFace veto when it says 'spoof', "
+            "even if UniFace confidence >= veto threshold."
+        )
+        assert result.details["deepface_veto_applied"] is True
+        assert result.details["verdict_policy"] == "conservative"
+        assert result.details["verdict_contradiction"] is True
+
+    @pytest.mark.asyncio
+    async def test_optimistic_policy_high_confidence_primary_wins_and_logs(
+        self,
+        temp_image_file,
+        caplog,
+    ):
+        """Optimistic: UniFace confidence >= 0.85 -> live, but warning logged."""
+        import logging
+
+        from app.core.config import get_settings
+
+        settings = get_settings()
+        settings.ANTI_SPOOFING_ENABLED = True
+        settings.LIVENESS_VERDICT_POLICY = "optimistic"
+
+        face_detector = Mock()
+        face_detector.detect = AsyncMock(return_value=self._spoof_detection())
+
+        liveness_detector = Mock()
+        liveness_detector.check_liveness = AsyncMock(
+            return_value=self._live_high_confidence_result()
+        )
+
+        use_case = CheckLivenessUseCase(
+            detector=face_detector,
+            liveness_detector=liveness_detector,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="app.application.use_cases.check_liveness"):
+            with patch("cv2.imread") as mock_imread:
+                mock_imread.return_value = np.random.randint(
+                    0, 255, (200, 200, 3), dtype=np.uint8
+                )
+                result = await use_case.execute(image_path=temp_image_file)
+
+        # Optimistic mode: primary backend (UniFace) wins on high confidence.
+        assert result.is_live is True, (
+            "Optimistic policy preserves legacy behavior: primary backend "
+            "wins when its confidence >= DEEPFACE_VETO_CONFIDENCE_THRESHOLD."
+        )
+        assert result.details["deepface_veto_applied"] is False
+        assert result.details["verdict_policy"] == "optimistic"
+        assert result.details["verdict_contradiction"] is True
+
+        # The contradiction MUST be logged as a warning even though we let
+        # the primary backend win.
+        contradiction_logs = [
+            r for r in caplog.records
+            if "liveness_verdict_contradiction" in r.getMessage()
+        ]
+        assert contradiction_logs, (
+            "Optimistic mode must log a warning when DeepFace and the "
+            "primary backend disagree, even when the primary backend wins."
+        )
+
+    @pytest.mark.asyncio
+    async def test_optimistic_policy_low_confidence_deepface_still_vetoes(
+        self,
+        temp_image_file,
+    ):
+        """Optimistic: when UniFace confidence < 0.85, DeepFace still vetoes."""
+        from app.core.config import get_settings
+
+        settings = get_settings()
+        settings.ANTI_SPOOFING_ENABLED = True
+        settings.LIVENESS_VERDICT_POLICY = "optimistic"
+
+        face_detector = Mock()
+        face_detector.detect = AsyncMock(return_value=self._spoof_detection())
+
+        # Low-confidence "live" verdict from primary backend.
+        low_conf_live = LivenessResult(
+            is_live=True,
+            score=70.0,
+            challenge="passive",
+            challenge_completed=True,
+            confidence=0.70,  # < 0.85
+        )
+        liveness_detector = Mock()
+        liveness_detector.check_liveness = AsyncMock(return_value=low_conf_live)
+
+        use_case = CheckLivenessUseCase(
+            detector=face_detector,
+            liveness_detector=liveness_detector,
+        )
+
+        with patch("cv2.imread") as mock_imread:
+            mock_imread.return_value = np.random.randint(
+                0, 255, (200, 200, 3), dtype=np.uint8
+            )
+            result = await use_case.execute(image_path=temp_image_file)
+
+        # Below the veto threshold, optimistic mode also rejects.
+        assert result.is_live is False
+        assert result.details["deepface_veto_applied"] is True
+        assert result.details["verdict_policy"] == "optimistic"
