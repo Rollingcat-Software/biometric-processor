@@ -275,14 +275,15 @@ async def request_size_guard(request, call_next):
                 f"Request rejected: Content-Length {length} > MAX_UPLOAD_SIZE "
                 f"{_MAX_UPLOAD_SIZE} (path={request.url.path})"
             )
+            # i18n contract: server returns a stable machine-readable
+            # error_code plus the limit; clients localize the message.
+            # See INVESTIGATION_USER_CONSTRAINTS_2026-05-07.md "bio 413s
+            # return raw English from main.py".
             return _JR(
                 status_code=413,
                 content={
-                    "error_code": "PAYLOAD_TOO_LARGE",
-                    "message": (
-                        f"Request body exceeds maximum size of "
-                        f"{_MAX_UPLOAD_SIZE} bytes"
-                    ),
+                    "error_code": "FILE_TOO_LARGE",
+                    "max_size_bytes": _MAX_UPLOAD_SIZE,
                 },
             )
     return await call_next(request)

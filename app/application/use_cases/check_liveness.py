@@ -20,6 +20,11 @@ from app.domain.interfaces.liveness_detector import ILivenessDetector
 logger = logging.getLogger(__name__)
 calibration_logger = logging.getLogger("liveness_calibration")
 settings = get_settings()
+# Backwards-compat constant retained for OPTIMISTIC policy (prior default behavior):
+# in optimistic mode, DeepFace's spoof verdict is only honored when UniFace's
+# liveness confidence is below this threshold; above it, UniFace "wins" and we
+# log a warning when the two backends disagree. The CONSERVATIVE policy
+# (current default) ignores this threshold and lets either backend veto.
 DEEPFACE_VETO_CONFIDENCE_THRESHOLD = 0.85
 FACE_CROP_BLUR_THRESHOLD = 50.0
 
@@ -154,10 +159,50 @@ class CheckLivenessUseCase:
             and antispoof_score >= settings.ANTI_SPOOFING_THRESHOLD
         )
 
-        if deepface_spoof_detected and liveness_result.confidence < DEEPFACE_VETO_CONFIDENCE_THRESHOLD:
+        # Verdict policy (P1 — INVESTIGATION_FAILOPEN_2026-05-07.md, fix
+        # `LIVENESS_VERDICT_POLICY`): when DeepFace and the primary liveness
+        # backend (e.g. UniFace) disagree, the policy decides how the
+        # contradiction resolves.
+        #
+        # - "conservative" (default): EITHER backend voting spoof at/above its
+        #   configured confidence wins. This is the secure default per
+        #   INVESTIGATION_FAILOPEN_2026-05-07.md — no silent fail-open.
+        # - "optimistic": preserves the historical behavior — DeepFace's spoof
+        #   verdict is only honored when the primary backend's confidence is
+        #   below DEEPFACE_VETO_CONFIDENCE_THRESHOLD. A warning is always logged
+        #   on contradiction so operators can see the disagreement even when
+        #   the primary backend "wins".
+        verdict_policy = settings.LIVENESS_VERDICT_POLICY
+        contradiction = (
+            deepface_spoof_detected and liveness_result.is_live
+        )
+
+        if verdict_policy == "conservative":
+            apply_veto = deepface_spoof_detected
+        else:  # "optimistic"
+            apply_veto = (
+                deepface_spoof_detected
+                and liveness_result.confidence < DEEPFACE_VETO_CONFIDENCE_THRESHOLD
+            )
+            if contradiction and not apply_veto:
+                logger.warning(
+                    "liveness_verdict_contradiction (optimistic policy: primary backend wins): "
+                    "antispoof_score=%.3f, antispoof_label=%s, "
+                    "primary_is_live=%s, primary_confidence=%.3f, "
+                    "veto_threshold=%.3f, deepface_spoof_ignored=True",
+                    antispoof_score if antispoof_score is not None else 0.0,
+                    antispoof_label,
+                    liveness_result.is_live,
+                    liveness_result.confidence,
+                    DEEPFACE_VETO_CONFIDENCE_THRESHOLD,
+                )
+
+        if apply_veto:
             logger.warning(
-                "DeepFace anti-spoof veto applied: antispoof_score=%.3f, liveness_confidence=%.3f",
-                antispoof_score,
+                "DeepFace anti-spoof veto applied (policy=%s): "
+                "antispoof_score=%.3f, liveness_confidence=%.3f",
+                verdict_policy,
+                antispoof_score if antispoof_score is not None else 0.0,
                 liveness_result.confidence,
             )
             updated_details = {
@@ -167,6 +212,8 @@ class CheckLivenessUseCase:
                 "antispoof_score": antispoof_score,
                 "antispoof_label": antispoof_label,
                 "deepface_veto_applied": True,
+                "verdict_policy": verdict_policy,
+                "verdict_contradiction": contradiction,
             }
             liveness_result = replace(
                 liveness_result,
@@ -183,6 +230,8 @@ class CheckLivenessUseCase:
                     "antispoof_score": antispoof_score,
                     "antispoof_label": antispoof_label,
                     "deepface_veto_applied": False,
+                    "verdict_policy": verdict_policy,
+                    "verdict_contradiction": contradiction,
                 },
             )
 
