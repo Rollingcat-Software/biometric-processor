@@ -76,6 +76,12 @@ services:
       JWT_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET}
 
+      # Fernet embedding encryption (P1.3 — 2026-05-02). Container fails fast
+      # if missing because the embedding repository unconditionally builds an
+      # EmbeddingCipher in its __init__.
+      FIVUCSAS_EMBEDDING_KEY: ${FIVUCSAS_EMBEDDING_KEY}
+      FIVUCSAS_EMBEDDING_KEY_VERSION: ${FIVUCSAS_EMBEDDING_KEY_VERSION}
+
       # Rate Limiting
       RATE_LIMIT_ENABLED: true
       RATE_LIMIT_STORAGE: memory
