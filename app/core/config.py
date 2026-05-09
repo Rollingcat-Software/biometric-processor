@@ -645,6 +645,39 @@ class Settings(BaseSettings):
             "OFF by default; enable per-tenant during integration."
         ),
     )
+    # Anti-spoof flags wiring the spoof-detector v0.2.0 sub-packages.
+    # All default OFF so prod behaviour is unchanged until an operator opts in.
+    # Algorithms live in the standalone `spoof-detector` repo
+    # (https://github.com/Rollingcat-Software/spoof-detector); this service
+    # only owns the wiring/route layer.
+    ANTISPOOF_DEVICE_RISK_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Attach DeviceSpoofRiskEvaluator output to /verify responses. "
+            "Additive, non-blocking; default OFF so prod is unchanged."
+        ),
+    )
+    ANTISPOOF_USABILITY_GATE_ENABLED: bool = Field(
+        default=False,
+        description="Run spoof_detector.gates.FaceUsabilityGate as a pre-liveness layer.",
+    )
+    ANTISPOOF_FUSION_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Run spoof_detector.fusion.HybridFusionEvaluator on top of "
+            "device-spoof signals to produce a fused spoof verdict."
+        ),
+    )
+    ANTISPOOF_CUTOUT_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Force the cutout/focal-blur anomaly observation to be "
+            "propagated in the AntispoofPipelineAssembler `layers_evaluated` "
+            "tuple. The DeviceSpoofRiskEvaluator already runs the underlying "
+            "detector internally; this flag is an explicit observability "
+            "toggle."
+        ),
+    )
     GESTURE_HAND_LANDMARKER_MODEL_PATH: str = Field(
         default=str(_REPO_ROOT / "models" / "hand_landmarker.task"),
         description=(

@@ -1,11 +1,14 @@
 """Verification API routes."""
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 
 from app.api.schemas.verification import VerificationResponse
+from app.application.services.device_spoof_risk_evaluator import (
+    DeviceSpoofRiskEvaluator,
+)
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
 from app.application.use_cases.verify_face import VerifyFaceUseCase
 from app.core.container import (
@@ -27,6 +30,135 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Verification"])
+
+
+# ---------------------------------------------------------------------------
+# Anti-spoof wiring (replaces #85 + #86; algorithms now live in spoof-detector)
+# ---------------------------------------------------------------------------
+#
+# Per architecture decision 2026-05-09: algorithms live in the standalone
+# `spoof-detector` repo (gates, fusion, pipeline assembler). This module only
+# owns the `/verify` wiring. All flags default OFF — prod behaviour is
+# unchanged until an operator opts in.
+#
+# The imports from `spoof_detector` are wrapped in a try/except so the service
+# can still boot if the optional dependency is not installed (e.g. CI lane
+# that doesn't install git-URL deps). When unavailable, every flag-gated path
+# becomes a no-op and the response fields are `None`.
+
+_device_spoof_risk_evaluator: Optional[DeviceSpoofRiskEvaluator] = None
+_antispoof_assembler: Optional[Any] = None  # AntispoofPipelineAssembler when available
+_antispoof_assembler_init_failed = False
+
+
+def _get_device_spoof_risk_evaluator() -> DeviceSpoofRiskEvaluator:
+    """Lazy-init singleton — DeviceSpoofRiskEvaluator constructs cv2 detectors
+    at import time; we delay until the flag is first observed true."""
+    global _device_spoof_risk_evaluator
+    if _device_spoof_risk_evaluator is None:
+        _device_spoof_risk_evaluator = DeviceSpoofRiskEvaluator()
+    return _device_spoof_risk_evaluator
+
+
+def _evaluate_device_spoof_risk_safe(image_path: str) -> Optional[dict]:
+    """Run the device-spoof risk evaluator on an on-disk image.
+
+    Failures here MUST NOT break verification — wrapped in a broad except;
+    any exception returns None so the response can still return its primary
+    verdict.
+    """
+    try:
+        import cv2  # local to avoid hard import at module load
+        frame_bgr = cv2.imread(image_path)
+        if frame_bgr is None or frame_bgr.size == 0:
+            return None
+        evaluator = _get_device_spoof_risk_evaluator()
+        assessment = evaluator.evaluate(frame_bgr=frame_bgr)
+        return assessment.to_dict()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("device_spoof_risk evaluation failed: %s", exc)
+        return None
+
+
+def _get_antispoof_assembler() -> Optional[Any]:
+    """Lazy-init the AntispoofPipelineAssembler from spoof_detector.
+
+    Returns None if the optional `spoof-detector` package is not installed.
+    Initialisation failures are logged once and cached so we don't spam logs
+    on every request.
+    """
+    global _antispoof_assembler, _antispoof_assembler_init_failed
+    if _antispoof_assembler is not None:
+        return _antispoof_assembler
+    if _antispoof_assembler_init_failed:
+        return None
+    try:
+        from src.fusion import HybridFusionEvaluator
+        from src.gates import FaceUsabilityGate
+        from src.pipeline import AntispoofPipelineAssembler
+    except ImportError as exc:  # pragma: no cover - exercised only when dep missing
+        logger.warning(
+            "spoof_detector package not importable; AntispoofPipelineAssembler "
+            "disabled (cause: %s)",
+            exc,
+        )
+        _antispoof_assembler_init_failed = True
+        return None
+
+    try:
+        face_gate = (
+            FaceUsabilityGate()
+            if settings.ANTISPOOF_USABILITY_GATE_ENABLED
+            else None
+        )
+        fuser = (
+            HybridFusionEvaluator() if settings.ANTISPOOF_FUSION_ENABLED else None
+        )
+        device_evaluator = _get_device_spoof_risk_evaluator()
+        _antispoof_assembler = AntispoofPipelineAssembler(
+            face_usability_gate=face_gate,
+            device_spoof_risk_evaluator=device_evaluator,
+            hybrid_fusion_evaluator=fuser,
+        )
+        return _antispoof_assembler
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "AntispoofPipelineAssembler init failed; disabling: %s", exc
+        )
+        _antispoof_assembler_init_failed = True
+        return None
+
+
+def _evaluate_antispoof_pipeline_safe(image_path: str) -> Optional[dict]:
+    """Run the full anti-spoof assembler on an on-disk image.
+
+    Returns None when:
+      - the spoof_detector package isn't installed, or
+      - all relevant flags are off, or
+      - any exception is raised inside the assembler (fail-soft).
+    """
+    if not (
+        settings.ANTISPOOF_USABILITY_GATE_ENABLED
+        or settings.ANTISPOOF_FUSION_ENABLED
+        or settings.ANTISPOOF_CUTOUT_ENABLED
+    ):
+        return None
+    assembler = _get_antispoof_assembler()
+    if assembler is None:
+        return None
+    try:
+        import cv2
+        frame_bgr = cv2.imread(image_path)
+        if frame_bgr is None or frame_bgr.size == 0:
+            return None
+        result = assembler.evaluate(
+            frame_bgr=frame_bgr,
+            cutout_enabled=settings.ANTISPOOF_CUTOUT_ENABLED,
+        )
+        return result.to_dict()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("antispoof_pipeline evaluation failed: %s", exc)
+        return None
 
 
 @router.post("/verify", response_model=VerificationResponse, status_code=200)
@@ -139,12 +271,22 @@ async def verify_face(
 
         message = "Face verified successfully" if result.verified else "Face does not match"
 
+        # Anti-spoof attachments. Both fields default None and are populated
+        # only when their respective flags are on. The helpers swallow any
+        # exception — they never block verification.
+        device_spoof_risk: Optional[dict] = None
+        if settings.ANTISPOOF_DEVICE_RISK_ENABLED:
+            device_spoof_risk = _evaluate_device_spoof_risk_safe(image_path)
+        antispoof_pipeline = _evaluate_antispoof_pipeline_safe(image_path)
+
         response = VerificationResponse(
             verified=result.verified,
             confidence=result.confidence,
             distance=result.distance,
             threshold=result.threshold,
             message=message,
+            device_spoof_risk=device_spoof_risk,
+            antispoof_pipeline=antispoof_pipeline,
         )
 
         # D1 log-only: persist client pre-filter embedding for offline analysis.
