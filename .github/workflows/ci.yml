@@ -143,11 +143,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install opencv-python-headless deepface --no-deps || true
-          # deepface 0.0.98+ imports lightphe at module-load time. We install
-          # deepface with --no-deps to dodge tensorflow size, which strips
-          # lightphe out of the dep set; install it explicitly so collection
+          # deepface 0.0.98+ imports lightphe + lightdsa at module-load time.
+          # We install deepface with --no-deps to dodge tensorflow size, which
+          # strips both out of the dep set; install them explicitly so collection
           # of any test that imports app.main succeeds.
-          pip install lightphe || true
+          pip install lightphe lightdsa || true
           pip install pytest pytest-asyncio pytest-cov
 
       - name: Enable pgvector extension
