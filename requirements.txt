@@ -84,10 +84,11 @@ prometheus_client>=0.21.1
 uniface>=3.0.0
 # Standalone spoof-detector engine (gates + fusion + pipeline assembler).
 # Lives at https://github.com/Rollingcat-Software/spoof-detector — the
-# algorithms ported there (v0.2.0) replace the in-tree cherry-pick that
-# was reverted in PR #87 (2026-05-09). We pin to the v0.2.0 tag; bump
-# only after the upstream tag exists in CI.
-spoof-detector @ git+https://github.com/Rollingcat-Software/spoof-detector.git@v0.2.0
+# algorithms ported there (v0.2.x) replace the in-tree cherry-pick that
+# was reverted in PR #87 (2026-05-09).
+# v0.2.1 adds the public `spoof_detector.*` namespace shim so we can
+# `from spoof_detector.gates import ...` (v0.2.0 only exposed `src.*`).
+spoof-detector @ git+https://github.com/Rollingcat-Software/spoof-detector.git@v0.2.1
 # CPU-only ONNX Runtime — required for direct ONNX model loading (voice ONNX migration,
 # future client-side model parity checks). Ultralytics bundles its own but this ensures
 # onnxruntime is an explicit, versioned dependency of this service.
