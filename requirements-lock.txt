@@ -1,23 +1,30 @@
-# REGENERATE-ME: this lockfile is stale vs requirements.txt. See issue #47.
-# Regenerate with: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pip freeze > requirements-lock.txt
+# =============================================================================
+# REFERENCE ONLY — NOT USED BY ANY INSTALL PATH
+# =============================================================================
 #
-# Audit 2026-04-19 (ML-H1 / issue #47):
-#   This lockfile pins tensorflow-cpu==2.15.0 + keras==3.13.2, which is
-#   inconsistent with requirements.txt (TF 2.21) and the Dockerfile (which
-#   explicitly installs TF 2.21 and ignores this lock). TF 2.15 ships
-#   tf.keras=Keras 2.15; Keras 3 is not wire-compatible. If anyone ever
-#   installs from this lock, DeepFace startup will fail.
+# This file is a historical pip-freeze snapshot from 2025-12-28. It is NOT
+# wired into:
+#   - Dockerfile (installs from requirements.txt)
+#   - .github/workflows/* (installs from requirements.txt)
+#   - docker-compose*.yml
+#   - Any deploy script
 #
-# Regeneration was attempted on 2026-04-19 in this workspace but failed:
-# python3-venv was not available on the host (ensurepip missing). Leaving
-# this banner in place until regenerated on a build box with network + TF.
+# The pins below are also stale vs requirements.txt:
+#   - tensorflow-cpu==2.15.0 here vs TF 2.21 in requirements.txt + Dockerfile
+#   - keras==3.13.2 here, which is wire-incompatible with TF 2.15's tf.keras
+#     (= Keras 2). Installing from this lock would break DeepFace at boot.
 #
-# requirements-lock.txt
-# Locked dependencies for reproducible builds
-# Generated: 2025-12-28
+# Reproducibility in production is provided by Docker image digests (immutable
+# layer hashes), not by this lockfile.
 #
-# IMPORTANT: Use this file for production deployments
-# Usage: pip install -r requirements-lock.txt
+# To replace it with a useful lockfile (issue #47 follow-up):
+#   1. python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+#   2. .venv/bin/pip freeze > requirements-lock.txt
+#   3. Switch Dockerfile to `pip install -r requirements-lock.txt`
+#   4. Re-validate DeepFace startup against the locked Keras version.
+#
+# Until that happens, treat anything below this banner as informational only.
+# =============================================================================
 #
 # To regenerate: pip freeze > requirements-lock.txt (inside working container)
 
