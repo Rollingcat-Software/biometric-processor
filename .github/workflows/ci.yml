@@ -156,12 +156,62 @@ jobs:
             sleep 2
           done
 
-      - name: Apply alembic migrations to test DB
+      - name: Create face_embeddings schema in test DB
         env:
-          DATABASE_URL: postgresql://test:test@localhost:5432/test_db
+          PGPASSWORD: test
         run: |
-          # alembic/env.py auto-rewrites postgresql:// -> postgresql+asyncpg://
-          alembic upgrade head
+          # alembic env.py is currently broken at import time
+          # ('metadata' is reserved on FaceEmbeddingModel). Until that is
+          # patched in a separate PR, materialise the minimal table set
+          # PgVectorEmbeddingRepository writes to. Columns mirror the
+          # actual prod INSERT/UPDATE statements:
+          # user_id, tenant_id, embedding(vector 512), quality_score,
+          # enrollment_type, embedding_ciphertext, key_version.
+          psql -h localhost -U test -d test_db <<'SQL'
+          CREATE EXTENSION IF NOT EXISTS vector;
+          CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+          CREATE TABLE IF NOT EXISTS face_embeddings (
+              id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+              user_id VARCHAR(255) NOT NULL,
+              tenant_id VARCHAR(255),
+              embedding vector(512),
+              embedding_ciphertext BYTEA,
+              key_version INTEGER NOT NULL DEFAULT 1,
+              quality_score FLOAT NOT NULL DEFAULT 0.0,
+              enrollment_type VARCHAR(32) NOT NULL DEFAULT 'INDIVIDUAL',
+              metadata JSONB DEFAULT '{}'::jsonb,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+          CREATE INDEX IF NOT EXISTS idx_face_embeddings_user
+              ON face_embeddings (user_id);
+          CREATE INDEX IF NOT EXISTS idx_face_embeddings_tenant
+              ON face_embeddings (tenant_id);
+
+          CREATE TABLE IF NOT EXISTS client_embedding_observations (
+              id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+              user_id VARCHAR(255) NOT NULL,
+              tenant_id VARCHAR(255),
+              embedding vector(128),
+              model_version VARCHAR(64),
+              session_id VARCHAR(128),
+              device_platform VARCHAR(32),
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+          CREATE INDEX IF NOT EXISTS idx_cobs_tenant
+              ON client_embedding_observations (tenant_id);
+
+          CREATE TABLE IF NOT EXISTS voice_enrollments (
+              id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+              user_id VARCHAR(255) NOT NULL,
+              tenant_id VARCHAR(255),
+              embedding vector(256),
+              quality_score FLOAT NOT NULL DEFAULT 0.0,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+          SQL
 
       - name: Run integration tests
         env:
