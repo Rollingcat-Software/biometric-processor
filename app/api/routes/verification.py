@@ -6,6 +6,9 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 
 from app.api.schemas.verification import VerificationResponse
+from app.application.services.device_spoof_risk_evaluator import (
+    DeviceSpoofRiskEvaluator,
+)
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
 from app.application.use_cases.verify_face import VerifyFaceUseCase
 from app.core.container import (
@@ -27,6 +30,37 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Verification"])
+
+# Lazy-init singleton — DeviceSpoofRiskEvaluator constructs cv2 detectors at
+# import time, so we delay instantiation until the flag is first observed true.
+_device_spoof_risk_evaluator: Optional[DeviceSpoofRiskEvaluator] = None
+
+
+def _get_device_spoof_risk_evaluator() -> DeviceSpoofRiskEvaluator:
+    global _device_spoof_risk_evaluator
+    if _device_spoof_risk_evaluator is None:
+        _device_spoof_risk_evaluator = DeviceSpoofRiskEvaluator()
+    return _device_spoof_risk_evaluator
+
+
+def _evaluate_device_spoof_risk_safe(image_path: str) -> Optional[dict]:
+    """Run the device-spoof risk evaluator on an on-disk image.
+
+    Failures here MUST NOT break verification — the call is wrapped in a
+    broad except and any exception returns None so the response can still
+    return its primary verdict.
+    """
+    try:
+        import cv2  # local to avoid hard import at module load
+        frame_bgr = cv2.imread(image_path)
+        if frame_bgr is None or frame_bgr.size == 0:
+            return None
+        evaluator = _get_device_spoof_risk_evaluator()
+        assessment = evaluator.evaluate(frame_bgr=frame_bgr)
+        return assessment.to_dict()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("device_spoof_risk evaluation failed: %s", exc)
+        return None
 
 
 @router.post("/verify", response_model=VerificationResponse, status_code=200)
@@ -139,12 +173,21 @@ async def verify_face(
 
         message = "Face verified successfully" if result.verified else "Face does not match"
 
+        # PR 4/5 Aysenur cherry-pick: optionally attach device-spoof risk
+        # signal. Default OFF (ANTISPOOF_DEVICE_RISK_ENABLED=false) so prod
+        # behaviour is unchanged until an operator opts in. Failures are
+        # swallowed inside the helper — they never block verification.
+        device_spoof_risk: Optional[dict] = None
+        if settings.ANTISPOOF_DEVICE_RISK_ENABLED:
+            device_spoof_risk = _evaluate_device_spoof_risk_safe(image_path)
+
         response = VerificationResponse(
             verified=result.verified,
             confidence=result.confidence,
             distance=result.distance,
             threshold=result.threshold,
             message=message,
+            device_spoof_risk=device_spoof_risk,
         )
 
         # D1 log-only: persist client pre-filter embedding for offline analysis.

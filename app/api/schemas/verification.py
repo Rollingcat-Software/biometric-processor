@@ -1,5 +1,7 @@
 """Verification API schemas."""
 
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -17,6 +19,14 @@ class VerificationResponse(BaseModel):
     distance: float = Field(..., ge=0.0, description="Similarity distance")
     threshold: float = Field(..., description="Threshold used for verification")
     message: str = Field(..., description="Human-readable message")
+    device_spoof_risk: Optional[dict] = Field(
+        default=None,
+        description=(
+            "Optional device-replay risk assessment from "
+            "DeviceSpoofRiskEvaluator. Populated only when "
+            "ANTISPOOF_DEVICE_RISK_ENABLED=true. Additive, non-blocking."
+        ),
+    )
 
     model_config = {
         "json_schema_extra": {

@@ -638,6 +638,14 @@ class Settings(BaseSettings):
             "OFF until the gesture backend ships."
         ),
     )
+    ANTISPOOF_DEVICE_RISK_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Feature flag for attaching DeviceSpoofRiskEvaluator output "
+            "to /verify responses. Additive, non-blocking; default OFF "
+            "so prod behaviour is unchanged until an operator opts in."
+        ),
+    )
     GESTURE_HAND_LANDMARKER_MODEL_PATH: str = Field(
         default=str(_REPO_ROOT / "models" / "hand_landmarker.task"),
         description=(
