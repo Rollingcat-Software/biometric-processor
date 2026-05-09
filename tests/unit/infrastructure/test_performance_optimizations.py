@@ -433,74 +433,10 @@ class TestAsyncWrappers:
 
 
 # ============================================================================
-# ThreadSafe Repository Tests
+# ThreadSafe Repository Tests removed: ThreadSafeInMemoryEmbeddingRepository
+# was deleted in commit a3357b8 ("CRITICAL PERFORMANCE FIXES") in favor of
+# PgVectorEmbeddingRepository as the sole repository implementation.
 # ============================================================================
-
-
-class TestThreadSafeInMemoryRepository:
-    """Tests for ThreadSafeInMemoryEmbeddingRepository."""
-
-    @pytest.fixture
-    def repository(self):
-        """Create a repository instance."""
-        from app.infrastructure.persistence.repositories.thread_safe_memory_repository import (
-            ThreadSafeInMemoryEmbeddingRepository,
-        )
-        return ThreadSafeInMemoryEmbeddingRepository(max_capacity=100)
-
-    @pytest.mark.asyncio
-    async def test_save_and_find(self, repository):
-        """Test basic save and find operations."""
-        embedding = np.random.randn(128).astype(np.float32)
-
-        await repository.save("user1", embedding, quality_score=85.0)
-
-        result = await repository.find_by_user_id("user1")
-        assert result is not None
-        # Embeddings are normalized on save
-        norm = np.linalg.norm(embedding)
-        expected = embedding / norm
-        np.testing.assert_array_almost_equal(result, expected, decimal=5)
-
-    @pytest.mark.asyncio
-    async def test_find_similar_vectorized(self, repository):
-        """Test vectorized similarity search."""
-        # Create some test embeddings
-        for i in range(10):
-            embedding = np.random.randn(128).astype(np.float32)
-            await repository.save(f"user{i}", embedding, quality_score=80.0)
-
-        # Search with a random query
-        query = np.random.randn(128).astype(np.float32)
-        results = await repository.find_similar(query, threshold=2.0, limit=5)
-
-        assert len(results) <= 5
-        # Results should be sorted by distance
-        if len(results) > 1:
-            distances = [r[1] for r in results]
-            assert distances == sorted(distances)
-
-    @pytest.mark.asyncio
-    async def test_lru_eviction(self, repository):
-        """Test LRU eviction at capacity."""
-        # Fill beyond capacity
-        for i in range(110):
-            embedding = np.random.randn(128).astype(np.float32)
-            await repository.save(f"user{i}", embedding, quality_score=80.0)
-
-        # Should have evicted some entries
-        count = await repository.count()
-        assert count == 100  # max_capacity
-
-    @pytest.mark.asyncio
-    async def test_delete(self, repository):
-        """Test deletion."""
-        embedding = np.random.randn(128).astype(np.float32)
-        await repository.save("user1", embedding, quality_score=85.0)
-
-        assert await repository.delete("user1") is True
-        assert await repository.exists("user1") is False
-        assert await repository.delete("user1") is False
 
 
 # ============================================================================

@@ -64,14 +64,15 @@ class TestQualityEndpoint:
         # Setup mock
         mock_result = QualityFeedback(
             overall_score=85.0,
-            is_acceptable=True,
+            passed=True,
             metrics=QualityMetrics(
                 blur_score=150.0,
-                brightness_score=120.0,
-                face_size_score=100.0,
+                brightness=120.0,
+                face_size=100.0,
+                face_angle=90.0,
+                occlusion=0.0,
             ),
             issues=[],
-            recommendations=[],
         )
 
         mock_use_case = Mock()
@@ -89,7 +90,7 @@ class TestQualityEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert "overall_score" in data
-        assert data["is_acceptable"] is True
+        assert data["passed"] is True
 
 
 # ============================================================================
@@ -103,20 +104,25 @@ class TestComparisonEndpoint:
     def test_compare_faces_success(self, test_image_bytes, mock_container):
         """Test successful face comparison."""
         from app.domain.entities.face_comparison import FaceComparisonResult, FaceInfo
+        from app.domain.entities.multi_face_result import BoundingBox
 
         mock_result = FaceComparisonResult(
-            is_match=True,
+            match=True,
             similarity=0.87,
             distance=0.13,
             threshold=0.6,
+            confidence="high",
             face1=FaceInfo(
-                bounding_box=(50, 50, 100, 100),
-                confidence=0.95,
+                detected=True,
+                quality_score=0.95,
+                bounding_box=BoundingBox(x=50, y=50, width=100, height=100),
             ),
             face2=FaceInfo(
-                bounding_box=(50, 50, 100, 100),
-                confidence=0.93,
+                detected=True,
+                quality_score=0.93,
+                bounding_box=BoundingBox(x=50, y=50, width=100, height=100),
             ),
+            message="Faces match",
         )
 
         mock_use_case = Mock()
@@ -136,7 +142,7 @@ class TestComparisonEndpoint:
 
         assert response.status_code == 200
         data = response.json()
-        assert "is_match" in data
+        assert "match" in data
         assert "similarity" in data
 
 
@@ -155,7 +161,7 @@ class TestDemographicsEndpoint:
         )
 
         mock_result = DemographicsResult(
-            age=AgeEstimate(value=30, confidence=0.9, range_low=25, range_high=35),
+            age=AgeEstimate(value=30, range=(25, 35), confidence=0.9),
             gender=GenderEstimate(value="male", confidence=0.95),
             emotion=None,
             race=None,
@@ -192,12 +198,14 @@ class TestLandmarksEndpoint:
         from app.domain.entities.face_landmarks import LandmarkResult, Landmark
 
         mock_result = LandmarkResult(
-            landmarks=[
-                Landmark(index=0, name="nose_tip", x=100.0, y=100.0, z=0.0),
-                Landmark(index=1, name="left_eye", x=80.0, y=90.0, z=0.0),
-            ],
-            head_pose=None,
             model="mediapipe_468",
+            landmark_count=2,
+            landmarks=[
+                Landmark(id=0, x=100, y=100, z=0.0),
+                Landmark(id=1, x=80, y=90, z=0.0),
+            ],
+            regions={},
+            head_pose=None,
         )
 
         mock_use_case = Mock()
@@ -381,9 +389,11 @@ class TestSimilarityMatrixEndpoint:
         from app.domain.entities.similarity_matrix import SimilarityMatrixResult, Cluster
 
         mock_result = SimilarityMatrixResult(
-            matrix=[[1.0, 0.8], [0.8, 1.0]],
+            size=2,
             labels=["img1", "img2"],
-            clusters=[Cluster(id=0, members=[0, 1], avg_similarity=0.9)],
+            matrix=[[1.0, 0.8], [0.8, 1.0]],
+            clusters=[Cluster(cluster_id=0, members=["img1", "img2"])],
+            pairs=[],
             threshold=0.6,
         )
 
@@ -422,6 +432,7 @@ class TestMultiFaceEndpoint:
         )
 
         mock_result = MultiFaceResult(
+            face_count=1,
             faces=[
                 DetectedFace(
                     face_id=0,
@@ -430,8 +441,8 @@ class TestMultiFaceEndpoint:
                     quality_score=85.0,
                 ),
             ],
-            face_count=1,
-            processing_time_ms=150.0,
+            image_width=200,
+            image_height=200,
         )
 
         mock_use_case = Mock()

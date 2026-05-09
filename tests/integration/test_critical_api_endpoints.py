@@ -14,12 +14,13 @@ These tests ensure the system works end-to-end and catch issues early.
 """
 
 import base64
+import os
 from io import BytesIO
 
 import numpy as np
 import pytest
 from PIL import Image
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from app.main import app
 from app.core.container import get_embedding_repository
 from app.infrastructure.persistence.repositories.pgvector_embedding_repository import (
@@ -31,7 +32,7 @@ from app.infrastructure.persistence.repositories.pgvector_embedding_repository i
 @pytest.fixture
 async def client():
     """Create async HTTP client for testing."""
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
 
 
@@ -307,6 +308,12 @@ class TestVerificationEndpoint:
         )
 
 
+@pytest.mark.skipif(
+    os.environ.get("RUN_INTEGRATION_PG") != "true",
+    reason="Database persistence tests require RUN_INTEGRATION_PG=true plus a "
+    "live Postgres + pgvector. Skipped on standard CI to keep the basic "
+    "integration job green; run via the dedicated postgres job.",
+)
 class TestDatabasePersistence:
     """Test database persistence and compatibility."""
 

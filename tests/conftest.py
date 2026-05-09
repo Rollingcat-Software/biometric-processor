@@ -342,13 +342,10 @@ def embedding_cache():
     return ThreadSafeLRUCache[str, np.ndarray](max_size=100, ttl_seconds=300)
 
 
-@pytest.fixture
-def thread_safe_repository():
-    """Create a thread-safe repository for tests."""
-    from app.infrastructure.persistence.repositories.thread_safe_memory_repository import (
-        ThreadSafeInMemoryEmbeddingRepository,
-    )
-    return ThreadSafeInMemoryEmbeddingRepository(max_capacity=100)
+# NOTE: thread_safe_repository fixture was removed when
+# ThreadSafeInMemoryEmbeddingRepository was deleted in commit a3357b8
+# (in-memory repos replaced by PgVectorEmbeddingRepository as the sole
+# implementation).
 
 
 @pytest.fixture

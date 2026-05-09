@@ -10,8 +10,11 @@ Test Categories:
 4. AsyncFaceDetector - Non-blocking detection with real images
 5. AsyncEmbeddingExtractor - Non-blocking extraction with real images
 6. CachedEmbeddingExtractor - Caching with real images
-7. ThreadSafeInMemoryRepository - Thread-safe storage with real embeddings
-8. OptimizedTextureLivenessDetector - Optimized liveness with real images
+7. OptimizedTextureLivenessDetector - Optimized liveness with real images
+
+NOTE: ThreadSafeInMemoryEmbeddingRepository was deleted in commit a3357b8
+("CRITICAL PERFORMANCE FIXES") in favor of PgVectorEmbeddingRepository as the
+sole repository implementation. The repository test classes were removed.
 """
 
 import asyncio
@@ -313,113 +316,6 @@ class TestLRUCacheWithRealEmbeddings:
 
 
 # ============================================================================
-# Test Class: ThreadSafe Repository with Real Data
-# ============================================================================
-
-
-class TestThreadSafeRepositoryWithRealData:
-    """Test thread-safe repository with realistic usage patterns."""
-
-    @pytest.fixture(autouse=True)
-    def setup(self):
-        """Set up test fixtures."""
-        from app.infrastructure.persistence.repositories.thread_safe_memory_repository import (
-            ThreadSafeInMemoryEmbeddingRepository,
-        )
-        self.repo = ThreadSafeInMemoryEmbeddingRepository(max_capacity=100)
-        self.images = load_test_images()
-
-    @pytest.mark.asyncio
-    async def test_save_and_search_real_users(self):
-        """Test saving and searching embeddings for real users."""
-        if not self.images:
-            pytest.skip("No test images available")
-
-        # Enroll all users
-        user_embeddings = {}
-        for user_id, images in self.images.items():
-            embedding = np.random.randn(128).astype(np.float32)
-            await self.repo.save(user_id, embedding, quality_score=85.0)
-            user_embeddings[user_id] = embedding
-
-        # Verify all saved
-        count = await self.repo.count()
-        assert count == len(self.images)
-
-        # Search with a known embedding
-        first_user = list(user_embeddings.keys())[0]
-        query = user_embeddings[first_user]
-
-        results = await self.repo.find_similar(query, threshold=0.5, limit=5)
-        assert len(results) >= 1
-
-        # First result should be the same user (distance ~0)
-        assert results[0][0] == first_user
-        assert results[0][1] < 0.1
-
-    @pytest.mark.asyncio
-    async def test_concurrent_save_and_search(self):
-        """Test concurrent save and search operations."""
-        if not self.images:
-            pytest.skip("No test images available")
-
-        async def save_user(user_id: str, embedding: np.ndarray):
-            await self.repo.save(user_id, embedding, quality_score=80.0)
-            return user_id
-
-        async def search_similar(embedding: np.ndarray):
-            return await self.repo.find_similar(embedding, threshold=2.0, limit=5)
-
-        # Create tasks
-        save_tasks = []
-        search_tasks = []
-
-        for i, (user_id, images) in enumerate(self.images.items()):
-            embedding = np.random.randn(128).astype(np.float32)
-            save_tasks.append(save_user(f"{user_id}_{i}", embedding))
-
-            if i % 2 == 0:
-                search_tasks.append(search_similar(embedding))
-
-        # Run concurrently
-        start_time = time.time()
-        all_tasks = save_tasks + search_tasks
-        results = await asyncio.gather(*all_tasks, return_exceptions=True)
-        elapsed_ms = (time.time() - start_time) * 1000
-
-        # Verify no exceptions
-        errors = [r for r in results if isinstance(r, Exception)]
-        assert len(errors) == 0, f"Concurrent operations failed: {errors}"
-
-        print(f"\n  Concurrent operations ({len(all_tasks)} tasks) in {elapsed_ms:.2f}ms")
-
-    @pytest.mark.asyncio
-    async def test_vectorized_search_performance(self):
-        """Test vectorized search performance with many embeddings."""
-        # Populate with many embeddings
-        for i in range(100):
-            embedding = np.random.randn(128).astype(np.float32)
-            await self.repo.save(f"user_{i}", embedding, quality_score=80.0)
-
-        # Benchmark search
-        query = np.random.randn(128).astype(np.float32)
-
-        # Warm up
-        await self.repo.find_similar(query, threshold=2.0, limit=10)
-
-        # Benchmark
-        iterations = 50
-        start_time = time.time()
-        for _ in range(iterations):
-            await self.repo.find_similar(query, threshold=2.0, limit=10)
-        elapsed_ms = (time.time() - start_time) * 1000
-
-        avg_ms = elapsed_ms / iterations
-        print(f"\n  Average search time (100 embeddings): {avg_ms:.3f}ms")
-        assert avg_ms < 50.0, f"Search too slow: {avg_ms:.3f}ms"
-
-
-# ============================================================================
 # Test Class: Optimized Liveness Detector with Real Images
 # ============================================================================
 
@@ -560,43 +456,6 @@ class TestEndToEndPerformance:
 
         stats = cached_extractor.get_cache_stats()
         assert stats["hits"] >= len(images)
-
-    @pytest.mark.asyncio
-    async def test_concurrent_user_enrollment(self):
-        """Test concurrent enrollment of multiple users."""
-        if len(self.images) < 2:
-            pytest.skip("Need at least 2 users for concurrent test")
-
-        from app.infrastructure.persistence.repositories.thread_safe_memory_repository import (
-            ThreadSafeInMemoryEmbeddingRepository,
-        )
-
-        repo = ThreadSafeInMemoryEmbeddingRepository(max_capacity=100)
-
-        async def enroll_user(user_id: str, image: np.ndarray):
-            # Simulate embedding extraction
-            embedding = await self.pool.run_blocking(
-                lambda img: np.random.randn(128).astype(np.float32), image
-            )
-            await repo.save(user_id, embedding, quality_score=85.0)
-            return user_id
-
-        # Enroll all users concurrently
-        tasks = []
-        for user_id, images in self.images.items():
-            if images:
-                tasks.append(enroll_user(user_id, images[0]["image"]))
-
-        start_time = time.time()
-        enrolled = await asyncio.gather(*tasks)
-        elapsed_ms = (time.time() - start_time) * 1000
-
-        print(f"\n  Enrolled {len(enrolled)} users concurrently in {elapsed_ms:.2f}ms")
-
-        # Verify all enrolled
-        count = await repo.count()
-        assert count == len(self.images)
-
 
 # ============================================================================
 # Run Tests

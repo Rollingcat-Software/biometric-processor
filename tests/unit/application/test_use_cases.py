@@ -115,6 +115,12 @@ class TestEnrollFaceUseCase:
             is_acceptable=False,
         )
         mock_quality_assessor.assess = AsyncMock(return_value=poor_quality)
+        # EnrollFaceUseCase reads these private attrs on the assessor when
+        # quality fails so it can produce a structured error. Mock auto-children
+        # would be Mock() objects, breaking float < comparisons inside
+        # QualityAssessment.get_issues. Pin them to concrete numerics.
+        mock_quality_assessor._blur_threshold = 100.0
+        mock_quality_assessor._min_face_size = 80
 
         use_case = EnrollFaceUseCase(
             detector=mock_face_detector,
