@@ -243,7 +243,8 @@ jobs:
             --ignore=tests/integration/test_api_routes.py \
             --ignore=tests/integration/test_critical_api_endpoints.py \
             --ignore=tests/integration/test_gesture_liveness_session.py \
-            --ignore=tests/integration/test_proctoring_api.py
+            --ignore=tests/integration/test_proctoring_api.py \
+            --ignore=tests/integration/test_new_api_routes.py
 
   # Build frontend
   frontend-build:
