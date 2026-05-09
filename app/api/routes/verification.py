@@ -93,9 +93,9 @@ def _get_antispoof_assembler() -> Optional[Any]:
     if _antispoof_assembler_init_failed:
         return None
     try:
-        from src.fusion import HybridFusionEvaluator
-        from src.gates import FaceUsabilityGate
-        from src.pipeline import AntispoofPipelineAssembler
+        from spoof_detector.fusion import HybridFusionEvaluator
+        from spoof_detector.gates import FaceUsabilityGate
+        from spoof_detector.pipeline import AntispoofPipelineAssembler
     except ImportError as exc:  # pragma: no cover - exercised only when dep missing
         logger.warning(
             "spoof_detector package not importable; AntispoofPipelineAssembler "

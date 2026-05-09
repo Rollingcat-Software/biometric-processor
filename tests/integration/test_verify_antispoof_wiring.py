@@ -283,10 +283,10 @@ def test_antispoof_pipeline_safe_returns_none_when_dep_missing(
     ), patch.dict(
         sys.modules,
         {
-            "src": Mock(),
-            "src.fusion": Mock(spec=[]),  # empty mock — `from src.fusion import HybridFusionEvaluator` will AttributeError
-            "src.gates": Mock(spec=[]),
-            "src.pipeline": Mock(spec=[]),
+            "spoof_detector": Mock(),
+            "spoof_detector.fusion": Mock(spec=[]),  # empty mock — `from spoof_detector.fusion import HybridFusionEvaluator` will AttributeError
+            "spoof_detector.gates": Mock(spec=[]),
+            "spoof_detector.pipeline": Mock(spec=[]),
         },
         clear=False,
     ), patch.object(verify_route, "_antispoof_assembler", None), patch.object(

@@ -82,6 +82,15 @@ services:
       FIVUCSAS_EMBEDDING_KEY: ${FIVUCSAS_EMBEDDING_KEY}
       FIVUCSAS_EMBEDDING_KEY_VERSION: ${FIVUCSAS_EMBEDDING_KEY_VERSION}
 
+      # Anti-spoof feature flags (PR #88, 2026-05-09). All default OFF
+      # so prod behaviour is unchanged until an operator opts in via
+      # .env.prod. The runtime imports these gates from the
+      # spoof_detector pip package (≥ v0.2.1).
+      ANTISPOOF_DEVICE_RISK_ENABLED: ${ANTISPOOF_DEVICE_RISK_ENABLED:-false}
+      ANTISPOOF_USABILITY_GATE_ENABLED: ${ANTISPOOF_USABILITY_GATE_ENABLED:-false}
+      ANTISPOOF_FUSION_ENABLED: ${ANTISPOOF_FUSION_ENABLED:-false}
+      ANTISPOOF_CUTOUT_ENABLED: ${ANTISPOOF_CUTOUT_ENABLED:-false}
+
       # Rate Limiting
       RATE_LIMIT_ENABLED: true
       RATE_LIMIT_STORAGE: memory
