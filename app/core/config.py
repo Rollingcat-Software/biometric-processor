@@ -638,6 +638,13 @@ class Settings(BaseSettings):
             "OFF until the gesture backend ships."
         ),
     )
+    FLASH_CHALLENGE_ROUTE_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Feature flag for the public /liveness/flash-challenge route. "
+            "OFF by default; enable per-tenant during integration."
+        ),
+    )
     GESTURE_HAND_LANDMARKER_MODEL_PATH: str = Field(
         default=str(_REPO_ROOT / "models" / "hand_landmarker.task"),
         description=(
