@@ -39,6 +39,7 @@ from app.api.routes import admin
 from app.api.routes import live_analysis
 from app.api.routes import voice
 from app.api.routes import puzzle
+from app.api.routes import flash_challenge
 from app.core.config import settings
 from app.core.container import initialize_dependencies, shutdown_dependencies
 from app.core.gpu import configure_gpu
@@ -350,6 +351,13 @@ app.include_router(admin.router, prefix=API_PREFIX)
 # was never a real biometric. Platform fingerprint authentication is delivered
 # via WebAuthn (FIDO2) in identity-core-api, which is unrelated to this service.
 app.include_router(voice.router, prefix=API_PREFIX)
+
+# Flash / colour-light liveness challenge route (PR 2/5 of Aysenur cherry-pick).
+# Gated behind FLASH_CHALLENGE_ROUTE_ENABLED so prod stays unchanged until an
+# operator opts in. Underlying LightChallengeService is already battle-tested
+# and consumed by active_liveness_manager + device_spoof_risk_evaluator.
+if settings.FLASH_CHALLENGE_ROUTE_ENABLED:
+    app.include_router(flash_challenge.router, prefix=API_PREFIX)
 
 # ============================================================================
 # Frontend Static File Service
