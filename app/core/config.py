@@ -638,6 +638,25 @@ class Settings(BaseSettings):
             "OFF until the gesture backend ships."
         ),
     )
+    # Anti-spoof pipeline assembler flags (Aysenur cherry-pick PR 5/5).
+    # All default OFF so prod is unchanged until an operator opts in.
+    ANTISPOOF_USABILITY_GATE_ENABLED: bool = Field(
+        default=False,
+        description="Run the face_usability_gate as a pre-liveness layer.",
+    )
+    ANTISPOOF_FUSION_ENABLED: bool = Field(
+        default=False,
+        description="Run the HybridFusionEvaluator on top of device signals.",
+    )
+    ANTISPOOF_CUTOUT_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Force the cutout/focal-blur anomaly score to be propagated in "
+            "the AntispoofPipelineAssembler. The DeviceSpoofRiskEvaluator "
+            "already runs the underlying detector internally; this flag is "
+            "an explicit observability toggle."
+        ),
+    )
     GESTURE_HAND_LANDMARKER_MODEL_PATH: str = Field(
         default=str(_REPO_ROOT / "models" / "hand_landmarker.task"),
         description=(
