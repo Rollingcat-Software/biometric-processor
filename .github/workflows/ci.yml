@@ -117,6 +117,19 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -132,10 +145,25 @@ jobs:
           pip install opencv-python-headless deepface --no-deps || true
           pip install pytest pytest-asyncio pytest-cov
 
+      - name: Enable pgvector extension
+        env:
+          PGPASSWORD: test
+        run: |
+          # pgvector/pgvector:pg16 ships the extension; we just need to CREATE it
+          # in the test DB. Retry briefly in case the healthcheck races init.
+          for i in 1 2 3 4 5; do
+            psql -h localhost -U test -d test_db -c 'CREATE EXTENSION IF NOT EXISTS vector;' && break
+            sleep 2
+          done
+
       - name: Run integration tests
         env:
           REDIS_URL: redis://localhost:6379/0
           RATE_LIMIT_STORAGE: redis
+          DATABASE_URL: postgresql://test:test@localhost:5432/test_db
+          # Persistence tests are gated behind RUN_INTEGRATION_PG; flip on now
+          # that postgres+pgvector is wired up.
+          RUN_INTEGRATION_PG: "true"
           TF_USE_LEGACY_KERAS: "1"
         run: |
           pytest tests/integration/ -v
