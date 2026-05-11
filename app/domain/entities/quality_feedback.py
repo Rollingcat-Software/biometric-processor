@@ -1,9 +1,9 @@
 """Quality feedback domain entities."""
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 @dataclass
@@ -39,6 +39,11 @@ class QualityMetrics:
         face_size: Face size score (0-100, based on 200px reference)
         face_angle: Frontal alignment score (0-100, 100 = frontal, 0 = tilted)
         occlusion: Occlusion score (0-100, 0 = no occlusion, 100 = fully occluded)
+        occlusion_details: Optional structured occlusion payload with keys
+            ``score`` (0..1), ``regions`` (list[str]), ``reason`` (str|None),
+            and ``details`` (per-region metrics). Added in T2-B / INVESTIGATION
+            2026-05-07 P1. ``None`` when the analyser abstained (e.g. tiny
+            crop) so existing callers keep the legacy single-float view.
     """
 
     blur_score: float
@@ -46,6 +51,7 @@ class QualityMetrics:
     face_size: float  # Changed from int to float for normalized value
     face_angle: float
     occlusion: float
+    occlusion_details: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -90,6 +96,13 @@ class QualityMetricsResponse(BaseModel):
     face_size: float  # Changed from int to float (normalized)
     face_angle: float
     occlusion: float
+    occlusion_details: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Structured occlusion payload: score (0..1), regions (list), "
+            "reason (str|None), details (per-region metrics). Added in T2-B."
+        ),
+    )
 
 
 class QualityFeedbackResponse(BaseModel):
@@ -123,5 +136,6 @@ class QualityFeedbackResponse(BaseModel):
                 face_size=result.metrics.face_size,
                 face_angle=result.metrics.face_angle,
                 occlusion=result.metrics.occlusion,
+                occlusion_details=result.metrics.occlusion_details,
             ),
         )

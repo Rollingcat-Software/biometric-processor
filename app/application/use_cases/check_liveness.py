@@ -172,6 +172,12 @@ class CheckLivenessUseCase:
         #   below DEEPFACE_VETO_CONFIDENCE_THRESHOLD. A warning is always logged
         #   on contradiction so operators can see the disagreement even when
         #   the primary backend "wins".
+        #
+        # T2-E spot-check (2026-05-11): verified the conservative policy is the
+        # configured default (`LIVENESS_VERDICT_POLICY="conservative"` in
+        # core/config.py) and that DeepFace `spoof` always vetoes regardless
+        # of UniFace confidence under it. A regression test pins this
+        # behaviour in tests/unit/application/use_cases/test_check_liveness_verdict_policy.py.
         verdict_policy = settings.LIVENESS_VERDICT_POLICY
         contradiction = (
             deepface_spoof_detected and liveness_result.is_live
