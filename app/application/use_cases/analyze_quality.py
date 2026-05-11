@@ -5,6 +5,11 @@ import logging
 import cv2
 import numpy as np
 
+from app.application.services.occlusion_detector import (
+    OcclusionAssessment,
+    detect_occlusion,
+    has_critical_occlusion,
+)
 from app.domain.entities.quality_feedback import (
     QualityFeedback,
     QualityIssue,
@@ -66,11 +71,16 @@ class AnalyzeQualityUseCase:
         if not detection_result.found:
             raise FaceNotFoundError("No face detected in image")
 
-        # Calculate metrics
-        metrics = self._calculate_metrics(image, detection_result)
+        # Calculate metrics (also returns the structured occlusion payload
+        # so downstream code can surface region/reason without recomputing).
+        metrics, occlusion_assessment = self._calculate_metrics(
+            image, detection_result
+        )
 
-        # Identify issues
-        issues = self._identify_issues(metrics, image.shape)
+        # Identify issues (uses the assessment for region-level detail)
+        issues = self._identify_issues(
+            metrics, image.shape, occlusion_assessment
+        )
 
         # Calculate overall score
         overall_score = self._calculate_overall_score(metrics)
@@ -92,10 +102,11 @@ class AnalyzeQualityUseCase:
 
     def _calculate_metrics(
         self, image: np.ndarray, detection_result
-    ) -> QualityMetrics:
+    ) -> tuple[QualityMetrics, OcclusionAssessment]:
         """Calculate quality metrics from image.
 
-        Returns normalized metrics (0-100) for consistent frontend display.
+        Returns normalized metrics (0-100) for consistent frontend display
+        plus the structured occlusion assessment for downstream callers.
         """
         # Convert to grayscale for blur detection
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
@@ -133,19 +144,37 @@ class AnalyzeQualityUseCase:
                 # Normalize to 0-100 (0 degrees = 100%, 30+ degrees = 0%)
                 face_angle = max(0, 100 - (raw_angle / 30) * 100)
 
-        # Occlusion (placeholder - normalize to 0-100)
-        occlusion = 0.0  # 0% occlusion = good
+        # Occlusion — region-based detector (T2-B, INVESTIGATION 2026-05-07
+        # P1). Replaces the prior hardcoded 0.0 which made sunglasses, masks
+        # and hand-over-mouth pass the quality gate. The detector returns a
+        # structured payload {"score": 0..1, "regions": [...], "reason": str}
+        # which we surface on QualityMetrics.occlusion_details and project
+        # onto the legacy 0-100 ``occlusion`` percentage for back-compat.
+        # detect_occlusion expects BGR; image is documented RGB so we flip.
+        if detection_result.bounding_box is not None:
+            x, y, w, h = detection_result.bounding_box
+            face_crop_rgb = image[y : y + h, x : x + w]
+            face_crop_bgr = cv2.cvtColor(face_crop_rgb, cv2.COLOR_RGB2BGR)
+            occlusion_assessment = detect_occlusion(face_crop_bgr)
+        else:
+            occlusion_assessment = OcclusionAssessment(score=0.0)
+        occlusion = float(occlusion_assessment.score) * 100.0
 
-        return QualityMetrics(
+        metrics = QualityMetrics(
             blur_score=blur_score,
             brightness=brightness,
             face_size=face_size,
             face_angle=face_angle,
             occlusion=occlusion,
+            occlusion_details=occlusion_assessment.to_dict(),
         )
+        return metrics, occlusion_assessment
 
     def _identify_issues(
-        self, metrics: QualityMetrics, image_shape: tuple
+        self,
+        metrics: QualityMetrics,
+        image_shape: tuple,
+        occlusion_assessment: OcclusionAssessment | None = None,
     ) -> list[QualityIssue]:
         """Identify quality issues from metrics."""
         issues = []
@@ -226,16 +255,45 @@ class AnalyzeQualityUseCase:
                 )
             )
 
-        # Check occlusion
-        if metrics.occlusion > self.MAX_OCCLUSION:
+        # Check occlusion — T2-B contract: fail if score > 0.5 (= legacy
+        # 50 on the 0-100 scale) OR any critical region (eyes) is flagged.
+        # We also keep the legacy MAX_OCCLUSION (20%) threshold as a soft
+        # warning so partial occlusion still surfaces.
+        critical = (
+            occlusion_assessment is not None
+            and has_critical_occlusion(occlusion_assessment)
+        )
+        if critical or metrics.occlusion > self.MAX_OCCLUSION:
+            regions: list[str] = (
+                list(occlusion_assessment.regions)
+                if occlusion_assessment is not None
+                else []
+            )
+            reason = (
+                occlusion_assessment.reason
+                if occlusion_assessment is not None
+                else None
+            )
+            severity = "high" if critical else "medium"
+            message = "Face is partially covered"
+            suggestion = "Remove any objects covering your face"
+            if regions:
+                pretty = ", ".join(sorted(set(regions)))
+                message = f"Face is partially covered ({pretty})"
+            if reason and "eyes" in reason:
+                suggestion = "Remove sunglasses or anything blocking your eyes"
+            elif reason and "mask" in reason:
+                suggestion = "Remove face mask or covering"
+            elif reason and "hand" in reason:
+                suggestion = "Move your hand away from your face"
             issues.append(
                 QualityIssue(
                     code="OCCLUSION",
-                    severity="high",
-                    message="Face is partially covered",
+                    severity=severity,
+                    message=message,
                     value=metrics.occlusion,
                     threshold=self.MAX_OCCLUSION,
-                    suggestion="Remove any objects covering your face",
+                    suggestion=suggestion,
                 )
             )
 
