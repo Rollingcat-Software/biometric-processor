@@ -40,9 +40,9 @@ All documentation is organized in the `docs/` directory:
 - **[API Documentation](docs/2-api-documentation/)** - Complete API reference
 - **[Deployment](docs/3-deployment/)** - Deployment guides and database setup
 - **[Testing](docs/4-testing/)** - Testing guides and test reports
-- **[Performance](docs/5-performance/)** - Performance analysis and optimizations
+- **[Performance](docs/PERFORMANCE_OPTIMIZATION_GUIDE.md)** - Performance analysis and optimizations
 - **[Architecture](docs/6-architecture/)** - Design documents and architecture
-- **[Development](docs/7-development/)** - Bug fixes, changelog, contributing
+- **[Changelog](CHANGELOG.md)** - Release history and notable changes
 
 ## Features
 
