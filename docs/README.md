@@ -8,9 +8,9 @@ Welcome to the biometric-processor documentation!
 🔌 **[API Documentation](2-api-documentation/)** - Complete API reference
 🚀 **[Deployment](3-deployment/)** - Deployment guides and database setup
 🧪 **[Testing](4-testing/)** - Testing guides and test reports
-⚡ **[Performance](5-performance/)** - Performance analysis and optimizations
+⚡ **[Performance](PERFORMANCE_OPTIMIZATION_GUIDE.md)** - Performance analysis and optimizations
 🏗️ **[Architecture](6-architecture/)** - Design documents and architecture
-💻 **[Development](7-development/)** - Development guides, bug fixes, changelog
+💻 **[Changelog](../CHANGELOG.md)** - Release history and notable changes
 
 ---
 
@@ -33,19 +33,14 @@ docs/
 │   ├── test-reports/       # Test results
 │   └── *.md                # Testing guides
 │
-├── 5-performance/          # Performance
-│   ├── DEMO_LOCAL_PERFORMANCE_ANALYSIS.md  # ⭐ Latest analysis
-│   └── PERFORMANCE_IMPROVEMENTS_SUMMARY.md # ⭐ What we improved
+├── PERFORMANCE_OPTIMIZATION_GUIDE.md  # ⭐ Performance guide
+├── UNIFACE_BACKEND_BENCHMARKING.md    # UniFace backend benchmarks
 │
 ├── 6-architecture/         # Architecture
 │   ├── FEATURE_DESIGN.md
 │   └── MODULE_PLAN.md
 │
-├── 7-development/          # Development
-│   ├── BUG_FIX_SUMMARY.md
-│   └── IMPLEMENTATION_*.md
-│
-└── archive/                # Old/outdated docs
+└── archive/                # Old/outdated docs (incl. legacy dev notes)
 ```
 
 ---
@@ -58,14 +53,15 @@ docs/
 3. **[Demo Usage](1-getting-started/DEMO_USAGE.md)** - How to use demo_local.py
 
 ### For Developers:
-1. **[Performance Analysis](5-performance/DEMO_LOCAL_PERFORMANCE_ANALYSIS.md)** - Latest performance analysis
+1. **[Performance Optimization Guide](PERFORMANCE_OPTIMIZATION_GUIDE.md)** - Performance guidance
 2. **[Architecture](6-architecture/)** - Design and architecture docs
-3. **[Development](7-development/)** - Bug fixes and implementation notes
+3. **[Changelog](../CHANGELOG.md)** - Release history and notable changes
 
 ---
 
 ## Quick Links
 
 - [Main README](../README.md)
-- [Demo Local (demo_local.py)](../demo_local.py)
-- [Performance Improvements Summary](5-performance/PERFORMANCE_IMPROVEMENTS_SUMMARY.md)
+- [Demo Local Fast (demo_local_fast.py)](../demo_local_fast.py)
+- [Demo Local Optimized (demo_local_optimized.py)](../demo_local_optimized.py)
+- [Performance Optimization Guide](PERFORMANCE_OPTIMIZATION_GUIDE.md)
