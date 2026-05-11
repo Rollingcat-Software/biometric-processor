@@ -40,6 +40,7 @@ from app.api.routes import live_analysis
 from app.api.routes import voice
 from app.api.routes import puzzle
 from app.api.routes import flash_challenge
+from app.api.routes import nfc
 from app.core.config import settings
 from app.core.container import initialize_dependencies, shutdown_dependencies
 from app.core.gpu import configure_gpu
@@ -313,6 +314,12 @@ app.include_router(card_type_router.router, prefix=API_PREFIX)
 
 # Verification Pipeline routes (Phase 8B/8C: Document Processing + Face-to-Document Matching)
 app.include_router(verification_pipeline.router, prefix=API_PREFIX)
+
+# NFC document MRZ parsing route (T2-A, INVESTIGATION 2026-05-07 P1).
+# Wraps mrz_parser in a dedicated /nfc/mrz endpoint consumed by
+# identity-core-api NfcController so chip-read passports/ID cards can be
+# verified without going through the manual-KYC verification pipeline.
+app.include_router(nfc.router, prefix=API_PREFIX)
 
 # New feature routes
 app.include_router(quality.router, prefix=API_PREFIX)
