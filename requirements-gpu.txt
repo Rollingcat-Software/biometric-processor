@@ -23,7 +23,7 @@ tensorflow==2.15.1
 # PyTorch with CUDA 12.4 support — 2.6.0 closes critical CVE (alert #61)
 # Higher patched versions (2.7.1, 2.8.0) remain as low/medium advisories.
 --extra-index-url https://download.pytorch.org/whl/cu124
-torch==2.6.0
+torch==2.8.0
 torchvision==0.21.0
 
 # ONNX Runtime with GPU
