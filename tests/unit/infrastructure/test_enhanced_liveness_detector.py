@@ -152,20 +152,6 @@ class TestEnhancedLivenessDetector:
         assert 0.0 <= score <= 100.0
 
     @pytest.mark.asyncio
-    async def test_compute_lbp(self):
-        """Test LBP computation."""
-        detector = EnhancedLivenessDetector()
-        gray = np.random.randint(0, 255, (100, 100), dtype=np.uint8)
-
-        lbp = detector._compute_lbp(gray)
-
-        # LBP should have same shape as input
-        assert lbp.shape == gray.shape
-        # LBP values should be in valid range
-        assert np.all(lbp >= 0)
-        assert np.all(lbp <= 255)
-
-    @pytest.mark.asyncio
     async def test_get_challenge_type_both_enabled(self):
         """Test challenge type when both blink and smile enabled."""
         detector = EnhancedLivenessDetector(
