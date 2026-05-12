@@ -248,20 +248,31 @@ class TestQualityAssessment:
 
         assert assessment.get_quality_level() == "good"
 
-    def test_is_blurry_default_threshold(self):
-        """Test blur detection with default threshold."""
+    # NOTE: The earlier ``QualityAssessment.is_blurry(...)`` and
+    # ``QualityAssessment.is_too_small(...)`` helpers were removed when the
+    # entity moved to a single ``get_issues(blur_threshold, min_face_size)``
+    # API (see app/domain/entities/quality_assessment.py). The tests below
+    # were rewritten 2026-05-12 to exercise the same intent via the current
+    # API — they remain meaningful because they assert that issue detection
+    # is threshold-driven for both blur and face_size.
+    def test_get_issues_reports_blur_when_below_threshold(self):
+        """Blur is reported as an issue when blur_score < blur_threshold."""
         assessment = QualityAssessment(
             score=60.0,
-            blur_score=80.0,
+            blur_score=10.0,  # below default blur_threshold of 15.0
             lighting_score=100.0,
             face_size=80,
             is_acceptable=True,
         )
 
-        assert assessment.is_blurry() is True
+        issues = assessment.get_issues()
 
-    def test_is_not_blurry(self):
-        """Test image that is not blurry."""
+        assert "blur" in issues
+        assert issues["blur"]["score"] == 10.0
+        assert issues["blur"]["threshold"] == 15.0
+
+    def test_get_issues_does_not_report_blur_when_above_threshold(self):
+        """Sharp image (high blur_score) produces no blur issue."""
         assessment = QualityAssessment(
             score=85.0,
             blur_score=150.0,
@@ -270,10 +281,11 @@ class TestQualityAssessment:
             is_acceptable=True,
         )
 
-        assert assessment.is_blurry() is False
+        issues = assessment.get_issues()
+        assert "blur" not in issues
 
-    def test_is_blurry_custom_threshold(self):
-        """Test blur detection with custom threshold."""
+    def test_get_issues_respects_custom_blur_threshold(self):
+        """Caller-supplied blur_threshold flips the verdict."""
         assessment = QualityAssessment(
             score=80.0,
             blur_score=120.0,
@@ -282,23 +294,27 @@ class TestQualityAssessment:
             is_acceptable=True,
         )
 
-        assert assessment.is_blurry(blur_threshold=150.0) is True
-        assert assessment.is_blurry(blur_threshold=100.0) is False
+        assert "blur" in assessment.get_issues(blur_threshold=150.0)
+        assert "blur" not in assessment.get_issues(blur_threshold=100.0)
 
-    def test_is_too_small_default_threshold(self):
-        """Test face size check with default threshold."""
+    def test_get_issues_reports_face_size_when_below_minimum(self):
+        """Small face is reported when face_size < min_face_size."""
         assessment = QualityAssessment(
             score=60.0,
             blur_score=100.0,
             lighting_score=100.0,
-            face_size=70,
+            face_size=30,  # below default min_face_size of 60
             is_acceptable=False,
         )
 
-        assert assessment.is_too_small() is True
+        issues = assessment.get_issues()
 
-    def test_is_not_too_small(self):
-        """Test face size that is acceptable."""
+        assert "face_size" in issues
+        assert issues["face_size"]["size"] == 30
+        assert issues["face_size"]["minimum"] == 60
+
+    def test_get_issues_does_not_report_face_size_when_above_minimum(self):
+        """Acceptable face size produces no face_size issue."""
         assessment = QualityAssessment(
             score=85.0,
             blur_score=150.0,
@@ -307,15 +323,15 @@ class TestQualityAssessment:
             is_acceptable=True,
         )
 
-        assert assessment.is_too_small() is False
+        assert "face_size" not in assessment.get_issues()
 
     def test_get_issues_multiple(self):
         """Test getting multiple quality issues."""
         assessment = QualityAssessment(
             score=35.0,
-            blur_score=70.0,
+            blur_score=10.0,  # below default blur threshold of 15.0
             lighting_score=40.0,
-            face_size=60,
+            face_size=30,  # below default min_face_size of 60
             is_acceptable=False,
         )
 
@@ -324,8 +340,8 @@ class TestQualityAssessment:
         assert "blur" in issues
         assert "face_size" in issues
         assert "lighting" in issues
-        assert issues["blur"]["score"] == 70.0
-        assert issues["face_size"]["size"] == 60
+        assert issues["blur"]["score"] == 10.0
+        assert issues["face_size"]["size"] == 30
         assert issues["lighting"]["score"] == 40.0
 
     def test_get_issues_none(self):
