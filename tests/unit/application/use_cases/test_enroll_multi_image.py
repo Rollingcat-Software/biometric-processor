@@ -20,17 +20,24 @@ from app.domain.exceptions.face_errors import (
 
 @pytest.fixture
 def mock_fusion_service():
-    """Create mock fusion service."""
+    """Create mock fusion service.
+
+    NOTE: ``EmbeddingFusionService.fuse_embeddings`` is a **synchronous**
+    method on the current production class (see
+    app/domain/services/embedding_fusion_service.py) and the use case calls
+    it with keyword arguments ``embeddings=...`` and ``quality_scores=...``
+    (see enroll_multi_image.py:244). The earlier mock returned a coroutine
+    via a positional ``lambda e, q:`` and broke under both rules.
+    """
     service = Mock(spec=EmbeddingFusionService)
 
-    # Mock fuse_embeddings to return a fused embedding
-    async def mock_fuse(embeddings, quality_scores):
+    def mock_fuse(embeddings, quality_scores):
         fused_emb = np.random.randn(128).astype(np.float32)
         fused_emb = fused_emb / np.linalg.norm(fused_emb)
         avg_quality = sum(quality_scores) / len(quality_scores)
         return fused_emb, avg_quality
 
-    service.fuse_embeddings = Mock(side_effect=lambda e, q: mock_fuse(e, q))
+    service.fuse_embeddings = Mock(side_effect=mock_fuse)
     return service
 
 
@@ -85,11 +92,16 @@ class TestEnrollMultiImageUseCase:
                 tenant_id="test_tenant",
             )
 
-        # Verify result
+        # Verify result.
+        # NOTE: ``MultiImageEnrollmentResult`` exposes ``fused_quality_score``
+        # (property over face_embedding.quality_score) — there is no
+        # standalone ``quality_score`` attribute. The raw embedding lives at
+        # ``face_embedding.vector``. See
+        # ``app/domain/entities/multi_image_enrollment_result.py``.
         assert result.user_id == "test_user_123"
         assert result.tenant_id == "test_tenant"
-        assert result.quality_score > 0
-        assert len(result.vector) == 128
+        assert result.fused_quality_score > 0
+        assert len(result.face_embedding.vector) == 128
 
         # Verify all images were processed
         assert mock_face_detector.detect.call_count == 3
@@ -192,7 +204,7 @@ class TestEnrollMultiImageUseCase:
             )
 
     @pytest.mark.asyncio
-    async def test_enrollment_face_not_detected_in_one_image(
+    async def test_enrollment_face_not_detected_falls_back_to_full_image(
         self,
         mock_face_detector,
         mock_embedding_extractor,
@@ -201,7 +213,17 @@ class TestEnrollMultiImageUseCase:
         mock_fusion_service,
         temp_image_files,
     ):
-        """Test that FaceNotDetectedError in one image fails enrollment."""
+        """FaceNotDetectedError in one image triggers a full-image fallback.
+
+        NOTE (2026-05-12): production behaviour changed — the use case now
+        treats OpenCV-side face detection as soft. If the server-side detector
+        cannot find a face (typical for side-angle multi-image submissions
+        where the client/MediaPipe has already confirmed and cropped), the
+        full input image is used as the face region instead of raising. See
+        ``app/application/use_cases/enroll_multi_image.py`` (the
+        ``except FaceNotDetectedError`` branch around line 152). The test was
+        previously written against the older "fail-loud" policy.
+        """
         use_case = EnrollMultiImageUseCase(
             detector=mock_face_detector,
             extractor=mock_embedding_extractor,
@@ -231,11 +253,17 @@ class TestEnrollMultiImageUseCase:
                 0, 255, (200, 200, 3), dtype=np.uint8
             )
 
-            with pytest.raises(FaceNotDetectedError):
-                await use_case.execute(
-                    user_id="test_user_123",
-                    image_paths=temp_image_files,
-                )
+            # Fallback path completes enrollment instead of raising.
+            result = await use_case.execute(
+                user_id="test_user_123",
+                image_paths=temp_image_files,
+            )
+
+        assert result.user_id == "test_user_123"
+        assert mock_face_detector.detect.call_count == 3
+        # All three images contributed an embedding (image 2 via fallback).
+        assert mock_embedding_extractor.extract.call_count == 3
+        mock_embedding_repository.save.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_enrollment_poor_quality_in_one_image(
