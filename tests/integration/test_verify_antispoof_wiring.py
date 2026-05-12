@@ -41,9 +41,29 @@ from app.main import app
 
 @pytest.fixture
 def client() -> TestClient:
+    """Yield a TestClient with module-level verify_route singletons reset.
+
+    The `_antispoof_assembler` + `_device_spoof_risk_evaluator` globals in
+    `verify_route` are lazy-init singletons. Across tests they accumulate
+    references (cv2 detectors, spoof_detector classes) that can outlive
+    the per-test TestClient loop and surface as `RuntimeError: Event loop
+    is closed` on the next request through `portal.call`. Resetting them
+    per-test gives every test a clean slate and lets the TestClient be
+    entered/exited as a proper context manager (which triggers FastAPI
+    lifespan startup/shutdown so anyio portals close cleanly).
+    """
+    verify_route._antispoof_assembler = None
+    verify_route._antispoof_assembler_init_failed = False
+    verify_route._device_spoof_risk_evaluator = None
+
     app.dependency_overrides.clear()
-    yield TestClient(app)
+    with TestClient(app) as c:
+        yield c
     app.dependency_overrides.clear()
+
+    verify_route._antispoof_assembler = None
+    verify_route._antispoof_assembler_init_failed = False
+    verify_route._device_spoof_risk_evaluator = None
 
 
 @pytest.fixture
