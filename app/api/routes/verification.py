@@ -245,7 +245,7 @@ def _evaluate_ear_liveness_safe(image_path: str) -> Optional[dict]:
         # Use the first detected face. The pixel-space conversion matches
         # the spoof-detector blink_analyzer contract.
         lm = np.array(
-            [[l.x * w, l.y * h, l.z] for l in face_landmarks[0]]
+            [[pt.x * w, pt.y * h, pt.z] for pt in face_landmarks[0]]
         )
         if len(lm) < 468:
             return None
