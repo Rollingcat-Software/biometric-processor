@@ -88,9 +88,29 @@ def _verify_model_integrity(model_name: str) -> None:
         return
 
     if not expected:
-        # TODO: pin DEEPFACE_FACENET512_SHA256 in config.py once the known-good
-        # hash has been recorded from a trusted build. See ML-M1 in
-        # docs/audits/AUDIT_2026-04-19.md.
+        # Bug 5 (2026-05-12) — defense in depth: in production, an empty pin
+        # is no longer "warn + skip". An unpinned model means a weight
+        # rotation (or supply-chain compromise) of ~/.deepface/weights/ can
+        # land silently, so prod fails fast unless an operator explicitly
+        # opts out via DEEPFACE_SHA256_REQUIRED=False (e.g. during the very
+        # first deploy of a new model version where the hash hasn't been
+        # captured yet).
+        required = getattr(settings, "DEEPFACE_SHA256_REQUIRED", False)
+        env = (getattr(settings, "ENVIRONMENT", "") or "").lower()
+        if required and env == "production":
+            logger.error(
+                "DeepFace model integrity pin missing for %s while "
+                "DEEPFACE_SHA256_REQUIRED=true on production. Refusing to "
+                "load the model — set DEEPFACE_FACENET512_SHA256 in .env.prod "
+                "with the output of `sha256sum %s`.",
+                weight_path,
+                weight_path,
+            )
+            raise RuntimeError(
+                "DeepFace model integrity pin missing — refusing to load "
+                f"{weight_path}. Set DEEPFACE_FACENET512_SHA256 or set "
+                "DEEPFACE_SHA256_REQUIRED=false to opt out (not recommended)."
+            )
         logger.warning(
             "DeepFace model integrity check skipped (no pinned hash): %s. "
             "Set DEEPFACE_FACENET512_SHA256 once verified.",

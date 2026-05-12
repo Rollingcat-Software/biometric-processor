@@ -21,9 +21,14 @@ import cv2
 import numpy as np
 import pytest
 
-# Mock DeepFace before any imports that depend on it.
+# Mock DeepFace + Resemblyzer before any imports that depend on them.
+# Both are CPU-heavy optional ML deps; resemblyzer isn't always installed
+# on dev hosts (the bio container builds it from source). Without the
+# mock, `app/main.py:lifespan` → `initialize_dependencies()` → SpeakerEmbedder
+# crashes with ModuleNotFoundError before any of these tests can run.
 sys.modules.setdefault("deepface", Mock())
 sys.modules.setdefault("deepface.DeepFace", Mock())
+sys.modules.setdefault("resemblyzer", Mock(VoiceEncoder=Mock()))
 
 from fastapi.testclient import TestClient
 
@@ -73,6 +78,8 @@ def client(_module_client) -> TestClient:
     verify_route._antispoof_assembler = None
     verify_route._antispoof_assembler_init_failed = False
     verify_route._device_spoof_risk_evaluator = None
+    verify_route._face_landmarker_for_ear = None
+    verify_route._face_landmarker_for_ear_init_failed = False
     app.dependency_overrides.clear()
 
     yield _module_client
@@ -81,6 +88,8 @@ def client(_module_client) -> TestClient:
     verify_route._antispoof_assembler = None
     verify_route._antispoof_assembler_init_failed = False
     verify_route._device_spoof_risk_evaluator = None
+    verify_route._face_landmarker_for_ear = None
+    verify_route._face_landmarker_for_ear_init_failed = False
 
 
 @pytest.fixture
