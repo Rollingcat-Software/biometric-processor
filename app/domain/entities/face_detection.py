@@ -1,7 +1,7 @@
 """Face detection result entity."""
 
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -20,6 +20,12 @@ class FaceDetectionResult:
         confidence: Detection confidence score (0.0-1.0)
         antispoof_score: Optional detector anti-spoof score (0.0-1.0)
         antispoof_label: Optional anti-spoof label such as "real" or "spoof"
+        details: Optional opaque metadata bag for the use case to consult.
+            Used to surface diagnostic context — e.g. when the spoof-fallback
+            path was triggered by an exception, ``details`` carries the
+            original exception message under ``fallback_reason`` /
+            ``fallback_triggered`` so downstream layers (and tests) can
+            distinguish a real spoof verdict from a model-load failure.
 
     Note:
         This class is immutable (frozen) to ensure data integrity.
@@ -32,6 +38,7 @@ class FaceDetectionResult:
     antispoof_score: Optional[float] = None
     antispoof_label: Optional[str] = None
     additional_bounding_boxes: tuple[Tuple[int, int, int, int], ...] = field(default_factory=tuple)
+    details: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         """Validate face detection result data."""

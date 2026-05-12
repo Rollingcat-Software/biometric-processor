@@ -152,6 +152,30 @@ class Settings(BaseSettings):
         ),
     )
 
+    # 2026-05-12 compound liveness bug: what to do when the DeepFace
+    # anti-spoof model (MiniFASNet) cannot be loaded (download failure,
+    # corrupted file, missing weights). Three options:
+    #   - "hard_error"   (default, loud): re-raise as 500/upstream error so
+    #                     the operator sees it on the very first request
+    #                     instead of silently auto-failing every user.
+    #   - "fail_closed":  reject as ``is_live=False`` with reason
+    #                     ``"antispoof_model_missing"``. Safer for end-user
+    #                     traffic but masks the operational issue.
+    #   - "fail_open":    accept as ``is_live=True`` but emit a WARNING log.
+    #                     Use only when biometric verify is a soft gate AND
+    #                     an external monitor will catch the warning.
+    LIVENESS_ANTISPOOF_MODEL_MISSING_POLICY: Literal[
+        "hard_error", "fail_closed", "fail_open"
+    ] = Field(
+        default="hard_error",
+        description=(
+            "Policy for handling DeepFace anti-spoof model load failures. "
+            "'hard_error' (default) surfaces the failure to operators. "
+            "'fail_closed' rejects users with reason antispoof_model_missing. "
+            "'fail_open' accepts but logs a WARNING."
+        ),
+    )
+
     # Thresholds
     VERIFICATION_THRESHOLD: float = Field(default=0.45, ge=0.0, le=1.0)
     LIVENESS_THRESHOLD: float = Field(default=70.0, ge=0.0, le=100.0)

@@ -1,6 +1,7 @@
 """DeepFace-based face detector implementation."""
 
 import logging
+import os
 from typing import Optional, Tuple
 
 import numpy as np
@@ -8,8 +9,32 @@ from deepface import DeepFace
 
 from app.domain.entities.face_detection import FaceDetectionResult
 from app.domain.exceptions.face_errors import FaceNotDetectedError
+from app.domain.exceptions.liveness_errors import LivenessModelLoadError
 
 logger = logging.getLogger(__name__)
+
+# 2026-05-12 compound-liveness bug surfaced this discrimination need.
+# DeepFace 0.0.98 raises two unrelated conditions through plain ``ValueError``:
+#   1. A real spoof verdict — raised as ``SpoofDetected(ValueError)`` from
+#      ``deepface/modules/exceptions.py``. Message is always exactly
+#      "Spoof detected in given image." or "Spoof detected in the given image.".
+#   2. A model-download / weight-load failure — raised from
+#      ``deepface/commons/weight_utils.py:62`` as plain ValueError. Message
+#      contains the cracked-chain emoji "⛓️‍💥", the substring "downloading",
+#      and the operator instruction "Consider downloading it manually".
+#
+# Substring matching on ``"spoof"`` used to lump both into the spoof-fallback
+# path, silently labelling every user as spoof during any transient network
+# failure (because the failed-download URL contains ``anti_spoof_models/``).
+# We now match the two conditions exactly.
+_SPOOF_VERDICT_MARKERS: tuple[str, ...] = ("spoof detected",)
+
+_MODEL_DOWNLOAD_FAILURE_MARKERS: tuple[str, ...] = (
+    "⛓",                                # "⛓" (first codepoint of "⛓️‍💥")
+    "downloading",                           # ".. exception occurred while downloading {file_name} .."
+    "consider downloading it manually",      # explicit operator instruction
+    "anti_spoof_models",                     # weights-repo path fragment in failed URL
+)
 
 
 class DeepFaceDetector:
@@ -139,24 +164,94 @@ class DeepFaceDetector:
             )
 
         except ValueError as e:
-            err_str = str(e).lower()
+            err_raw = str(e)
+            err_str = err_raw.lower()
             if "face could not be detected" in err_str or "no face" in err_str:
                 logger.warning(f"No face detected: {e}")
                 raise FaceNotDetectedError()
-            elif "spoof" in err_str or "real face" in err_str:
+            if self._is_model_download_failure(err_str):
+                # 2026-05-12 fix: surfaced as plain ValueError by
+                # ``deepface/commons/weight_utils.py``. The message contains
+                # the substring ``"spoof"`` (because the URL points at
+                # ``anti_spoof_models/``), so the older substring matcher
+                # falsely routed this into the spoof-fallback path and
+                # silently tagged every user as a spoof.
+                target_path = self._extract_target_path_hint(err_raw)
+                model_name = self._extract_model_name_hint(err_raw) or "MiniFASNet"
+                logger.error(
+                    "DeepFace anti-spoof weights unavailable — could not "
+                    "download / load model '%s' (target: %s). Underlying "
+                    "error: %s",
+                    model_name,
+                    target_path or "(unknown)",
+                    err_raw,
+                )
+                raise LivenessModelLoadError(
+                    model_name=model_name,
+                    cause=err_raw,
+                    target_path=target_path,
+                ) from e
+            if self._is_spoof_verdict(err_str):
                 logger.warning(
-                    "DeepFace anti-spoofing raised spoof exception; "
-                    "falling back to plain face extraction and tagging detection as spoof: %s",
+                    "DeepFace anti-spoofing raised spoof verdict; "
+                    "falling back to plain face extraction and tagging "
+                    "detection as spoof: %s",
                     e,
                 )
-                return self._detect_with_spoof_fallback(image)
-            else:
-                logger.error(f"Face detection error: {e}", exc_info=True)
-                raise
+                return self._detect_with_spoof_fallback(image, exception_message=err_raw)
+            logger.error(f"Face detection error: {e}", exc_info=True)
+            raise
 
         except Exception as e:
             logger.error(f"Unexpected error during face detection: {e}", exc_info=True)
             raise
+
+    # ------------------------------------------------------------------
+    # ValueError discrimination helpers (2026-05-12)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_spoof_verdict(err_str_lower: str) -> bool:
+        """Return True iff the lower-cased ValueError text is a real spoof
+        verdict from ``deepface.modules.exceptions.SpoofDetected``.
+
+        Note: deliberately does NOT match the bare substring ``"spoof"`` —
+        that was the source of the 2026-05-12 compound bug.
+        """
+        return any(marker in err_str_lower for marker in _SPOOF_VERDICT_MARKERS)
+
+    @staticmethod
+    def _is_model_download_failure(err_str_lower: str) -> bool:
+        """Return True iff the lower-cased ValueError text looks like a
+        DeepFace model-download / weight-load failure."""
+        return any(marker in err_str_lower for marker in _MODEL_DOWNLOAD_FAILURE_MARKERS)
+
+    @staticmethod
+    def _extract_target_path_hint(err_raw: str) -> Optional[str]:
+        """Best-effort: pull out the target_file path DeepFace tells the
+        operator to download to. Returns None when the hint isn't present
+        (e.g. a future DeepFace version reshuffles the message)."""
+        anchor = "downloading it manually to "
+        idx = err_raw.find(anchor)
+        if idx >= 0:
+            tail = err_raw[idx + len(anchor):].strip()
+            return tail.rstrip(". ") or None
+        return None
+
+    @staticmethod
+    def _extract_model_name_hint(err_raw: str) -> Optional[str]:
+        """Best-effort: pull the file name (e.g.
+        ``2.7_80x80_MiniFASNetV2.pth``) out of the download-failure message
+        so it shows up in the typed exception."""
+        anchor = "while downloading "
+        idx = err_raw.find(anchor)
+        if idx < 0:
+            return None
+        tail = err_raw[idx + len(anchor):]
+        cut = tail.find(" from ")
+        if cut > 0:
+            return os.path.basename(tail[:cut].strip()) or None
+        return None
 
     async def detect(self, image: np.ndarray) -> FaceDetectionResult:
         """Detect face in image (async wrapper).
@@ -194,12 +289,25 @@ class DeepFaceDetector:
             anti_spoofing=anti_spoofing,
         )
 
-    def _detect_with_spoof_fallback(self, image: np.ndarray) -> FaceDetectionResult:
-        """Recover face metadata when DeepFace anti-spoofing throws before returning a face.
+    def _detect_with_spoof_fallback(
+        self,
+        image: np.ndarray,
+        exception_message: Optional[str] = None,
+    ) -> FaceDetectionResult:
+        """Recover face metadata when DeepFace anti-spoofing throws a real
+        ``SpoofDetected`` ValueError before returning a face.
 
-        Some DeepFace versions surface spoof decisions as exceptions instead of a
-        normal face object. In that case, run a second pass without anti-spoofing
-        so the use case can apply the veto policy without losing the face crop.
+        Some DeepFace versions surface spoof decisions as exceptions instead
+        of a normal face object. In that case, run a second pass without
+        anti-spoofing so the use case can apply the veto policy without
+        losing the face crop.
+
+        Args:
+            image: Input image as numpy array (H, W, C) in BGR format.
+            exception_message: Original ``SpoofDetected`` message — surfaced in
+                ``FaceDetectionResult.details`` so downstream layers can
+                distinguish this verdict path from the normal in-band
+                ``antispoof_label="spoof"`` value.
         """
         face_objs = self._extract_faces(image, anti_spoofing=False)
 
@@ -233,6 +341,13 @@ class DeepFaceDetector:
             h,
         )
 
+        fallback_details: dict[str, object] = {
+            "fallback_triggered": True,
+            "fallback_reason": "deepface_spoof_exception",
+        }
+        if exception_message:
+            fallback_details["fallback_exception_message"] = exception_message
+
         return FaceDetectionResult(
             found=True,
             bounding_box=(x, y, w, h),
@@ -240,6 +355,7 @@ class DeepFaceDetector:
             confidence=float(face_obj.get("confidence", 0.99)),
             antispoof_score=1.0,
             antispoof_label="spoof",
+            details=fallback_details,
         )
 
     @staticmethod
