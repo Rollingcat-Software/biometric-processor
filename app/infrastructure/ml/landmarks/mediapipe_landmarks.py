@@ -1,4 +1,10 @@
-"""MediaPipe-based facial landmark detector implementation."""
+"""MediaPipe-based facial landmark detector implementation.
+
+Ported 2026-05-12 from the legacy ``mediapipe.solutions.face_mesh`` API to
+``mediapipe.tasks.vision.FaceLandmarker``. The ``mp.solutions`` namespace was
+removed in mediapipe 0.10.35; the new Tasks API requires a ``.task`` model
+asset and exposes landmarks as ``result.face_landmarks[0][i].(x|y|z)``.
+"""
 
 import logging
 from typing import List, Optional
@@ -7,17 +13,23 @@ import numpy as np
 
 from app.domain.entities.face_landmarks import HeadPose, Landmark, LandmarkResult
 from app.domain.exceptions.feature_errors import LandmarkError
+from app.infrastructure.ml.landmarks.face_landmarker_loader import (
+    create_face_landmarker,
+    to_mp_image,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class MediaPipeLandmarkDetector:
-    """Facial landmark detector using MediaPipe Face Mesh.
+    """Facial landmark detector using MediaPipe Face Landmarker (Tasks API).
 
     Detects 468 facial landmarks with optional 3D coordinates.
     """
 
-    # Facial region indices for MediaPipe Face Mesh
+    # Facial region indices for MediaPipe Face Mesh (canonical 468-pt topology;
+    # indices are stable between the legacy face_mesh and the Tasks-API
+    # face_landmarker outputs).
     REGIONS = {
         "left_eye": [33, 133, 160, 159, 158, 144, 145, 153],
         "right_eye": [362, 263, 387, 386, 385, 373, 374, 380],
@@ -34,21 +46,23 @@ class MediaPipeLandmarkDetector:
 
     def __init__(self) -> None:
         """Initialize MediaPipe landmark detector."""
-        self._face_mesh = None
-        logger.info("MediaPipeLandmarkDetector initialized")
+        self._face_landmarker = None
+        logger.info("MediaPipeLandmarkDetector initialized (Tasks API)")
 
-    def _get_face_mesh(self):
-        """Lazy load MediaPipe Face Mesh."""
-        if self._face_mesh is None:
-            import mediapipe as mp
-
-            self._face_mesh = mp.solutions.face_mesh.FaceMesh(
+    def _get_face_landmarker(self):
+        """Lazy load MediaPipe Face Landmarker (Tasks API)."""
+        if self._face_landmarker is None:
+            self._face_landmarker = create_face_landmarker(
                 static_image_mode=True,
-                max_num_faces=1,
-                refine_landmarks=True,
-                min_detection_confidence=0.5,
+                num_faces=1,
+                min_face_detection_confidence=0.5,
             )
-        return self._face_mesh
+            if self._face_landmarker is None:
+                raise LandmarkError(
+                    "MediaPipe FaceLandmarker unavailable — model asset missing or "
+                    "Tasks API not importable. See logs for details."
+                )
+        return self._face_landmarker
 
     def detect(
         self, image: np.ndarray, include_3d: bool = False
@@ -68,19 +82,25 @@ class MediaPipeLandmarkDetector:
         logger.debug(f"Starting landmark detection (include_3d={include_3d})")
 
         try:
-            face_mesh = self._get_face_mesh()
-            results = face_mesh.process(image)
+            face_landmarker = self._get_face_landmarker()
+            # Tasks API expects an mp.Image wrapping an RGB ndarray. Callers
+            # of this method already pass RGB (see the docstring), so no
+            # additional colour-space conversion is needed.
+            mp_image = to_mp_image(image)
+            result = face_landmarker.detect(mp_image)
 
-            if not results.multi_face_landmarks:
+            face_landmarks_list = result.face_landmarks or []
+            if not face_landmarks_list:
                 raise LandmarkError("No face landmarks detected")
 
-            # Get first face landmarks
-            face_landmarks = results.multi_face_landmarks[0]
+            # Get first face landmarks. In the Tasks API each element is itself
+            # a flat list of NormalizedLandmark (no `.landmark` attribute).
+            face_landmarks = face_landmarks_list[0]
             height, width = image.shape[:2]
 
             # Extract landmarks
             landmarks = []
-            for idx, lm in enumerate(face_landmarks.landmark):
+            for idx, lm in enumerate(face_landmarks):
                 x = int(lm.x * width)
                 y = int(lm.y * height)
                 z = lm.z if include_3d else None

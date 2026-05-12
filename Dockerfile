@@ -58,6 +58,23 @@ RUN python -c "import cv2; print('OpenCV version:', cv2.__version__)" && \
     python -c "import numpy; print('NumPy version:', numpy.__version__)" && \
     python -c "import tensorflow; print('TensorFlow version:', tensorflow.__version__)"
 
+# Bake MediaPipe face_landmarker.task into the image (2026-05-12).
+# The new Tasks API (mp.tasks.vision.FaceLandmarker) requires a .task model
+# asset; without it the gaze tracker, active-liveness detector, quality
+# assessor and landmark detector all fail-soft with "model missing".
+# Pinning + SHA-verifying at build time gives us a reproducible image and
+# closes the supply-chain check the loader expects at runtime.
+# Companion env vars in .env.example:
+#   FACE_LANDMARKER_MODEL_PATH=/app/models/face_landmarker.task
+#   FACE_LANDMARKER_MODEL_SHA256=64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff
+ARG FACE_LANDMARKER_SHA256=64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff
+RUN set -eux; \
+    mkdir -p /app/models; \
+    curl -fsSL -o /app/models/face_landmarker.task \
+        "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"; \
+    echo "${FACE_LANDMARKER_SHA256}  /app/models/face_landmarker.task" | sha256sum -c -; \
+    chmod 0644 /app/models/face_landmarker.task
+
 # Copy application code
 COPY . .
 

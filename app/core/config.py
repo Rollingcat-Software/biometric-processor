@@ -693,11 +693,24 @@ class Settings(BaseSettings):
             ".env.prod when shipping; empty = skip verification (dev only)."
         ),
     )
+    FACE_LANDMARKER_MODEL_PATH: str = Field(
+        default=str(_REPO_ROOT / "models" / "face_landmarker.task"),
+        description=(
+            "Filesystem path to the MediaPipe face_landmarker.task asset. "
+            "Used by server-side facial-landmark consumers (gaze tracker, "
+            "active liveness, quality assessor) after the 2026-05-12 port "
+            "from mp.solutions to mp.tasks.vision. The runtime container "
+            "bakes this file at /app/models/face_landmarker.task; override "
+            "via the env var to point at an operator-rotated asset."
+        ),
+    )
     FACE_LANDMARKER_MODEL_SHA256: str = Field(
         default="",
         description=(
             "Expected SHA256 hex digest for face_landmarker.task. Set in "
-            ".env.prod; empty = skip verification with a log warning."
+            ".env.prod; empty = skip verification with a log warning. "
+            "Live asset SHA256 (float16/latest, 2026-05-12): "
+            "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff"
         ),
     )
 
