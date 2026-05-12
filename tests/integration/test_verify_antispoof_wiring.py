@@ -29,6 +29,7 @@ from fastapi.testclient import TestClient
 
 from app.api.routes import verification as verify_route
 from app.core.container import (
+    clear_cache,
     get_check_liveness_use_case,
     get_client_embedding_observation_repository,
     get_file_storage,
@@ -41,20 +42,29 @@ from app.main import app
 
 @pytest.fixture
 def client() -> TestClient:
-    """Yield a TestClient with module-level verify_route singletons reset.
+    """Yield a TestClient with verify_route singletons + DI cache reset.
 
-    The `_antispoof_assembler` + `_device_spoof_risk_evaluator` globals in
-    `verify_route` are lazy-init singletons. Across tests they accumulate
-    references (cv2 detectors, spoof_detector classes) that can outlive
-    the per-test TestClient loop and surface as `RuntimeError: Event loop
-    is closed` on the next request through `portal.call`. Resetting them
-    per-test gives every test a clean slate and lets the TestClient be
-    entered/exited as a proper context manager (which triggers FastAPI
-    lifespan startup/shutdown so anyio portals close cleanly).
+    Two layers of state need clearing per-test:
+
+    1. `verify_route._antispoof_assembler`, `_antispoof_assembler_init_failed`,
+       and `_device_spoof_risk_evaluator` — lazy-init module globals that
+       persist across requests and bind to cv2/spoof_detector resources.
+
+    2. The `app.core.container` `@lru_cache`'d singletons (thread pool,
+       face detector, embedding repo, etc.). These get re-handed-back to
+       the next test even though the previous TestClient's lifespan
+       shutdown already closed them, which surfaces as
+       `RuntimeError: Event loop is closed` from `portal.call(self.app, ...)`
+       on every other test. `clear_cache()` is the container's escape hatch
+       for exactly this scenario.
+
+    The TestClient is entered as a context manager so FastAPI lifespan
+    startup/shutdown bracket each test symmetrically.
     """
     verify_route._antispoof_assembler = None
     verify_route._antispoof_assembler_init_failed = False
     verify_route._device_spoof_risk_evaluator = None
+    clear_cache()
 
     app.dependency_overrides.clear()
     with TestClient(app) as c:
@@ -64,6 +74,7 @@ def client() -> TestClient:
     verify_route._antispoof_assembler = None
     verify_route._antispoof_assembler_init_failed = False
     verify_route._device_spoof_risk_evaluator = None
+    clear_cache()
 
 
 @pytest.fixture
