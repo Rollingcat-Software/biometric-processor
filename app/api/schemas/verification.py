@@ -32,8 +32,20 @@ class VerificationResponse(BaseModel):
         description=(
             "Optional combined verdict from spoof_detector.pipeline.AntispoofPipelineAssembler. "
             "Populated only when at least one of ANTISPOOF_USABILITY_GATE_ENABLED / "
-            "ANTISPOOF_FUSION_ENABLED is true. The `recommended_action` is advisory; "
-            "this service never enforces it."
+            "ANTISPOOF_FUSION_ENABLED is true. When `recommended_action` is "
+            "'block' AND ANTISPOOF_BLOCK_ENFORCE is true (default since "
+            "2026-05-12), the route returns HTTP 403 instead of attaching the "
+            "verdict here."
+        ),
+    )
+    ear_liveness: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Optional single-frame Eye Aspect Ratio liveness observation from "
+            "spoof_detector.infrastructure.analyzers.blink_analyzer. Populated "
+            "only when ANTISPOOF_EAR_VETO_ENABLED=true. When 'eyes_closed' is "
+            "True AND ANTISPOOF_BLOCK_ENFORCE is true, the route returns 403 "
+            "instead of attaching the verdict here."
         ),
     )
 
@@ -47,6 +59,7 @@ class VerificationResponse(BaseModel):
                 "message": "Face verified successfully",
                 "device_spoof_risk": None,
                 "antispoof_pipeline": None,
+                "ear_liveness": None,
             }
         }
     }

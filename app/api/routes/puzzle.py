@@ -18,6 +18,10 @@ from app.api.schemas.puzzle import (
     VerifyPuzzleRequest,
     VerifyPuzzleResponse,
 )
+from app.api.schemas.single_challenge import (
+    VerifyChallengeRequest,
+    VerifyChallengeResponse,
+)
 from app.application.use_cases.generate_puzzle import GeneratePuzzleUseCase
 from app.application.use_cases.verify_puzzle import VerifyPuzzleUseCase
 from app.core.container import get_generate_puzzle_use_case, get_verify_puzzle_use_case
@@ -268,3 +272,137 @@ async def verify_puzzle(
             status_code=500,
             detail="Failed to verify puzzle. Please try again.",
         )
+
+
+# ---------------------------------------------------------------------------
+# Bug 4 (2026-05-12) — single-challenge server validation for the web
+# biometric-puzzles training surface.
+# ---------------------------------------------------------------------------
+#
+# Before this endpoint, ``FacePuzzle.tsx`` and ``HandGesturePuzzle.tsx``
+# detected gestures client-side and called ``onSuccess()`` directly. A
+# malicious user could mock the component out and "pass" any challenge.
+# This endpoint adds a server round-trip the web layer waits on, so
+# ``onSuccess`` is only invoked when the backend confirms the structural
+# checks below.
+#
+# Scope: structural validation only (action enum, timestamp monotonicity,
+# duration sanity, confidence floor). Heavier server-side detection
+# (re-running MediaPipe on uploaded frames) belongs to the multi-step
+# ``/liveness/verify`` flow used by enrollment. The training surface is
+# explicitly lightweight.
+
+
+# Minimum challenge duration (seconds). A real human gesture takes at
+# least ~120 ms even for the fastest blinks; bot scripts firing the
+# endpoint immediately are caught here.
+_MIN_CHALLENGE_DURATION_S = 0.12
+
+# Maximum challenge duration (seconds). Anything beyond 60 s is a stale
+# session or a replay; reject.
+_MAX_CHALLENGE_DURATION_S = 60.0
+
+# Minimum detection confidence the client must report. Below this the
+# server treats the submission as "no detection" regardless of the local
+# verdict. The floor is conservative (matches the engine's typical
+# detected-pass threshold of 0.5).
+_MIN_CHALLENGE_CONFIDENCE = 0.5
+
+
+@router.post(
+    "/verify-challenge",
+    response_model=VerifyChallengeResponse,
+    summary="Verify a single liveness challenge (web training surface)",
+    description=(
+        "Lightweight server validation for the biometric-puzzles training "
+        "surface. Accepts one completed challenge, runs structural checks "
+        "(action enum, timestamp monotonicity, duration sanity, confidence "
+        "floor) and returns a verdict. The web layer must wait on this "
+        "before resolving its onSuccess()."
+    ),
+    responses={
+        200: {"description": "Verdict returned (success=true|false)"},
+        400: {"description": "Malformed request"},
+    },
+)
+async def verify_challenge(
+    request: VerifyChallengeRequest,
+) -> VerifyChallengeResponse:
+    """Server validation for a single training puzzle challenge."""
+    duration_s = max(
+        0.0, (request.end_timestamp_ms - request.start_timestamp_ms) / 1000.0
+    )
+
+    # 1. Timestamps must be monotonic (end >= start).
+    if request.end_timestamp_ms < request.start_timestamp_ms:
+        logger.info(
+            "verify-challenge rejected: timestamps out of order action=%s",
+            request.action.value,
+        )
+        return VerifyChallengeResponse(
+            verified=False,
+            action=request.action,
+            duration_seconds=duration_s,
+            reason_code="TIMESTAMPS_OUT_OF_ORDER",
+            message="Challenge timestamps are not monotonic.",
+        )
+
+    # 2. Duration in sane bounds.
+    if duration_s < _MIN_CHALLENGE_DURATION_S:
+        logger.info(
+            "verify-challenge rejected: duration_too_short action=%s duration=%.3fs",
+            request.action.value,
+            duration_s,
+        )
+        return VerifyChallengeResponse(
+            verified=False,
+            action=request.action,
+            duration_seconds=duration_s,
+            reason_code="DURATION_TOO_SHORT",
+            message="Challenge duration is implausibly short.",
+        )
+    if duration_s > _MAX_CHALLENGE_DURATION_S:
+        logger.info(
+            "verify-challenge rejected: duration_too_long action=%s duration=%.1fs",
+            request.action.value,
+            duration_s,
+        )
+        return VerifyChallengeResponse(
+            verified=False,
+            action=request.action,
+            duration_seconds=duration_s,
+            reason_code="DURATION_TOO_LONG",
+            message="Challenge duration exceeds the allowed window.",
+        )
+
+    # 3. Confidence floor.
+    if request.confidence < _MIN_CHALLENGE_CONFIDENCE:
+        logger.info(
+            "verify-challenge rejected: confidence_below_floor action=%s conf=%.2f",
+            request.action.value,
+            request.confidence,
+        )
+        return VerifyChallengeResponse(
+            verified=False,
+            action=request.action,
+            duration_seconds=duration_s,
+            reason_code="CONFIDENCE_BELOW_FLOOR",
+            message="Detection confidence is below the acceptance floor.",
+        )
+
+    logger.info(
+        "verify-challenge accepted: action=%s tenant=%s user=%s "
+        "duration=%.2fs confidence=%.2f",
+        request.action.value,
+        request.tenant_id,
+        request.user_id,
+        duration_s,
+        request.confidence,
+    )
+    return VerifyChallengeResponse(
+        verified=True,
+        action=request.action,
+        duration_seconds=duration_s,
+        reason_code=None,
+        message="Challenge verified.",
+    )

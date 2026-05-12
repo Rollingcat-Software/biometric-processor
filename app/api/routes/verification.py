@@ -50,6 +50,15 @@ _device_spoof_risk_evaluator: Optional[DeviceSpoofRiskEvaluator] = None
 _antispoof_assembler: Optional[Any] = None  # AntispoofPipelineAssembler when available
 _antispoof_assembler_init_failed = False
 
+# Bug 2 (2026-05-12) — single-frame EAR liveness signal. Wires the
+# spoof-detector EAR computation into /verify so the closed-eye signal can
+# veto a verification. Multi-frame BlinkAnalyzer state (cache + per-face
+# history) is out of scope here because /verify only receives one still
+# frame; that wiring belongs in the multi-frame /liveness/verify route
+# which already runs the puzzle pipeline.
+_face_landmarker_for_ear: Optional[Any] = None
+_face_landmarker_for_ear_init_failed = False
+
 
 def _get_device_spoof_risk_evaluator() -> DeviceSpoofRiskEvaluator:
     """Lazy-init singleton — DeviceSpoofRiskEvaluator constructs cv2 detectors
@@ -127,6 +136,164 @@ def _get_antispoof_assembler() -> Optional[Any]:
         )
         _antispoof_assembler_init_failed = True
         return None
+
+
+def _get_face_landmarker_for_ear() -> Optional[Any]:
+    """Lazy-init a MediaPipe FaceLandmarker for single-frame EAR extraction.
+
+    Returns None if MediaPipe is not importable or the asset isn't present.
+    The result is cached so we don't pay model-init cost on every request.
+    Failures are recorded so we don't spam logs on every request.
+    """
+    global _face_landmarker_for_ear, _face_landmarker_for_ear_init_failed
+    if _face_landmarker_for_ear is not None:
+        return _face_landmarker_for_ear
+    if _face_landmarker_for_ear_init_failed:
+        return None
+    try:
+        import os
+        from pathlib import Path
+        import mediapipe as mp
+
+        # Reuse the same model path the active_liveness_manager loader uses,
+        # honouring FACE_LANDMARKER_MODEL_PATH so ops can override per-env.
+        default_path = (
+            Path(__file__).parent.parent.parent.parent / "models" / "face_landmarker.task"
+        )
+        model_path = Path(os.getenv("FACE_LANDMARKER_MODEL_PATH", str(default_path)))
+        if not model_path.exists():
+            logger.info(
+                "EAR check disabled — face_landmarker.task not found at %s "
+                "(set FACE_LANDMARKER_MODEL_PATH to a deployed asset to enable)",
+                model_path,
+            )
+            _face_landmarker_for_ear_init_failed = True
+            return None
+
+        options = mp.tasks.vision.FaceLandmarkerOptions(
+            base_options=mp.tasks.BaseOptions(model_asset_path=str(model_path)),
+            running_mode=mp.tasks.vision.RunningMode.IMAGE,
+            num_faces=1,
+            min_face_detection_confidence=0.4,
+            min_tracking_confidence=0.4,
+        )
+        _face_landmarker_for_ear = mp.tasks.vision.FaceLandmarker.create_from_options(
+            options
+        )
+        logger.info("FaceLandmarker initialised for single-frame EAR liveness check")
+        return _face_landmarker_for_ear
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "FaceLandmarker init for EAR failed; closed-eye veto disabled: %s",
+            exc,
+        )
+        _face_landmarker_for_ear_init_failed = True
+        return None
+
+
+def _evaluate_ear_liveness_safe(image_path: str) -> Optional[dict]:
+    """Run a one-shot Eye Aspect Ratio check on a single still frame.
+
+    Uses the EAR computation from the spoof-detector library (paper-P0
+    calibration 2026-05-11: EAR_THRESHOLD=0.18). A frame where BOTH eyes
+    are clearly closed is treated as a strong spoof signal — single photos
+    of closed eyes are rare in legitimate verification flows, but they
+    matter as a defensive complement to texture-based liveness.
+
+    Returns a dict with shape:
+        {
+            "eyes_closed": bool,
+            "left_ear": float,
+            "right_ear": float,
+            "avg_ear": float,
+            "threshold": float,
+        }
+    or None when the check can't run (no MediaPipe, no model, no face).
+    """
+    if not settings.ANTISPOOF_EAR_VETO_ENABLED:
+        return None
+    try:
+        import cv2
+        import numpy as np
+        import mediapipe as mp
+        from spoof_detector.infrastructure.analyzers.blink_analyzer import (
+            BlinkAnalyzer,
+            LEFT_EYE,
+            RIGHT_EYE,
+            compute_ear,
+        )
+    except ImportError as exc:  # pragma: no cover - dep missing in CI
+        logger.warning("EAR check unavailable; import failed: %s", exc)
+        return None
+    try:
+        landmarker = _get_face_landmarker_for_ear()
+        if landmarker is None:
+            return None
+
+        frame_bgr = cv2.imread(image_path)
+        if frame_bgr is None or frame_bgr.size == 0:
+            return None
+
+        h, w = frame_bgr.shape[:2]
+        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = landmarker.detect(mp_image)
+        face_landmarks = result.face_landmarks or []
+        if not face_landmarks:
+            return None
+
+        # Use the first detected face. The pixel-space conversion matches
+        # the spoof-detector blink_analyzer contract.
+        lm = np.array(
+            [[l.x * w, l.y * h, l.z] for l in face_landmarks[0]]
+        )
+        if len(lm) < 468:
+            return None
+
+        left = compute_ear(lm, LEFT_EYE)
+        right = compute_ear(lm, RIGHT_EYE)
+        avg = (left + right) / 2.0
+        threshold = BlinkAnalyzer.EAR_THRESHOLD
+        return {
+            "eyes_closed": bool(avg < threshold),
+            "left_ear": round(left, 4),
+            "right_ear": round(right, 4),
+            "avg_ear": round(avg, 4),
+            "threshold": threshold,
+        }
+    except Exception as exc:  # noqa: BLE001 — fail-soft
+        logger.warning("EAR liveness check failed: %s", exc)
+        return None
+
+
+def _merge_block_verdict(
+    *,
+    antispoof_pipeline: Optional[dict],
+    ear_liveness: Optional[dict],
+) -> Optional[str]:
+    """Conservative veto — any spoof-leaning signal wins.
+
+    Returns a reason category string when verification MUST be blocked, or
+    ``None`` when the request is allowed to proceed. The reason category is
+    surfaced in the 403 body so callers can branch on it.
+
+    Veto rules (any one triggers a block):
+      * ``antispoof_pipeline.recommended_action == "block"``
+      * EAR check says ``eyes_closed=True`` (single still frame of closed
+        eyes is a strong spoof indicator).
+    """
+    if antispoof_pipeline is not None:
+        action = str(antispoof_pipeline.get("recommended_action", "")).lower()
+        if action == "block":
+            # Use the most specific reason the assembler attached.
+            if antispoof_pipeline.get("face_usability_block"):
+                return "FACE_UNUSABLE"
+            if antispoof_pipeline.get("hybrid_fusion_is_spoof"):
+                return "HYBRID_FUSION_SPOOF"
+            return "ANTISPOOF_BLOCK"
+    if ear_liveness is not None and ear_liveness.get("eyes_closed") is True:
+        return "EYES_CLOSED"
+    return None
 
 
 def _evaluate_antispoof_pipeline_safe(image_path: str) -> Optional[dict]:
@@ -273,11 +440,52 @@ async def verify_face(
 
         # Anti-spoof attachments. Both fields default None and are populated
         # only when their respective flags are on. The helpers swallow any
-        # exception — they never block verification.
+        # exception — they never block verification by raising.
         device_spoof_risk: Optional[dict] = None
         if settings.ANTISPOOF_DEVICE_RISK_ENABLED:
             device_spoof_risk = _evaluate_device_spoof_risk_safe(image_path)
         antispoof_pipeline = _evaluate_antispoof_pipeline_safe(image_path)
+        ear_liveness = _evaluate_ear_liveness_safe(image_path)
+
+        # Bug 1 (2026-05-12) — enforce assembler's `recommended_action="block"`
+        # and the EAR single-frame closed-eye signal. Previously the assembler
+        # verdict was advisory: a "block" recommendation was attached to the
+        # response but the route still returned `verified=true`. With
+        # ANTISPOOF_BLOCK_ENFORCE=true (the default) we now return 403 with
+        # a structured body. An operator can flip the flag to false for
+        # observation-only / canary rollout.
+        block_reason = _merge_block_verdict(
+            antispoof_pipeline=antispoof_pipeline,
+            ear_liveness=ear_liveness,
+        )
+        if block_reason is not None and settings.ANTISPOOF_BLOCK_ENFORCE:
+            logger.warning(
+                "Verification BLOCKED by anti-spoof veto: user_id=%s reason=%s "
+                "assembler_action=%s ear_avg=%s",
+                user_id,
+                block_reason,
+                (antispoof_pipeline or {}).get("recommended_action"),
+                (ear_liveness or {}).get("avg_ear"),
+            )
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error_code": "ANTISPOOF_BLOCKED",
+                    "reason": block_reason,
+                    "antispoof_pipeline": antispoof_pipeline,
+                    "ear_liveness": ear_liveness,
+                    "message": "Verification rejected by anti-spoof checks",
+                },
+            )
+        if block_reason is not None:
+            # Enforcement disabled: log the bypass loudly so it's visible in
+            # production log streams when an operator runs in observation mode.
+            logger.warning(
+                "Verification anti-spoof veto SUPPRESSED (ANTISPOOF_BLOCK_ENFORCE=false): "
+                "user_id=%s reason=%s",
+                user_id,
+                block_reason,
+            )
 
         response = VerificationResponse(
             verified=result.verified,
@@ -287,6 +495,7 @@ async def verify_face(
             message=message,
             device_spoof_risk=device_spoof_risk,
             antispoof_pipeline=antispoof_pipeline,
+            ear_liveness=ear_liveness,
         )
 
         # D1 log-only: persist client pre-filter embedding for offline analysis.
