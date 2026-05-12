@@ -241,10 +241,31 @@ async def verify_face(
         VERIFY_MIN_LIVENESS_SCORE = 0.4
         liveness_result = await liveness_use_case.execute(image_path=image_path)
         if not liveness_result.is_live or liveness_result.score < VERIFY_MIN_LIVENESS_SCORE:
+            # 2026-05-12 fix: expand the rejection log so operators can
+            # distinguish a real spoof verdict from a model-load failure or
+            # a DeepFace anti-spoof veto. Before this change the log showed
+            # only ``is_live=False, score=99.47`` — which mixes UniFace's
+            # "live" confidence with the DeepFace veto verdict, and both
+            # the operator and the user read it as a polarity bug.
+            details = liveness_result.details or {}
             logger.warning(
-                f"Verification rejected — liveness check failed: "
-                f"user_id={user_id}, is_live={liveness_result.is_live}, "
-                f"score={liveness_result.score:.2f}"
+                "Verification rejected — liveness check failed: "
+                "user_id=%s, is_live=%s, score=%.2f, "
+                "antispoof_score=%s, antispoof_label=%s, "
+                "deepface_veto_applied=%s, deepface_veto_reason=%s, "
+                "verdict_policy=%s, verdict_contradiction=%s, "
+                "reason=%s, antispoof_model_missing=%s",
+                user_id,
+                liveness_result.is_live,
+                liveness_result.score,
+                details.get("antispoof_score"),
+                details.get("antispoof_label"),
+                details.get("deepface_veto_applied"),
+                details.get("deepface_veto_reason"),
+                details.get("verdict_policy"),
+                details.get("verdict_contradiction"),
+                details.get("reason"),
+                details.get("antispoof_model_missing"),
             )
             raise HTTPException(
                 status_code=400,
