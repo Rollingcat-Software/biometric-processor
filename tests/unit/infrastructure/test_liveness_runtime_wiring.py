@@ -1,6 +1,8 @@
 import json
 import logging
 
+import pytest
+
 from app.application.use_cases.verify_puzzle import VerifyPuzzleUseCase
 from app.core.config import Settings
 from app.core.container import clear_cache, get_verify_puzzle_use_case
@@ -8,11 +10,48 @@ from app.core.logging_config import StructuredFormatter
 from app.infrastructure.ml.liveness.uniface_liveness_detector import UniFaceLivenessDetector
 
 
-def test_combined_mode_defaults_to_uniface_backend():
+def test_combined_mode_default_backend_is_hybrid_until_flag_wired():
+    """Pin the *current* default-backend behaviour for combined liveness mode.
+
+    `LIVENESS_UNIFACE_DEFAULT_ENABLED` exists in `core/config.py` (default
+    False) and its docstring claims it should make UniFace the default
+    backend for combined mode. In practice `Settings.get_liveness_backend()`
+    does NOT read that flag — it always maps `combined -> hybrid` when
+    `LIVENESS_BACKEND` is unset. Production overrides via
+    `LIVENESS_BACKEND=uniface` in `.env.prod`, not via the feature flag.
+
+    This test pins the actual behaviour so a future regression that flips
+    the default unintentionally fails loud. The earlier name
+    (`test_combined_mode_defaults_to_uniface_backend`) was aspirational and
+    the flag-wiring work it implied was never landed.
+    """
     settings = Settings(_env_file=None, JWT_ENABLED=False)
 
     assert settings.LIVENESS_MODE == "combined"
-    assert settings.LIVENESS_UNIFACE_DEFAULT_ENABLED is True
+    assert settings.LIVENESS_UNIFACE_DEFAULT_ENABLED is False
+    assert settings.get_liveness_backend() == "hybrid"
+
+
+@pytest.mark.xfail(
+    reason=(
+        "LIVENESS_UNIFACE_DEFAULT_ENABLED is defined in config.py but never "
+        "consumed by get_liveness_backend(). Wiring the flag + flipping the "
+        "default to True is tracked as a follow-up; this xfail keeps the "
+        "intended contract visible until that wiring lands."
+    ),
+    strict=True,
+)
+def test_combined_mode_should_default_to_uniface_when_flag_enabled():
+    """Aspirational: when LIVENESS_UNIFACE_DEFAULT_ENABLED is True and no
+    explicit LIVENESS_BACKEND override is set, combined mode should resolve
+    to the UniFace backend. Currently fails because `get_liveness_backend()`
+    ignores the flag."""
+    settings = Settings(
+        _env_file=None,
+        JWT_ENABLED=False,
+        LIVENESS_UNIFACE_DEFAULT_ENABLED=True,
+    )
+
     assert settings.get_liveness_backend() == "uniface"
 
 

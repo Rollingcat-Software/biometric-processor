@@ -236,7 +236,11 @@ class TestDetectLandmarksUseCase:
 
         assert isinstance(result, LandmarkResult)
         assert len(result.landmarks) == 3
-        assert result.landmarks[0].name == "nose_tip"
+        # NOTE: current Landmark dataclass exposes id/x/y/z only (no `name`).
+        # See app/domain/entities/face_landmarks.py. Asserting on id keeps the
+        # original intent of "we got the landmark we mocked" without depending
+        # on a renamed/removed attribute.
+        assert result.landmarks[0].id == 0
         mock_face_detector.detect.assert_called_once()
         mock_landmark_detector.detect.assert_called_once()
 

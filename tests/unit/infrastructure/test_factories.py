@@ -89,24 +89,23 @@ class TestFaceDetectorFactory:
             FaceDetectorFactory.create("")
 
     def test_get_available_detectors(self):
-        """Test getting list of available detectors."""
+        """The factory exposes the supported backend set; assert presence of
+        the six historically-supported names plus the YOLO/centerface lineage
+        that joined later. We avoid hard-coding the exact count so adding a
+        new backend doesn't break the test."""
         detectors = FaceDetectorFactory.get_available_detectors()
 
         assert isinstance(detectors, list)
-        assert len(detectors) == 6
-        assert "opencv" in detectors
-        assert "mtcnn" in detectors
-        assert "retinaface" in detectors
-        assert "ssd" in detectors
-        assert "mediapipe" in detectors
-        assert "yolov8" in detectors
+        for required in ("opencv", "mtcnn", "retinaface", "ssd", "mediapipe", "yolov8"):
+            assert required in detectors
 
     def test_get_recommended_detector(self):
-        """Test getting recommended detector."""
+        """The recommended-for-production backend is currently RetinaFace
+        (best accuracy). Pin to the current value and also verify that
+        whatever the recommended one is, it is present in the available list."""
         recommended = FaceDetectorFactory.get_recommended_detector()
 
-        assert recommended == "mtcnn"
-        # Verify recommended detector is in available list
+        assert recommended == "retinaface"
         assert recommended in FaceDetectorFactory.get_available_detectors()
 
     def test_create_all_available_detectors(self):

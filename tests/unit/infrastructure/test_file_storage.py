@@ -70,28 +70,32 @@ class TestLocalFileStorage:
 
     @pytest.mark.asyncio
     async def test_save_temp_preserves_extension(self, temp_storage_dir):
-        """Test that file extension is preserved."""
+        """Test that file extension is preserved across the four allowed
+        image extensions. Production ALLOWED_EXTENSIONS is the closed set
+        {.jpg,.jpeg,.png,.webp} — older test cases included .gif and .txt
+        which production now rejects."""
         storage = LocalFileStorage(storage_path=temp_storage_dir)
 
-        extensions = [".jpg", ".png", ".gif", ".txt"]
-
-        for ext in extensions:
+        for ext in (".jpg", ".jpeg", ".png", ".webp"):
             file = self._create_upload_file(f"test{ext}", b"content")
             path = await storage.save_temp(file)
 
             assert Path(path).suffix == ext
 
     @pytest.mark.asyncio
-    async def test_save_temp_no_extension(self, temp_storage_dir):
-        """Test saving file without extension."""
+    async def test_save_temp_rejects_unsupported_extension(self, temp_storage_dir):
+        """Saving with a non-image extension must raise FileStorageError.
+        Previously this test asserted that any extension was accepted; the
+        production class now hard-rejects non-image uploads."""
         storage = LocalFileStorage(storage_path=temp_storage_dir)
 
         file = self._create_upload_file("testfile", b"content")
-        path = await storage.save_temp(file)
+        with pytest.raises(FileStorageError, match="File type not allowed"):
+            await storage.save_temp(file)
 
-        # Should save successfully, no extension
-        assert Path(path).exists()
-        assert Path(path).suffix == ""
+        file_with_bad_ext = self._create_upload_file("test.txt", b"content")
+        with pytest.raises(FileStorageError, match="File type not allowed"):
+            await storage.save_temp(file_with_bad_ext)
 
     @pytest.mark.asyncio
     async def test_cleanup_existing_file(self, temp_storage_dir):
@@ -122,9 +126,9 @@ class TestLocalFileStorage:
         """Test reading file as bytes."""
         storage = LocalFileStorage(storage_path=temp_storage_dir)
 
-        # Save a file
+        # Save a file (must use an allowed image extension)
         content = b"test file content"
-        file = self._create_upload_file("test.txt", content)
+        file = self._create_upload_file("test.jpg", content)
         saved_path = await storage.save_temp(file)
 
         # Read
@@ -134,11 +138,14 @@ class TestLocalFileStorage:
 
     @pytest.mark.asyncio
     async def test_read_as_bytes_file_not_found(self, temp_storage_dir):
-        """Test reading non-existent file raises error."""
+        """Test reading a non-existent file (inside the storage root, so we
+        hit the existence check rather than the path-traversal guard) raises
+        FileStorageError with `File not found` as the reason."""
         storage = LocalFileStorage(storage_path=temp_storage_dir)
+        missing = str(Path(temp_storage_dir) / "missing.jpg")
 
         with pytest.raises(FileStorageError, match="File not found"):
-            await storage.read_as_bytes("/nonexistent/file.txt")
+            await storage.read_as_bytes(missing)
 
     def test_exists_true(self, temp_storage_dir):
         """Test exists returns True for existing file."""

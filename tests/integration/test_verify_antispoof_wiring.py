@@ -29,6 +29,7 @@ from fastapi.testclient import TestClient
 
 from app.api.routes import verification as verify_route
 from app.core.container import (
+    clear_cache,
     get_check_liveness_use_case,
     get_client_embedding_observation_repository,
     get_file_storage,
@@ -39,11 +40,47 @@ from app.domain.entities.verification_result import VerificationResult
 from app.main import app
 
 
+@pytest.fixture(scope="module")
+def _module_client():
+    """Module-scoped TestClient. The previous function-scoped variant caused
+    every-other-test `RuntimeError: Event loop is closed` because each test's
+    fresh TestClient created a new anyio portal but the underlying FastAPI
+    `app` retained references (lru-cached deps, BaseHTTPMiddleware task
+    groups, anyio thread state) to the previous test's loop. Module scope
+    keeps a single TestClient — and thus a single portal/loop — alive for
+    the file's 6 tests."""
+    with TestClient(app) as c:
+        yield c
+
+
 @pytest.fixture
-def client() -> TestClient:
+def client(_module_client) -> TestClient:
+    """Per-test wrapper around the module-scoped TestClient.
+
+    Behavioural isolation between tests is preserved by:
+      - Resetting `verify_route` module singletons before and after each
+        test (`_antispoof_assembler`, `_antispoof_assembler_init_failed`,
+        `_device_spoof_risk_evaluator`) so a lazy-init from one test
+        cannot leak into the next.
+      - Clearing `app.dependency_overrides` so each test wires its own
+        AsyncMocks fresh.
+
+    What is intentionally NOT reset per-test:
+      - The TestClient itself + its anyio portal/loop (module-scoped).
+      - The `app.core.container` `@lru_cache`'d deps (cleared once at
+        module enter, and again at module exit via lifespan shutdown).
+    """
+    verify_route._antispoof_assembler = None
+    verify_route._antispoof_assembler_init_failed = False
+    verify_route._device_spoof_risk_evaluator = None
     app.dependency_overrides.clear()
-    yield TestClient(app)
+
+    yield _module_client
+
     app.dependency_overrides.clear()
+    verify_route._antispoof_assembler = None
+    verify_route._antispoof_assembler_init_failed = False
+    verify_route._device_spoof_risk_evaluator = None
 
 
 @pytest.fixture
