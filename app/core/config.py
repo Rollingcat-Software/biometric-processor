@@ -153,6 +153,13 @@ class Settings(BaseSettings):
     )
 
     # Thresholds
+    # Comparator semantics: ``verified = distance < threshold``.
+    # → HIGHER threshold = MORE LENIENT (allows greater distance ⇒ still a match).
+    # → LOWER threshold  = STRICTER (only very close distances accepted).
+    # This is the cosine-distance convention used in
+    # ``verify_face.py`` (line 181). Do not flip the comparator without also
+    # flipping every threshold pin in env.example / .env.prod, otherwise the
+    # FAR/FRR will silently invert.
     VERIFICATION_THRESHOLD: float = Field(default=0.45, ge=0.0, le=1.0)
     LIVENESS_THRESHOLD: float = Field(default=70.0, ge=0.0, le=100.0)
     QUALITY_THRESHOLD: float = Field(default=70.0, ge=0.0, le=100.0)
@@ -160,6 +167,12 @@ class Settings(BaseSettings):
     # Adaptive verification threshold for aged embeddings (Faz 3-1)
     # When the stored embedding is older than VERIFICATION_THRESHOLD_AGED_YEARS,
     # a more lenient threshold is used to account for natural appearance changes.
+    # Bug fix 2026-05-12: previously default=0.38 which is LOWER than the
+    # standard 0.45 — under ``distance < threshold`` semantics that made aged
+    # users *stricter*, the opposite of intent (higher FRR). The default is
+    # now 0.55, raising the allowed distance ceiling so aged users match more
+    # easily, while staying well below the Facenet cosine-distance ceiling
+    # of ~0.6 (the model's known operating point for cosine distance).
     VERIFICATION_THRESHOLD_AGED_YEARS: float = Field(
         default=2.0,
         ge=0.0,
@@ -169,15 +182,39 @@ class Settings(BaseSettings):
         ),
     )
     VERIFICATION_THRESHOLD_AGED: float = Field(
-        default=0.38,
+        default=0.55,
         ge=0.0,
         le=1.0,
         description=(
             "Cosine-distance threshold applied when embedding age exceeds "
-            "VERIFICATION_THRESHOLD_AGED_YEARS. Lower than the default (0.45) "
-            "to be more lenient with aged embeddings."
+            "VERIFICATION_THRESHOLD_AGED_YEARS. HIGHER than the default (0.45) "
+            "because the comparator is ``distance < threshold`` — a larger "
+            "allowed-distance ceiling means more lenient matching for aged "
+            "embeddings. Must remain below the Facenet cosine-distance "
+            "ceiling (~0.6) to keep FAR under control."
         ),
     )
+
+    @model_validator(mode="after")
+    def _validate_aged_threshold_lenience(self) -> "Settings":
+        """Catch the pre-2026-05-12 inversion regression at config-load time.
+
+        ``VERIFICATION_THRESHOLD_AGED`` must be >= ``VERIFICATION_THRESHOLD``
+        because the comparator is ``distance < threshold`` — a stricter
+        ceiling for aged embeddings is meaningless (it would force aged users
+        to match the standard with *additional* margin, the opposite of the
+        adaptive feature's purpose).
+        """
+        if self.VERIFICATION_THRESHOLD_AGED < self.VERIFICATION_THRESHOLD:
+            raise ValueError(
+                "Configuration inversion detected: VERIFICATION_THRESHOLD_AGED "
+                f"({self.VERIFICATION_THRESHOLD_AGED}) must be >= "
+                f"VERIFICATION_THRESHOLD ({self.VERIFICATION_THRESHOLD}) "
+                "under the ``distance < threshold`` comparator. A lower aged "
+                "threshold makes aged users *stricter*, not more lenient. "
+                "See app/application/use_cases/verify_face.py:181."
+            )
+        return self
 
     # ML Model Timeouts (prevents hung requests)
     ML_MODEL_TIMEOUT_SECONDS: int = Field(default=30, ge=5, le=120, description="Timeout for ML model operations")
@@ -678,6 +715,36 @@ class Settings(BaseSettings):
             "toggle."
         ),
     )
+    # Bug 1 (2026-05-12) — enforcement flag for `recommended_action="block"`.
+    # Before this, the assembler's block verdict was attached to the
+    # response but the route still returned 200/verified=True (advisory
+    # only). Default is now ON: any "block" verdict from the assembler or
+    # any closed-eye signal from the EAR check yields a 403 with a
+    # structured reason. Flip to false for canary/observation rollout.
+    ANTISPOOF_BLOCK_ENFORCE: bool = Field(
+        default=True,
+        description=(
+            "When True, AntispoofPipelineAssembler 'recommended_action=block' "
+            "and EAR closed-eye detection cause the /verify route to return "
+            "HTTP 403 (was advisory-only prior to 2026-05-12)."
+        ),
+    )
+    # Bug 2 (2026-05-12) — single-frame EAR liveness signal flag.
+    # When True, /verify runs MediaPipe FaceLandmarker on the uploaded
+    # frame and computes Eye Aspect Ratio via the spoof-detector library
+    # (calibration EAR_THRESHOLD=0.18, paper-P0 2026-05-11). If both eyes
+    # are clearly closed, the request is vetoed alongside the assembler.
+    # Default OFF until ops deploys the face_landmarker.task asset to the
+    # container — the helper fails-soft to None when the model is missing.
+    ANTISPOOF_EAR_VETO_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enable the single-frame EAR (Eye Aspect Ratio) closed-eye veto "
+            "on /verify. Requires FACE_LANDMARKER_MODEL_PATH to point at a "
+            "deployed face_landmarker.task asset. Fails-soft to no-op when "
+            "MediaPipe or the model is unavailable."
+        ),
+    )
     GESTURE_HAND_LANDMARKER_MODEL_PATH: str = Field(
         default=str(_REPO_ROOT / "models" / "hand_landmarker.task"),
         description=(
@@ -731,6 +798,20 @@ class Settings(BaseSettings):
     DEEPFACE_FACENET512_SHA256: str = Field(
         default="",
         description="Expected SHA256 hex digest for Facenet512 weights file (empty = skip with warning)",
+    )
+    # Bug 5 (2026-05-12) — fail-fast in prod when SHA pin is missing.
+    # Previously an empty DEEPFACE_FACENET512_SHA256 only logged a warning,
+    # which let an undetected weight rotation (or supply-chain compromise of
+    # ``~/.deepface/weights/``) silently change embeddings. With this flag on
+    # and ENVIRONMENT=production, an empty pin now raises at model-load time.
+    DEEPFACE_SHA256_REQUIRED: bool = Field(
+        default=True,
+        description=(
+            "When True (default) AND ENVIRONMENT=production, refuse to load "
+            "the DeepFace model unless DEEPFACE_FACENET512_SHA256 is pinned. "
+            "Set False to opt out (e.g. first-deploy of a new model version "
+            "before the hash has been captured)."
+        ),
     )
 
     # ML-M5: server-side caps on find_similar threshold/limit (caller-controlled today).
