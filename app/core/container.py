@@ -78,6 +78,7 @@ from app.infrastructure.persistence.repositories.redis_active_liveness_session_r
 from app.infrastructure.storage.local_file_storage import LocalFileStorage
 from app.infrastructure.async_execution.thread_pool_manager import ThreadPoolManager
 from app.infrastructure.ml.voice.speaker_embedder import SpeakerEmbedder
+from app.infrastructure.ml.voice.replay_detector import VoiceReplayDetector
 from app.infrastructure.persistence.repositories.pgvector_voice_repository import PgVectorVoiceRepository
 from app.infrastructure.persistence.client_embedding_observation_repository import (
     ClientEmbeddingObservationRepository,
@@ -859,6 +860,42 @@ def get_voice_repository() -> PgVectorVoiceRepository:
     )
 
 
+@lru_cache()
+def get_voice_replay_detector() -> VoiceReplayDetector:
+    """Get voice replay-attack detector instance (singleton).
+
+    ML-H4: log-only spectral-fingerprint replay detector backed by a Redis
+    LRU cache. Gated by ``VOICE_REPLAY_DETECTION_ENABLED`` (default False) so
+    wiring it onto the verify path is a no-op until ops flip the flag. If the
+    flag is off we skip building a Redis client entirely; when on, a Redis
+    client is created with the same URL used elsewhere and the detector
+    degrades silently if Redis is unreachable.
+    """
+    redis_client = None
+    if settings.VOICE_REPLAY_DETECTION_ENABLED:
+        try:
+            import redis.asyncio as _redis
+
+            redis_client = _redis.from_url(
+                settings.redis_url,
+                encoding="utf-8",
+                decode_responses=False,
+                max_connections=5,
+            )
+        except Exception as exc:  # noqa: BLE001 — never block voice auth on Redis
+            logger.warning(
+                "Voice replay detector: Redis client init failed; "
+                "detector will run cache-less (no-op): %s",
+                exc,
+            )
+
+    logger.info(
+        "Creating voice replay detector (enabled=%s)",
+        settings.VOICE_REPLAY_DETECTION_ENABLED,
+    )
+    return VoiceReplayDetector(redis_client=redis_client)
+
+
 # ============================================================================
 # Fingerprint server-side biometric dependencies REMOVED (P1.4).
 # The SHA-256 hash placeholder was never a real biometric. Platform fingerprint
@@ -1151,4 +1188,5 @@ def clear_cache() -> None:
     get_puzzle_spot_check_liveness_detector.cache_clear()
     get_speaker_embedder.cache_clear()
     get_voice_repository.cache_clear()
+    get_voice_replay_detector.cache_clear()
     get_client_embedding_observation_repository.cache_clear()

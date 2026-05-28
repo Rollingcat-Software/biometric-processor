@@ -117,6 +117,29 @@ class SpeakerEmbedder:
         Returns:
             numpy array of shape (256,), dtype float32.
         """
+        audio_bytes, content_type = self._decode_base64(base64_data)
+        return self.extract_embedding(audio_bytes, content_type)
+
+    def decode_samples_from_base64(self, base64_data: str) -> np.ndarray:
+        """Decode base64 audio to a 16 kHz mono float32 PCM array.
+
+        Exposes the same decode path used by ``extract_embedding`` so callers
+        that need raw samples (e.g. the voice replay-attack fingerprint) can
+        reuse the identical decoding without duplicating format detection.
+
+        Args:
+            base64_data: Base64-encoded audio (optionally with a data URI
+                prefix such as "data:audio/webm;base64,...").
+
+        Returns:
+            1-D float32 numpy array of mono PCM samples at 16 kHz.
+        """
+        audio_bytes, content_type = self._decode_base64(base64_data)
+        return self._decode_to_wav_samples(audio_bytes, content_type)
+
+    @staticmethod
+    def _decode_base64(base64_data: str) -> "tuple[bytes, Optional[str]]":
+        """Strip an optional data-URI prefix and base64-decode the payload."""
         import base64
 
         content_type: Optional[str] = None
@@ -125,8 +148,7 @@ class SpeakerEmbedder:
             header, base64_data = base64_data.split(",", 1)
             content_type = header.split(":")[1].split(";")[0]
 
-        audio_bytes = base64.b64decode(base64_data)
-        return self.extract_embedding(audio_bytes, content_type)
+        return base64.b64decode(base64_data), content_type
 
     # ------------------------------------------------------------------
     # Audio decoding helpers
