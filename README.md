@@ -25,8 +25,10 @@ Biometric Processor is the AI/ML microservice for the **FIVUCSAS** biometric ide
 The fastest way to test the system is with the local demo:
 
 ```bash
-python demo_local.py
+python demo_local_fast.py
 ```
+
+> Note: `demo_local.py` does not exist. Use `demo_local_fast.py` (balanced) or `demo_local_optimized.py` (CPU-optimised) — both are in the repo root.
 
 **Performance**: 18-30 FPS (CPU), optimized and production-ready!
 
@@ -173,7 +175,7 @@ biometric-processor/
 
 ## Prerequisites
 
-- **Python 3.11** or higher
+- **Python 3.12** or higher
 - **pip** package manager
 - **4GB+ RAM** (8GB recommended)
 - **GPU** (optional, for faster inference)
@@ -182,7 +184,7 @@ biometric-processor/
 
 ### Prerequisites
 
-- **Python 3.11+**
+- **Python 3.12+**
 - **Node.js 18+**
 - **PostgreSQL 14+ with pgvector extension**
 - **Redis 7+**
@@ -948,9 +950,10 @@ The service supports multiple face recognition models via DeepFace:
 | Model | Embedding Size | Best For |
 |-------|---------------|----------|
 | Facenet (default) | 128 | Balanced accuracy/speed |
-| Facenet512 | 512 | Higher accuracy |
-| VGG-Face | 2622 | High accuracy, more memory |
-| ArcFace | 512 | State-of-the-art accuracy |
+| Facenet512 | 512 | Higher accuracy (prod default) |
+| VGG-Face | 2622 | High accuracy — **requires `ALLOW_HEAVY_ML=true` (GPU)** |
+| ArcFace | 512 | State-of-the-art accuracy — **requires `ALLOW_HEAVY_ML=true` (GPU)** |
+| GhostFaceNet | 512 | Compact high accuracy — **requires `ALLOW_HEAVY_ML=true` (GPU)** |
 | OpenFace | 128 | Lightweight |
 | DeepFace | 4096 | Legacy support |
 | DeepID | 160 | Lightweight |
@@ -958,6 +961,8 @@ The service supports multiple face recognition models via DeepFace:
 | SFace | 128 | Lightweight |
 
 Configure via `FACE_RECOGNITION_MODEL` environment variable.
+
+The detection backends `retinaface`, `yolov8`, `yolov11n`, `yolov11s`, and `yolov12n` also **require `ALLOW_HEAVY_ML=true`** and will cause a hard boot failure on CPU-only hosts when that flag is `false` (the default).
 
 ## Configuration Reference
 
@@ -968,15 +973,20 @@ Configure via `FACE_RECOGNITION_MODEL` environment variable.
 | `ENVIRONMENT` | development | Environment (development/staging/production) |
 | `API_HOST` | 0.0.0.0 | API host |
 | `API_PORT` | 8001 | API port |
-| `FACE_DETECTION_BACKEND` | opencv | Face detector (opencv/ssd/mtcnn/retinaface) |
+| `FACE_DETECTION_BACKEND` | opencv | Face detector (opencv/ssd/mtcnn; retinaface/yolo* require `ALLOW_HEAVY_ML=true`) |
 | `FACE_RECOGNITION_MODEL` | Facenet | Recognition model |
-| `VERIFICATION_THRESHOLD` | 0.6 | Verification distance threshold |
-| `LIVENESS_MODE` | combined | Liveness mode (passive/active/combined) |
+| `ALLOW_HEAVY_ML` | false | Must be `true` on a GPU host to use ArcFace/VGG-Face/GhostFaceNet/retinaface/yolo* |
+| `VERIFICATION_THRESHOLD` | 0.45 | Cosine-distance threshold (`distance < threshold` → match). **Prod override: 0.4** |
+| `LIVENESS_MODE` | combined | Liveness mode (passive/active/combined). **Prod override: passive** |
+| `LIVENESS_BACKEND` | _(derived from LIVENESS_MODE)_ | Explicit backend override. **Prod override: uniface** |
 | `LIVENESS_THRESHOLD` | 70.0 | Liveness score threshold (0-100) |
 | `QUALITY_THRESHOLD` | 70.0 | Quality score threshold (0-100) |
 | `MIN_FACE_SIZE` | 80 | Minimum face size in pixels |
 | `BLUR_THRESHOLD` | 100.0 | Blur detection threshold |
 | `LOG_LEVEL` | INFO | Logging level |
+| `FIVUCSAS_EMBEDDING_KEY` | _(none)_ | **Required in production.** Fernet key for at-rest embedding encryption; container fails fast on boot if unset. |
+| `FIVUCSAS_EMBEDDING_KEY_VERSION` | _(none)_ | Key version integer for `FIVUCSAS_EMBEDDING_KEY` rotation. |
+| `ANTISPOOF_BLOCK_ENFORCE` | true | When `true`, anti-spoof "block" verdicts and EAR closed-eye detection return HTTP 403. |
 
 ## Testing
 
@@ -1028,6 +1038,64 @@ pre-commit install
 | Fingerprint | (removed P1.4) | (removed P1.4) | (removed P1.4) | Removed | SHA-256 placeholder was not a real biometric. Use WebAuthn (FIDO2) in identity-core-api for platform fingerprint auth. |
 | Iris | N/A | N/A | N/A | Not implemented | No endpoints |
 
+## Additional API Endpoints
+
+The following endpoints are implemented but not covered in the main API reference above. All are prefixed with `/api/v1` unless noted.
+
+### Health & Observability
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/ready` | GET | Kubernetes readiness probe |
+| `/live` | GET | Kubernetes liveness probe |
+| `/health/detailed` | GET | Full system health with DB/Redis/ML status |
+| `/metrics` | GET | Prometheus metrics scrape endpoint (excluded from OpenAPI schema) |
+
+### Flash Challenge (Presentation-Attack Detection)
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/flash-challenge/start` | POST | Start a flash-challenge PAD session |
+| `/flash-challenge/respond` | POST | Submit frame response to a flash challenge |
+
+### NFC / MRZ
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/nfc/mrz` | POST | Parse MRZ from raw NFC TLV payload or image |
+
+### Proctoring
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/proctoring/sessions` | POST | Create a proctoring session |
+| `/proctoring/sessions/{id}/start` | POST | Start a session |
+| `/proctoring/sessions/{id}/pause` | POST | Pause a session |
+| `/proctoring/sessions/{id}/resume` | POST | Resume a session |
+| `/proctoring/sessions/{id}/end` | POST | End a session |
+| `/proctoring/sessions/{id}` | GET | Get session detail |
+| `/proctoring/sessions` | GET | List sessions |
+| `/proctoring/sessions/{id}/frames` | POST | Submit a frame for incident analysis |
+
+### Liveness Puzzle
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/liveness/generate-puzzle` | POST | Generate a liveness puzzle challenge |
+| `/liveness/verify` | POST | Submit puzzle answer |
+| `/liveness/verify-challenge` | POST | Combined puzzle + anti-spoof challenge |
+
+### Verification Pipeline Sub-paths
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/verification/document-scan` | POST | YOLO document detection + classification |
+| `/verification/data-extract` | POST | MRZ + Tesseract OCR field extraction |
+| `/verification/face-match` | POST | Selfie-to-document cosine matching |
+| `/verification/liveness-check` | POST | Server-authoritative liveness verdict |
+| `/verification/pipeline/test` | POST | End-to-end pipeline smoke test |
+| `/verification/video-interview` | POST | Upload video for verification pipeline |
+
+### Admin
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/admin/stats` | GET | System-wide stats (face/voice enrollment counts, etc.) |
+| `/admin/activity` | GET | Recent audit activity |
+
 ## Roadmap
 
 | Sprint | Feature | Status |
@@ -1044,7 +1112,7 @@ pre-commit install
 
 This project is part of the **FIVUCSAS** platform developed as an Engineering Project at Marmara University.
 
-Copyright © 2025 FIVUCSAS Team. All rights reserved.
+Copyright © 2026 FIVUCSAS Team. All rights reserved.
 
 Licensed under the MIT License.
 
@@ -1057,4 +1125,4 @@ Licensed under the MIT License.
 
 ---
 
-**FIVUCSAS Team © 2025**
+**FIVUCSAS Team © 2026**

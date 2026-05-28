@@ -29,13 +29,13 @@ nano .env
 
 ```bash
 # Start core services (PostgreSQL, Redis, API)
-docker-compose up -d
+docker compose up -d
 
 # View logs
-docker-compose logs -f api
+docker compose logs -f api
 
 # Check service health
-docker-compose ps
+docker compose ps
 ```
 
 ### 3. Verify Installation
@@ -55,7 +55,7 @@ Docker Compose supports different profiles for different use cases:
 ### Core Services (Default)
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 Includes:
@@ -66,7 +66,7 @@ Includes:
 ### Development Mode
 
 ```bash
-docker-compose --profile development up -d
+docker compose --profile development up -d
 ```
 
 Includes core services plus:
@@ -75,7 +75,7 @@ Includes core services plus:
 ### With Management Tools
 
 ```bash
-docker-compose --profile tools up -d
+docker compose --profile tools up -d
 ```
 
 Includes core services plus:
@@ -85,7 +85,7 @@ Includes core services plus:
 ### With Monitoring
 
 ```bash
-docker-compose --profile monitoring up -d
+docker compose --profile monitoring up -d
 ```
 
 Includes core services plus:
@@ -95,7 +95,7 @@ Includes core services plus:
 ### All Services
 
 ```bash
-docker-compose --profile development --profile tools --profile monitoring up -d
+docker compose --profile development --profile tools --profile monitoring up -d
 ```
 
 ## Service Endpoints
@@ -124,17 +124,17 @@ To reinitialize:
 
 ```bash
 # Stop and remove volumes
-docker-compose down -v
+docker compose down -v
 
 # Start fresh
-docker-compose up -d
+docker compose up -d
 ```
 
 ### Manual Database Access
 
 ```bash
 # Connect to PostgreSQL
-docker-compose exec postgres psql -U biometric_user -d biometric_db
+docker compose exec postgres psql -U biometric_user -d biometric_db
 
 # View tables
 \dt
@@ -165,7 +165,7 @@ SELECT COUNT(*) FROM face_embeddings;
 
 ```bash
 # Connect to Redis CLI
-docker-compose exec redis redis-cli
+docker compose exec redis redis-cli
 
 # View keys
 KEYS *
@@ -210,7 +210,32 @@ CORS_ALLOWED_ORIGINS=http://localhost:3000
 # Rate Limiting
 RATE_LIMIT_ENABLED=true
 RATE_LIMIT_PER_MINUTE=60
+
+# Required in production — Fernet key for at-rest embedding encryption.
+# Container fails fast on boot if unset (EmbeddingCipher.from_env() raises).
+FIVUCSAS_EMBEDDING_KEY=<base64-fernet-key>
+FIVUCSAS_EMBEDDING_KEY_VERSION=1
+
+# Anti-spoof enforcement (default true — block verdicts return HTTP 403)
+ANTISPOOF_BLOCK_ENFORCE=true
 ```
+
+### Production Usage
+
+Use `docker compose` (v2 syntax) with a dedicated env file and the prod compose override:
+
+```bash
+# Start production stack
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+
+# View logs
+docker compose -f docker-compose.prod.yml logs -f biometric-api
+
+# Rebuild image without cache
+docker compose -f docker-compose.prod.yml --env-file .env.prod build --no-cache biometric-api
+```
+
+> The prod compose file (`docker-compose.prod.yml`) enables `read_only: true` rootfs, drops all capabilities, and overrides key env vars: `LIVENESS_MODE=passive`, `LIVENESS_BACKEND=uniface`, `VERIFICATION_THRESHOLD=0.4`. Always pass `--env-file .env.prod` — never rely on shell env for secrets.
 
 ### Scaling
 
@@ -218,10 +243,10 @@ Scale API instances:
 
 ```bash
 # Scale to 3 instances
-docker-compose up -d --scale api=3
+docker compose up -d --scale api=3
 
 # Check running instances
-docker-compose ps api
+docker compose ps api
 ```
 
 ## Development Workflow
@@ -230,40 +255,40 @@ docker-compose ps api
 
 ```bash
 # Start development environment
-docker-compose --profile development up -d
+docker compose --profile development up -d
 
 # Make code changes - API will auto-reload
 # View logs
-docker-compose logs -f api-dev
+docker compose logs -f api-dev
 ```
 
 ### Running Tests
 
 ```bash
 # Run tests inside container
-docker-compose exec api pytest
+docker compose exec api pytest
 
 # With coverage
-docker-compose exec api pytest --cov=app --cov-report=html
+docker compose exec api pytest --cov=app --cov-report=html
 
 # Run specific test
-docker-compose exec api pytest tests/unit/test_enrollment.py
+docker compose exec api pytest tests/unit/test_enrollment.py
 ```
 
 ### Debugging
 
 ```bash
 # View API logs
-docker-compose logs -f api
+docker compose logs -f api
 
 # View all logs
-docker-compose logs -f
+docker compose logs -f
 
 # Exec into container
-docker-compose exec api bash
+docker compose exec api bash
 
 # Check Python environment
-docker-compose exec api python -c "import cv2; print(cv2.__version__)"
+docker compose exec api python -c "import cv2; print(cv2.__version__)"
 ```
 
 ## Production Deployment
@@ -334,29 +359,29 @@ Available metrics:
 
 ```bash
 # Check logs
-docker-compose logs api
+docker compose logs api
 
 # Check resource usage
 docker stats
 
 # Restart services
-docker-compose restart
+docker compose restart
 
 # Rebuild if needed
-docker-compose up -d --build
+docker compose up -d --build
 ```
 
 ### Database Connection Issues
 
 ```bash
 # Check PostgreSQL is running
-docker-compose ps postgres
+docker compose ps postgres
 
 # Check PostgreSQL logs
-docker-compose logs postgres
+docker compose logs postgres
 
 # Test connection
-docker-compose exec api python -c "
+docker compose exec api python -c "
 from app.core.config import settings
 print(settings.DATABASE_URL)
 "
@@ -379,16 +404,16 @@ docker stats
 sudo chown -R $USER:$USER uploads/
 
 # Or run with sudo
-sudo docker-compose up -d
+sudo docker compose up -d
 ```
 
 ### Network Issues
 
 ```bash
 # Recreate network
-docker-compose down
+docker compose down
 docker network prune
-docker-compose up -d
+docker compose up -d
 ```
 
 ## Maintenance
@@ -397,43 +422,43 @@ docker-compose up -d
 
 ```bash
 # Backup PostgreSQL
-docker-compose exec postgres pg_dump -U biometric_user biometric_db > backup.sql
+docker compose exec postgres pg_dump -U biometric_user biometric_db > backup.sql
 
 # Restore
-docker-compose exec -T postgres psql -U biometric_user biometric_db < backup.sql
+docker compose exec -T postgres psql -U biometric_user biometric_db < backup.sql
 ```
 
 ### Clear Redis Cache
 
 ```bash
 # Flush all Redis data
-docker-compose exec redis redis-cli FLUSHALL
+docker compose exec redis redis-cli FLUSHALL
 
 # Flush specific database
-docker-compose exec redis redis-cli -n 0 FLUSHDB
+docker compose exec redis redis-cli -n 0 FLUSHDB
 ```
 
 ### Update Dependencies
 
 ```bash
 # Rebuild images with latest dependencies
-docker-compose build --no-cache
+docker compose build --no-cache
 
 # Pull latest base images
-docker-compose pull
+docker compose pull
 
 # Restart with new images
-docker-compose up -d
+docker compose up -d
 ```
 
 ### Clean Up
 
 ```bash
 # Stop and remove containers
-docker-compose down
+docker compose down
 
 # Remove volumes (data will be lost!)
-docker-compose down -v
+docker compose down -v
 
 # Remove images
 docker rmi $(docker images -q biometric-processor*)
@@ -446,7 +471,7 @@ docker system prune -a
 
 ### PostgreSQL
 
-Edit `docker-compose.yml` to adjust PostgreSQL settings:
+Edit `docker compose.yml` to adjust PostgreSQL settings:
 
 ```yaml
 services:
@@ -459,7 +484,7 @@ services:
 
 ### Redis
 
-Adjust Redis configuration in `docker-compose.yml`:
+Adjust Redis configuration in `docker compose.yml`:
 
 ```yaml
 services:

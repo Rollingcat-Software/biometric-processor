@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+### Docs — 2026-05-28 (freshness audit)
+- Corrected stale config defaults (`VERIFICATION_THRESHOLD` 0.6 → 0.45, `LIVENESS_MODE` code default vs prod override documented)
+- Added missing env vars (`FIVUCSAS_EMBEDDING_KEY`, `ANTISPOOF_BLOCK_ENFORCE`) to README and DOCKER_SETUP
+- Marked GPU-only models/backends (`ArcFace`, `VGG-Face`, `GhostFaceNet`, `retinaface`, `yolo*`) with `ALLOW_HEAVY_ML=true` requirement
+- Fixed Quick Start demo script name (`demo_local.py` → `demo_local_fast.py`)
+- Fixed API auth header (`Authorization: Bearer` → `X-API-Key`) in API_DOCUMENTATION
+- Corrected Python version references from 3.11 to 3.12
+- Fixed route module count in CLAUDE.md (17 → 27 files / 26 route modules)
+- Removed MobileFaceNet attribution from client-embedding description in CLAUDE.md
+- Corrected CLAUDE.md route references: removed non-existent `document.py` / `video_interview.py`, removed `TODO.md` reference
+- Closed voice roadmap items (fully shipped: /voice/enroll|verify|search|delete, Resemblyzer 256-dim)
+- Added anti-spoof algorithm provenance note to ARCHITECTURE.md
+- Migrated DOCKER_SETUP.md to `docker compose` v2 syntax; added prod usage section
+- Documented undocumented endpoints in README (flash-challenge, nfc, proctoring, liveness-puzzle, verification sub-paths, admin, health probes, metrics)
+- Updated copyright year 2025 → 2026
+
+## [2026-05-12] ML review — anti-spoof enforcement + EAR + verify hardening
+
+### Security / Fixes (PR #102)
+- **Anti-spoof block enforcement**: `ANTISPOOF_BLOCK_ENFORCE` (default `true`) — assembler "block" verdicts and EAR closed-eye signals now return HTTP 403 (was advisory-only).
+- **EAR veto** (`ANTISPOOF_EAR_VETO_ENABLED`, default `false`): single-frame Eye Aspect Ratio closed-eye detection on `/verify`; fails-soft when `face_landmarker.task` asset is absent.
+- **Aged-threshold inversion fix**: `VERIFICATION_THRESHOLD_AGED` default corrected from 0.38 to 0.55 (under `distance < threshold`, a lower aged threshold made aged users stricter — the opposite of intent).
+- **SHA-256 model pin**: model file integrity checked at startup.
+- **Verify-challenge endpoint** added to liveness puzzle router.
+
+## [2026-05-11] Paper P0 + blink cache + anti-spoof wiring
+
+### Features / Fixes
+- EAR/blink cache wired from `spoof-detector` package (paper P0, PR #89/#88).
+- Anti-spoof flags (`ANTISPOOF_*`) wired through to the assembler (PR #89).
+- `spoof-detector` bumped to v0.2.1; `git` added to Dockerfile so pip can fetch the git dep (PR #90).
+- NFC MRZ route exposed at `/api/v1/nfc/mrz` (PR #95).
+- Real occlusion detection + liveness contradiction policy (PR #94).
+- CI green-up: stale test repair across 7 commits (PR #99 + follow-ups).
+
+## [2026-05-07] Embedding encryption-at-rest + P0 session
+
+### Security
+- Embedding Fernet encryption-at-rest activated: `pgvector_embedding_repository` now reads/writes ciphertext column with `EmbeddingCipher.from_env()` (PR #73). `FIVUCSAS_EMBEDDING_KEY` is a hard boot requirement from this point.
+- `FIVUCSAS_EMBEDDING_KEY` wired through to runtime container in `docker-compose.prod.yml` (PR #78).
+- Live-camera analysis fail-closed when liveness detector unavailable (PR #74).
+- Anti-replay counts corrupt frames as failures (PR #76).
+- Liveness verdict policy + 413 i18n (PR #77).
+
 ### Docs — 2026-04-26 (iOS / macOS scope dropped — no-op for this repo)
 - Parent FIVUCSAS scope updated 2026-04-26 to permanently drop iOS / iPadOS / macOS (no Apple hardware available). This repo's `README.md`, `ROADMAP.md`, and `CHANGELOG.md` had no forward-looking iOS/macOS content; macOS-as-developer-environment install instructions for Redis and PostgreSQL in `README.md` are unaffected. No code or config changes required.
 

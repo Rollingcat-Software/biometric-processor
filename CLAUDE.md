@@ -42,7 +42,7 @@ pytest tests/unit/ -v           # Unit tests only
 
 ## Key Directories
 
-- `app/api/routes/` - API route handlers (17 modules)
+- `app/api/routes/` - API route handlers (27 files including `__init__.py`; 26 route modules)
 - `app/domain/` - Domain entities and interfaces
 - `app/application/use_cases/` - Business logic use cases
 - `app/infrastructure/ml/` - ML model implementations (DeepFace, MediaPipe, YOLO)
@@ -65,7 +65,7 @@ pytest tests/unit/ -v           # Unit tests only
 - **Face-to-document matching** — DeepFace cosine similarity between selfie and document photo
 - **Liveness pipeline** — server-authoritative liveness verdict with configurable thresholds
 - **Video interview upload** — endpoint for verification pipeline video step
-- Routes: `document.py`, `verification_pipeline.py`, `video_interview.py`
+- Routes: `verification_pipeline.py` (sub-paths: /document-scan, /data-extract, /face-match, /liveness-check, /pipeline/test, /video-interview)
 
 ### Not implemented:
 - **Iris**: No endpoints at all
@@ -73,7 +73,7 @@ pytest tests/unit/ -v           # Unit tests only
 ### Client Embedding Observations (Alembic 0004, log-only per D2, 2026-04-14):
 - `client_embedding_observations` table — vector(128), no HNSW (log, not search surface)
 - Populated via `BackgroundTasks` in `enrollment.py` / `verification.py` with fire-and-forget `record()`
-- NEVER used for auth decisions — offline divergence analysis only (MobileFaceNet 128-dim vs ArcFace 512-dim)
+- NEVER used for auth decisions — offline divergence analysis only (128-dim client-side model, identity opaque to server, vs ArcFace 512-dim)
 
 ## Known Issues (March 2026)
 
@@ -84,4 +84,4 @@ pytest tests/unit/ -v           # Unit tests only
 - Called by **identity-core-api** (Java/Spring on port 8080) via BiometricProcessorClient (API key auth)
 - NOT publicly accessible — all external face operations must go through identity-core-api proxy endpoints
 
-See TODO.md for full integration audit (18+ items).
+Integration audit items are tracked in GitHub issues.

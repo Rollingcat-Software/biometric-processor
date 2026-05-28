@@ -18,6 +18,8 @@
 
 ## Overview
 
+> **Anti-spoof algorithm note**: The production anti-spoof pipeline (`AntispoofPipelineAssembler`, `HybridFusionEvaluator`, `FaceUsabilityGate`, EAR blink detection) is **not implemented in this repository**. These algorithms live in the external `spoof-detector` pip package, declared as a git dependency in `requirements.txt`. This repo only imports, wires, and configures them. Do not cherry-pick algorithm code directly into `biometric-processor`; changes belong in the `spoof-detector` submodule.
+
 The Biometric Processor API follows **Hexagonal Architecture** (also known as Ports and Adapters Architecture), which ensures:
 
 - **Business logic independence**: Core domain logic is isolated from technical concerns
