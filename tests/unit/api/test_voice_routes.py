@@ -27,12 +27,38 @@ import pytest
 # ``app.core.container`` at module load. The real container module eagerly
 # wires the full DeepFace/TensorFlow/OpenCV ML stack at import time, which is
 # not available in the lean unit-test environment (and is irrelevant to the
-# route logic under test — every getter is patched per-test below). We stub the
-# container with a lightweight module exposing just the symbols voice.py needs,
-# mirroring the existing NFC route test's strategy of avoiding the heavy
-# ``app.main`` import path. In the Docker/CI image the real container imports
-# cleanly and these stubs are simply overridden by ``patch.object`` anyway.
-if "app.core.container" not in sys.modules:
+# route logic under test — every getter is patched per-test below).
+#
+# Earlier this file installed a lightweight ``app.core.container`` stub into
+# ``sys.modules`` and never removed it. Because ``sys.modules`` is process-wide,
+# the stub leaked into *every other* test module collected afterwards — e.g.
+# ``tests/unit/infrastructure/test_liveness_runtime_wiring.py`` does
+# ``from app.core.container import clear_cache, ...`` and hit the incomplete
+# stub, raising ``ImportError`` and aborting the whole suite (exit 2).
+#
+# Fix: import ``voice`` exactly once here, falling back to a temporary stub
+# ONLY for the duration of that import, then restoring the previous
+# ``sys.modules`` state. Once ``voice`` is imported, the getter names are bound
+# into the ``voice`` module's own namespace (and are patched per-test via
+# ``patch.object(voice_routes, ...)``), so the real/stub container module is no
+# longer referenced and must not be left lying around in ``sys.modules``.
+def _import_voice_routes():
+    """Import app.api.routes.voice without leaking a container stub.
+
+    In the Docker/CI image the real container imports cleanly, so the plain
+    import succeeds and no stub is ever installed. In a lean environment that
+    lacks the heavy ML stack, we temporarily install a minimal container stub
+    just long enough to satisfy voice.py's ``from app.core.container import``,
+    then restore sys.modules so other test modules see the real container.
+    """
+    try:
+        from app.api.routes import voice as _voice
+        return _voice
+    except Exception:
+        pass
+
+    _had_container = "app.core.container" in sys.modules
+    _saved_container = sys.modules.get("app.core.container")
     _stub_container = types.ModuleType("app.core.container")
     for _name in (
         "get_speaker_embedder",
@@ -42,8 +68,17 @@ if "app.core.container" not in sys.modules:
     ):
         setattr(_stub_container, _name, lambda *a, **k: None)
     sys.modules["app.core.container"] = _stub_container
+    try:
+        from app.api.routes import voice as _voice
+        return _voice
+    finally:
+        if _had_container:
+            sys.modules["app.core.container"] = _saved_container
+        else:
+            sys.modules.pop("app.core.container", None)
 
-from app.api.routes import voice as voice_routes  # noqa: E402
+
+voice_routes = _import_voice_routes()
 
 
 # ---------------------------------------------------------------------------
