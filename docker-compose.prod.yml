@@ -114,6 +114,22 @@ services:
       DEEPFACE_HOME: /tmp/.deepface
     volumes:
       - biometric_uploads:/app/uploads
+      # /tmp/.deepface — DeepFace weights cache. As of 2026-05-12 the four
+      # critical model files (Facenet512, centerface, MiniFASNetV2,
+      # MiniFASNetV1SE) are BAKED INTO THE IMAGE under /opt/baked-models/
+      # and the entrypoint shim self-heals this volume from that source on
+      # boot (chown to 100:101 + cp missing weights). Two consequences:
+      #   1) Removing this volume mount is now safe — DeepFace will read
+      #      directly from the image layer (DEEPFACE_HOME=/tmp/.deepface
+      #      with no overlay means the read_only:true rootfs blocks writes,
+      #      but reads succeed). We keep it for now so DeepFace can still
+      #      cache additional models it may want to download in the future
+      #      (e.g. new MiniFASNet variants in a DeepFace upgrade).
+      #   2) `docker volume rm biometric-processor_biometric_models` is now
+      #      a no-op for correctness: the entrypoint shim seeds it again
+      #      from the baked image layer on the next boot. Operator memory
+      #      ("remember to docker cp the .pth files") is no longer
+      #      load-bearing. See feedback_readonly_rootfs_cache_dirs.
       - biometric_models:/tmp/.deepface
       - biometric_uniface:/app/uniface-cache
     # No Traefik labels by design (CLAUDE.md: "Internal only — No public
