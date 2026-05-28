@@ -190,24 +190,42 @@ class QualityAssessor:
             Tuple (yaw_degrees, pitch_degrees) or (None, None) if unavailable.
         """
         try:
-            import mediapipe as mp
+            # Ported 2026-05-12 from mp.solutions.face_mesh to the Tasks API.
+            # Creating a fresh FaceLandmarker per call matches the old
+            # `with FaceMesh(...)` lifecycle and is cheap enough at the call
+            # frequency this static method sees (one PnP solve per quality
+            # check).
+            from app.infrastructure.ml.landmarks.face_landmarker_loader import (
+                create_face_landmarker,
+                to_mp_image,
+            )
 
             h, w = face_image.shape[:2]
 
-            mp_face_mesh = mp.solutions.face_mesh
-            with mp_face_mesh.FaceMesh(
+            face_landmarker = create_face_landmarker(
                 static_image_mode=True,
-                max_num_faces=1,
-                refine_landmarks=False,
-                min_detection_confidence=0.5,
-            ) as face_mesh:
+                num_faces=1,
+                min_face_detection_confidence=0.5,
+            )
+            if face_landmarker is None:
+                return None, None
+            try:
                 rgb = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
-                results = face_mesh.process(rgb)
+                mp_image = to_mp_image(rgb)
+                result = face_landmarker.detect(mp_image)
+            finally:
+                # Tasks API requires explicit close to release the underlying
+                # C++ graph; without this we'd leak FDs on long-running workers.
+                try:
+                    face_landmarker.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
-            if not results.multi_face_landmarks:
+            face_landmarks_list = result.face_landmarks or []
+            if not face_landmarks_list:
                 return None, None
 
-            lm = results.multi_face_landmarks[0].landmark
+            lm = face_landmarks_list[0]
 
             # 2D image points (selected canonical landmarks)
             # Indices: nose tip=1, chin=152, left eye left=33, right eye right=263,

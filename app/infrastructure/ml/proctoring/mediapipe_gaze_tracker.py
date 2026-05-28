@@ -1,10 +1,18 @@
 """MediaPipe-based gaze tracker implementation for proctoring.
 
-Uses MediaPipe Face Mesh (468 landmarks) to track gaze direction
-and head pose for detecting if the user is looking at the screen.
+Uses MediaPipe Face Landmarker (Tasks API) to track gaze direction and head
+pose for detecting if the user is looking at the screen.
+
+Ported 2026-05-12 from the legacy ``mediapipe.solutions.face_mesh`` API to
+``mediapipe.tasks.vision.FaceLandmarker``. The canonical ``face_landmarker.task``
+asset returns 478 landmarks (468 face + 10 iris) so the iris indices below
+(468-477) remain valid without the legacy ``refine_landmarks=True`` toggle.
+Frame submission uses VIDEO running-mode with monotonically increasing
+``timestamp_ms`` so the Tasks API can do its own temporal smoothing.
 """
 
 import logging
+import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -17,6 +25,10 @@ from app.domain.entities.proctor_analysis import (
     HeadPose,
 )
 from app.domain.interfaces.gaze_tracker import IGazeTracker
+from app.infrastructure.ml.landmarks.face_landmarker_loader import (
+    create_face_landmarker,
+    to_mp_image,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,34 +89,45 @@ class MediaPipeGazeTracker(IGazeTracker):
         self._min_tracking_confidence = min_tracking_confidence
         self._gaze_threshold = gaze_threshold
         self._pitch_threshold, self._yaw_threshold = head_pose_threshold
-        self._face_mesh = None
+        self._face_landmarker = None
+        # Monotonic timestamp counter for VIDEO running-mode. The Tasks API
+        # rejects non-increasing timestamps with InvalidArgumentError, so we
+        # never feed it wall-clock values directly.
+        self._frame_timestamp_ms = 0
         # Track off-screen start per session to avoid accumulating across sessions
         self._off_screen_start: Dict[str, Optional[datetime]] = {}
 
         logger.info(
-            f"MediaPipeGazeTracker initialized: "
+            f"MediaPipeGazeTracker initialized (Tasks API): "
             f"gaze_threshold={gaze_threshold}, "
             f"head_pose_threshold={head_pose_threshold}"
         )
 
-    def _get_face_mesh(self):
-        """Lazy initialization of MediaPipe Face Mesh."""
-        if self._face_mesh is None:
-            try:
-                import mediapipe as mp
-
-                self._face_mesh = mp.solutions.face_mesh.FaceMesh(
-                    static_image_mode=False,  # Video mode for tracking
-                    max_num_faces=1,
-                    refine_landmarks=True,  # Required for iris landmarks
-                    min_detection_confidence=self._min_detection_confidence,
-                    min_tracking_confidence=self._min_tracking_confidence,
+    def _get_face_landmarker(self):
+        """Lazy initialization of MediaPipe Face Landmarker (Tasks API)."""
+        if self._face_landmarker is None:
+            self._face_landmarker = create_face_landmarker(
+                static_image_mode=False,  # VIDEO running mode for tracking
+                num_faces=1,
+                min_face_detection_confidence=self._min_detection_confidence,
+                min_face_presence_confidence=self._min_detection_confidence,
+                min_tracking_confidence=self._min_tracking_confidence,
+            )
+            if self._face_landmarker is None:
+                raise RuntimeError(
+                    "MediaPipe FaceLandmarker unavailable for gaze tracking — "
+                    "asset missing or Tasks API not importable."
                 )
-                logger.info("MediaPipe Face Mesh initialized for gaze tracking")
-            except ImportError:
-                logger.error("MediaPipe not installed. Run: pip install mediapipe")
-                raise
-        return self._face_mesh
+            logger.info("MediaPipe Face Landmarker initialized for gaze tracking")
+        return self._face_landmarker
+
+    def _next_video_timestamp_ms(self) -> int:
+        """Return a strictly monotonic timestamp for VIDEO running-mode."""
+        # Use a monotonic counter rather than wall-clock so repeated calls in
+        # the same millisecond still get unique, ordered timestamps.
+        next_ts = max(self._frame_timestamp_ms + 1, int(time.monotonic() * 1000))
+        self._frame_timestamp_ms = next_ts
+        return next_ts
 
     async def analyze(
         self,
@@ -126,11 +149,15 @@ class MediaPipeGazeTracker(IGazeTracker):
         rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         h, w = image.shape[:2]
 
-        # Get facial landmarks
-        face_mesh = self._get_face_mesh()
-        results = face_mesh.process(rgb_image)
+        # Get facial landmarks via Tasks API
+        face_landmarker = self._get_face_landmarker()
+        mp_image = to_mp_image(rgb_image)
+        result = face_landmarker.detect_for_video(
+            mp_image, self._next_video_timestamp_ms()
+        )
 
-        if not results.multi_face_landmarks:
+        face_landmarks_list = result.face_landmarks or []
+        if not face_landmarks_list:
             logger.debug("No face detected for gaze tracking")
             duration = self._get_off_screen_duration(timestamp, is_off_screen=True, session_id=session_id)
             return GazeAnalysisResult(
@@ -143,7 +170,7 @@ class MediaPipeGazeTracker(IGazeTracker):
                 duration_off_screen_sec=duration,
             )
 
-        landmarks = results.multi_face_landmarks[0].landmark
+        landmarks = face_landmarks_list[0]
 
         # Convert to pixel coordinates
         landmark_points = [(lm.x * w, lm.y * h, lm.z) for lm in landmarks]
@@ -191,13 +218,17 @@ class MediaPipeGazeTracker(IGazeTracker):
         rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         h, w = image.shape[:2]
 
-        face_mesh = self._get_face_mesh()
-        results = face_mesh.process(rgb_image)
+        face_landmarker = self._get_face_landmarker()
+        mp_image = to_mp_image(rgb_image)
+        result = face_landmarker.detect_for_video(
+            mp_image, self._next_video_timestamp_ms()
+        )
 
-        if not results.multi_face_landmarks:
+        face_landmarks_list = result.face_landmarks or []
+        if not face_landmarks_list:
             return None
 
-        landmarks = results.multi_face_landmarks[0].landmark
+        landmarks = face_landmarks_list[0]
         landmark_points = [(lm.x * w, lm.y * h, lm.z) for lm in landmarks]
 
         return self._estimate_head_pose(landmark_points, w, h)
