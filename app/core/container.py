@@ -78,7 +78,6 @@ from app.infrastructure.persistence.repositories.redis_active_liveness_session_r
 from app.infrastructure.storage.local_file_storage import LocalFileStorage
 from app.infrastructure.async_execution.thread_pool_manager import ThreadPoolManager
 from app.infrastructure.ml.voice.speaker_embedder import SpeakerEmbedder
-from app.infrastructure.ml.voice.replay_detector import VoiceReplayDetector
 from app.infrastructure.persistence.repositories.pgvector_voice_repository import PgVectorVoiceRepository
 from app.infrastructure.persistence.client_embedding_observation_repository import (
     ClientEmbeddingObservationRepository,
@@ -861,7 +860,7 @@ def get_voice_repository() -> PgVectorVoiceRepository:
 
 
 @lru_cache()
-def get_voice_replay_detector() -> VoiceReplayDetector:
+def get_voice_replay_detector() -> "VoiceReplayDetector":
     """Get voice replay-attack detector instance (singleton).
 
     ML-H4: log-only spectral-fingerprint replay detector backed by a Redis
@@ -871,6 +870,11 @@ def get_voice_replay_detector() -> VoiceReplayDetector:
     client is created with the same URL used elsewhere and the detector
     degrades silently if Redis is unreachable.
     """
+    # Imported lazily (not at module top) so container.py never pulls the
+    # replay detector at import time — a top-level import here introduced a
+    # circular-import collection failure in CI (broke clear_cache import).
+    from app.infrastructure.ml.voice.replay_detector import VoiceReplayDetector
+
     redis_client = None
     if settings.VOICE_REPLAY_DETECTION_ENABLED:
         try:
