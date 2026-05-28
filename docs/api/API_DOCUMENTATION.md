@@ -23,9 +23,11 @@ The Biometric Processor API provides comprehensive face recognition and proctori
 All endpoints require authentication via API key:
 
 ```http
-Authorization: Bearer <api_key>
+X-API-Key: <api_key>
 X-Tenant-ID: <tenant_id>
 ```
+
+> Note: The header is `X-API-Key`, not `Authorization: Bearer`. The middleware reads `request.headers.get("X-API-Key")`. Bearer tokens are used for JWT auth only (separate from the service-to-service API key).
 
 ---
 
