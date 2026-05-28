@@ -16,14 +16,21 @@ Integration:
 """
 
 import logging
+from typing import Optional
 
 import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.api.schemas.biometric_response import BiometricResponse as _SharedBiometricResponse
-from app.core.container import get_speaker_embedder, get_voice_repository, get_thread_pool
+from app.core.container import (
+    get_speaker_embedder,
+    get_thread_pool,
+    get_voice_replay_detector,
+    get_voice_repository,
+)
 from app.core.validation import validate_user_id
+from app.infrastructure.ml.voice.replay_detector import compute_spectral_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +57,47 @@ async def _extract_voice_embedding(voice_data: str) -> np.ndarray:
     embedder = get_speaker_embedder()
     pool = get_thread_pool()
     return await pool.run_blocking(embedder.extract_embedding_from_base64, voice_data)
+
+
+async def _compute_replay_fingerprint(voice_data: str) -> np.ndarray:
+    """Decode audio and compute the replay spectral fingerprint off the loop."""
+    embedder = get_speaker_embedder()
+    pool = get_thread_pool()
+    samples = await pool.run_blocking(embedder.decode_samples_from_base64, voice_data)
+    return await pool.run_blocking(compute_spectral_fingerprint, samples)
+
+
+async def _run_replay_check(
+    voice_data: str,
+    user_id: str,
+    tenant_id: Optional[str] = None,
+) -> bool:
+    """Run the voice replay-attack detector (ML-H4).
+
+    Mirrors how the face verify path runs its anti-spoof check: the detector is
+    invoked on the verification/search path, is gated by the
+    ``VOICE_REPLAY_DETECTION_ENABLED`` config flag (default off), and is
+    **advisory + log-only** — a replay suspicion is logged and metered but does
+    not block the request. Any failure here must never break voice auth, so all
+    errors are swallowed and treated as "not a replay".
+
+    Returns:
+        True if the sample is a suspected replay, False otherwise (including
+        when detection is disabled or the detector errors out).
+    """
+    detector = get_voice_replay_detector()
+    if not detector.enabled:
+        return False
+    try:
+        fingerprint = await _compute_replay_fingerprint(voice_data)
+        return await detector.check_and_record(
+            user_id=user_id,
+            fingerprint=fingerprint,
+            tenant_id=tenant_id,
+        )
+    except Exception as e:  # noqa: BLE001 — replay check is non-blocking
+        logger.warning(f"Voice replay check skipped (error): {e}")
+        return False
 
 
 # -- POST /voice/enroll --------------------------------------------------------
@@ -128,6 +176,11 @@ async def verify_voice(request: VoiceRequest) -> BiometricResponse:
 
         logger.info(f"Voice verification request: user_id={user_id}")
 
+        # ML-H4: voice replay-attack detection (advisory + log-only, gated by
+        # VOICE_REPLAY_DETECTION_ENABLED). Mirrors the face verify path running
+        # its anti-spoof check. Never blocks verification today.
+        await _run_replay_check(voice_data, user_id=user_id)
+
         # Extract speaker embedding from probe audio (CPU-bound)
         probe_embedding = await _extract_voice_embedding(voice_data)
 
@@ -183,6 +236,13 @@ async def verify_voice(request: VoiceRequest) -> BiometricResponse:
 
 class VoiceSearchRequest(BaseModel):
     voice_data: str = Field(..., max_length=50_000_000)  # base64-encoded audio
+    # F10: tenant scoping for 1:N voice identification. Mirrors the face
+    # /search ``tenant_id`` parameter ("defense-in-depth isolation"). When
+    # supplied the query is scoped to the tenant at the SQL layer so a voice
+    # sample can never match enrollments belonging to OTHER tenants. Optional
+    # for backward compatibility with callers that have not yet been updated to
+    # forward it (see PR notes re: identity-core-api BiometricServiceAdapter).
+    tenant_id: Optional[str] = Field(None, max_length=255)
 
 
 @router.post("/voice/search")
@@ -195,13 +255,30 @@ async def search_voice(request: VoiceSearchRequest):
         if not voice_data:
             raise HTTPException(status_code=400, detail="voice_data is required")
 
-        logger.info("Voice search request")
+        tenant_id = request.tenant_id
+        logger.info(f"Voice search request: tenant_id={tenant_id}")
 
         # CPU-bound extraction offloaded to thread pool
         probe_embedding = await _extract_voice_embedding(voice_data)
 
+        # ML-H4: voice replay-attack detection on the search path (advisory +
+        # log-only, gated by VOICE_REPLAY_DETECTION_ENABLED). 1:N search has no
+        # claimed user_id, so we key the per-sample fingerprint cache by tenant.
+        await _run_replay_check(
+            voice_data,
+            user_id=f"search:{tenant_id or 'global'}",
+            tenant_id=tenant_id,
+        )
+
+        # F10: scope the 1:N search to the requesting tenant. The repository
+        # adds an ``AND tenant_id = $N`` predicate when tenant_id is provided
+        # (same as the face repository), preventing cross-tenant matches.
         repo = get_voice_repository()
-        matches = await repo.find_similar(probe_embedding, threshold=SEARCH_THRESHOLD)
+        matches = await repo.find_similar(
+            probe_embedding,
+            threshold=SEARCH_THRESHOLD,
+            tenant_id=tenant_id,
+        )
 
         logger.info(f"Voice search complete: {len(matches)} matches")
 
