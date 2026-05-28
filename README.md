@@ -5,6 +5,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12-yellow.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green.svg)
 ![DeepFace](https://img.shields.io/badge/DeepFace-0.0.98-red.svg)
+![Tests](https://img.shields.io/badge/pytest-785-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ## Overview
