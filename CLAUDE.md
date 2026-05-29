@@ -14,6 +14,27 @@ pip install -r requirements.txt
 python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
+## ⚠️ Rebuild caution — dependency lock (2026-05-29)
+
+The deployed prod image (`75347c98…`, healthy) is ~2 weeks old. `requirements.txt`
+historically pinned everything with `>=`, so a fresh rebuild drifted ~42 packages
+(numpy 2.4.4→2.4.6, protobuf 7.34.1→7.35.0, uniface 3.6.0→3.7.0, fastapi, nvidia-*, …).
+The drifted set **segfaults** during the UniFace MiniFASNet ONNX session preload at
+full-app boot under the `read_only` rootfs + `cap_drop:ALL` runtime (a native-ABI
+interaction — an isolated MiniFASNet load works in BOTH uniface versions, so it's the
+combination, not one library). Two other rebuild blockers were already fixed in
+`docker-compose.prod.yml` (cap_add CHOWN/SETUID/SETGID for the gosu drop; forward the
+DeepFace SHA pin from .env.prod).
+
+**Before the next bio rebuild:** the high-risk natives are now pinned
+(`numpy==2.4.4`, `protobuf==7.34.1`, `uniface==3.6.0`). The full known-good set is
+captured in `requirements-known-good-2026-05-29.lock` (exact `pip freeze` of the
+working image) — prefer installing from it for a guaranteed-reproducible build. After
+rebuilding, **boot-test under the prod compose** (not a bare `docker run` — the
+segfault only reproduces under read_only+cap_drop+full-model-load) and roll back to
+`75347c98` on any crash-loop. Liveness-on-enroll (PR #119) is merged but stays
+undeployed until a rebuild boots clean this way.
+
 ## Migrations (Alembic)
 
 Alembic is included in `requirements.txt` and `Dockerfile.gpu` since PR #68
