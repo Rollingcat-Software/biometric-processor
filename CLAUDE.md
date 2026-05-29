@@ -26,14 +26,29 @@ combination, not one library). Two other rebuild blockers were already fixed in
 `docker-compose.prod.yml` (cap_add CHOWN/SETUID/SETGID for the gosu drop; forward the
 DeepFace SHA pin from .env.prod).
 
-**Before the next bio rebuild:** the high-risk natives are now pinned
-(`numpy==2.4.4`, `protobuf==7.34.1`, `uniface==3.6.0`). The full known-good set is
-captured in `requirements-known-good-2026-05-29.lock` (exact `pip freeze` of the
-working image) — prefer installing from it for a guaranteed-reproducible build. After
-rebuilding, **boot-test under the prod compose** (not a bare `docker run` — the
-segfault only reproduces under read_only+cap_drop+full-model-load) and roll back to
-`75347c98` on any crash-loop. Liveness-on-enroll (PR #119) is merged but stays
-undeployed until a rebuild boots clean this way.
+**UPDATE 2026-05-29 (verified in isolation):** pinning `numpy==2.4.4` + `uniface==3.6.0`
+to the exact working versions is **NOT sufficient** — a from-scratch rebuild STILL
+segfaults at the MiniFASNet ONNX load. The remaining cause is base-image + deeper
+native drift: the floating `python:3.12-slim` base moved **Debian 13.4→13.5**
+(glibc deb13u2→u3) and torch/nvidia-cu13/onnxruntime-transitive libs drifted. So the
+canonical `Dockerfile` cannot currently be rebuilt for prod.
+
+**WHAT IS DEPLOYED NOW:** the prod image is built via **`Dockerfile.liveness-overlay`** —
+a code-only layer `FROM` the proven working image (`75347c98`, retagged
+`biometric-processor-biometric-api:working-75347c98`) that overlays the current `app/`
+source (incl. liveness-on-enroll #119) onto the exact known-good dependency set. This
+ships the security feature with zero dep-drift risk. `ENROLL_LIVENESS_ENABLED=True`.
+To redeploy a code change: `docker build -f Dockerfile.liveness-overlay -t
+biometric-processor-biometric-api:latest . && docker compose -f docker-compose.prod.yml
+--env-file .env.prod up -d biometric-api` (boot-test first; roll back by retagging
+`working-75347c98` → `:latest`).
+
+**STILL TODO (tracked — reproducible canonical build):** pin the base image by DIGEST
+(both `FROM` lines) to a known-good build + install from
+`requirements-known-good-2026-05-29.lock` (handling the tf-cpu/deepface/opencv
+special-casing so the lock's `tensorflow` line doesn't pull the GPU wheel). Until then
+the overlay is the deploy path. The `requirements.txt` native pins + the compose
+cap_add/DeepFace-env fixes remain in place as partial groundwork.
 
 ## Migrations (Alembic)
 
