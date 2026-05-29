@@ -64,10 +64,8 @@ _CARD_TYPE_KEYWORDS: dict[str, list[str]] = {
 _OCR_NO_EVIDENCE: frozenset[str] = frozenset({"no_evidence", "ocr_unavailable"})
 
 # Default model path relative to this file.
-# best_fp16.onnx (FP16 ONNX, 50MB) is used instead of best.onnx (FP32, 103MB).
-# FP16 on CPU has identical inference speed to FP32 but uses half the memory.
 # Override via CARD_MODEL_PATH env var (filename only, not full path).
-DEFAULT_MODEL_PATH = Path(__file__).parent.parent.parent.parent / "core" / "card_type_model" / os.getenv("CARD_MODEL_PATH", "best_fp16.onnx")
+DEFAULT_MODEL_PATH = Path(__file__).parent.parent.parent.parent / "core" / "card_type_model" / os.getenv("CARD_MODEL_PATH", "best.onnx")
 
 
 @lru_cache(maxsize=1)
