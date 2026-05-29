@@ -22,7 +22,7 @@ structlog>=25.4.0
 # Image Processing
 # ===========================================
 pillow>=11.2.1
-numpy>=2.2.5
+numpy==2.4.4  # PINNED 2026-05-29: native-ABI stability (see requirements-known-good lock)
 scikit-image>=0.25.2
 
 # ===========================================
@@ -81,7 +81,7 @@ prometheus_client>=0.21.1
 # ===========================================
 # Anti-Spoofing - UniFace MiniFASNet (ONNX)
 # ===========================================
-uniface>=3.0.0
+uniface==3.6.0  # PINNED 2026-05-29: 3.7.0+ drift segfaults MiniFASNet ONNX preload under read_only+cap_drop runtime
 # Standalone spoof-detector engine (gates + fusion + pipeline assembler).
 # Lives at https://github.com/Rollingcat-Software/spoof-detector — the
 # algorithms ported there (v0.2.x) replace the in-tree cherry-pick that
@@ -136,6 +136,6 @@ aiohttp>=3.13.4
 starlette>=0.46.2
 # Transitive pins (Dependabot 2026-04-20)
 filelock>=3.20.3
-protobuf>=5.29.6
+protobuf==7.34.1  # PINNED 2026-05-29: match known-good prod image
 orjson>=3.11.6
 tqdm>=4.67.1
