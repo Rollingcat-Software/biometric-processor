@@ -31,6 +31,7 @@ from app.core.container import (
 )
 from app.core.validation import validate_user_id
 from app.infrastructure.ml.voice.replay_detector import compute_spectral_fingerprint
+from app.infrastructure.ml.voice.speaker_embedder import compute_voice_quality_score
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,22 @@ async def _compute_replay_fingerprint(voice_data: str) -> np.ndarray:
     pool = get_thread_pool()
     samples = await pool.run_blocking(embedder.decode_samples_from_base64, voice_data)
     return await pool.run_blocking(compute_spectral_fingerprint, samples)
+
+
+async def _compute_voice_quality(voice_data: str) -> float:
+    """Decode audio and compute the 0..100 voice quality score off the loop.
+
+    Best-effort: any decode/analysis failure falls back to a neutral 50.0 so a
+    quality hiccup never blocks an otherwise-successful enrollment.
+    """
+    embedder = get_speaker_embedder()
+    pool = get_thread_pool()
+    try:
+        samples = await pool.run_blocking(embedder.decode_samples_from_base64, voice_data)
+        return await pool.run_blocking(compute_voice_quality_score, samples)
+    except Exception as e:  # noqa: BLE001 — quality scoring must never break enroll
+        logger.warning(f"Voice quality scoring skipped (error): {e}")
+        return 50.0
 
 
 async def _run_replay_check(
@@ -124,16 +141,24 @@ async def enroll_voice(request: VoiceRequest) -> BiometricResponse:
         # Extract speaker embedding (CPU-bound -- offloaded to thread pool)
         embedding = await _extract_voice_embedding(voice_data)
 
-        # Store in database (async I/O -- safe on event loop)
+        # Real signal-quality metric (0..100), CPU-only, computed from the
+        # decoded audio (duration / loudness / SNR). Replaces the old hardcoded
+        # placeholder so the admin Enrollments table + downstream gates see a
+        # real number (P1-3).
+        quality_score = await _compute_voice_quality(voice_data)
+
+        # Store in database (async I/O -- safe on event loop). The DB column is
+        # 0..1, so rescale the 0..100 metric.
         repo = get_voice_repository()
         await repo.save(
             user_id=user_id,
             embedding=embedding,
-            quality_score=1.0,  # Voice has no quality metric yet
+            quality_score=round(quality_score / 100.0, 4),
         )
 
         logger.info(
-            f"Voice enrolled: user_id={user_id}, dim={len(embedding)}"
+            f"Voice enrolled: user_id={user_id}, dim={len(embedding)}, "
+            f"quality={quality_score:.1f}"
         )
 
         return BiometricResponse(
@@ -141,6 +166,8 @@ async def enroll_voice(request: VoiceRequest) -> BiometricResponse:
             message="Voice enrolled successfully",
             user_id=user_id,
             embedding_dimension=len(embedding),
+            # 0..100 — identity-core-api rescales to 0..1 for user_enrollments.
+            quality_score=round(quality_score, 2),
         )
 
     except ValueError as e:

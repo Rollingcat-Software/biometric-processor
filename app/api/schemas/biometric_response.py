@@ -21,3 +21,7 @@ class BiometricResponse(BaseModel):
     implemented: bool = True
     embedding_dimension: Optional[int] = None
     verified: Optional[bool] = None
+    # 0..100 enrollment quality score (voice: computed from signal duration /
+    # loudness / SNR). identity-core-api reads this off the JSON and rescales
+    # 0..100 → 0..1 for the user_enrollments.quality_score column (P1-3).
+    quality_score: Optional[float] = None
