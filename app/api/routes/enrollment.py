@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException, Request, UploadFile
 
+from app.api.routes import verification as verify_route
 from app.api.schemas.enrollment import EnrollmentResponse
 from app.api.schemas.multi_image_enrollment import MultiImageEnrollmentResponse
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
@@ -131,20 +132,82 @@ async def enroll_face(
             await storage.cleanup(image_path)  # Clean up invalid file immediately
             raise HTTPException(status_code=400, detail=str(e))
 
-        # Liveness check — must pass before we commit the embedding to the DB
-        liveness_result = await liveness_use_case.execute(image_path=image_path)
-        if not liveness_result.is_live:
-            logger.warning(
-                f"Enrollment rejected — liveness check failed: "
-                f"user_id={user_id}, score={liveness_result.score:.2f}"
+        # ------------------------------------------------------------------
+        # Liveness + anti-spoof gate (2026-05-29) — close the documented
+        # enroll/verify asymmetry. Enrollment now runs the SAME server-
+        # authoritative passive liveness check AND the SAME spoof-detector
+        # anti-spoof / EAR veto that /verify runs, BEFORE the embedding is
+        # persisted, so a photo/screen spoof cannot be enrolled. The gate is
+        # configurable via ENROLL_LIVENESS_ENABLED (default ON) and reuses the
+        # verify path's verdict policy (conservative) — enrollment is at least
+        # as strict as verify. Like /verify, enrollment sends a single still
+        # frame, so we use passive single-frame liveness (no active blink/smile
+        # demand).
+        # ------------------------------------------------------------------
+        liveness_score: Optional[float] = None
+        if settings.ENROLL_LIVENESS_ENABLED:
+            # Passive liveness (UniFace MiniFASNet + DeepFace anti-spoof veto
+            # baked into CheckLivenessUseCase per LIVENESS_VERDICT_POLICY).
+            liveness_result = await liveness_use_case.execute(image_path=image_path)
+            liveness_score = liveness_result.score
+            if not liveness_result.is_live:
+                logger.warning(
+                    f"Enrollment rejected — liveness check failed: "
+                    f"user_id={user_id}, score={liveness_result.score:.2f}"
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error_code": "LIVENESS_FAILED",
+                        "message": "Liveness check failed",
+                        "score": liveness_result.score,
+                    },
+                )
+
+            # spoof-detector anti-spoof pipeline + single-frame EAR veto —
+            # identical to /verify. Helpers fail-soft to None when the optional
+            # spoof_detector package / MediaPipe asset is unavailable, and are
+            # additionally short-circuited by their own ANTISPOOF_* flags.
+            antispoof_pipeline = verify_route._evaluate_antispoof_pipeline_safe(image_path)
+            ear_liveness = verify_route._evaluate_ear_liveness_safe(image_path)
+            block_reason = verify_route._merge_block_verdict(
+                antispoof_pipeline=antispoof_pipeline,
+                ear_liveness=ear_liveness,
             )
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error_code": "LIVENESS_FAILED",
-                    "message": "Liveness check failed",
-                    "score": liveness_result.score,
-                },
+            if block_reason is not None and settings.ANTISPOOF_BLOCK_ENFORCE:
+                logger.warning(
+                    "Enrollment BLOCKED by anti-spoof veto: user_id=%s reason=%s "
+                    "assembler_action=%s ear_avg=%s",
+                    user_id,
+                    block_reason,
+                    (antispoof_pipeline or {}).get("recommended_action"),
+                    (ear_liveness or {}).get("avg_ear"),
+                )
+                # Same structured error shape /verify uses for spoof rejection.
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error_code": "ANTISPOOF_BLOCKED",
+                        "reason": block_reason,
+                        "antispoof_pipeline": antispoof_pipeline,
+                        "ear_liveness": ear_liveness,
+                        "message": "Enrollment rejected by anti-spoof checks",
+                    },
+                )
+            if block_reason is not None:
+                # Enforcement disabled: log the bypass loudly so observation-mode
+                # rollouts remain visible in production log streams (mirrors verify).
+                logger.warning(
+                    "Enrollment anti-spoof veto SUPPRESSED (ANTISPOOF_BLOCK_ENFORCE=false): "
+                    "user_id=%s reason=%s",
+                    user_id,
+                    block_reason,
+                )
+        else:
+            logger.info(
+                "Enrollment liveness/anti-spoof gate DISABLED "
+                "(ENROLL_LIVENESS_ENABLED=false): user_id=%s",
+                user_id,
             )
 
         # Execute enrollment use case
@@ -156,7 +219,7 @@ async def enroll_face(
             quality_score=result.quality_score,
             message="Face enrolled successfully",
             embedding_dimension=result.get_embedding_dimension(),
-            liveness_score=liveness_result.score,
+            liveness_score=liveness_score,
         )
 
         # Store response for idempotency if key provided
