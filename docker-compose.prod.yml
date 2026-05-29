@@ -9,13 +9,23 @@ services:
     # - read_only rootfs; writable dirs are explicit named volumes
     #   (/app/uploads, /tmp/.deepface) and tmpfs (/tmp, /var/log).
     # - NUMBA_CACHE_DIR=/tmp/numba_cache is already under the /tmp tmpfs.
-    # - cap_drop ALL: the Python/uvicorn workload needs no capabilities.
+    # - cap_drop ALL: the uvicorn workload (uid 100) needs no capabilities.
+    #   The entrypoint, however, starts as root to chown the mounted cache
+    #   volume and then drops to uid 100 via `gosu`. Under cap_drop ALL even
+    #   root lacks CHOWN/SETUID/SETGID, so gosu failed with
+    #   "failed switching to app: operation not permitted" and the container
+    #   crash-looped on every rebuild (2026-05-29). Re-add exactly the three
+    #   caps the root entrypoint needs; everything else stays dropped.
     read_only: true
     tmpfs:
       - /tmp
       - /var/log
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
     security_opt:
       - no-new-privileges:true
     environment:
@@ -112,6 +122,13 @@ services:
       # TensorFlow
       TF_CPP_MIN_LOG_LEVEL: "2"
       DEEPFACE_HOME: /tmp/.deepface
+      # DeepFace model-integrity pin. The image fail-closes on boot if the
+      # Facenet512 weights SHA256 isn't pinned (DEEPFACE_SHA256_REQUIRED=true).
+      # These live in .env.prod; the compose has no env_file, so they must be
+      # forwarded explicitly via interpolation or the container sees them empty
+      # (caused a crash-loop on the 2026-05-29 rebuild). Pass-through from .env.prod:
+      DEEPFACE_FACENET512_SHA256: ${DEEPFACE_FACENET512_SHA256}
+      DEEPFACE_SHA256_REQUIRED: ${DEEPFACE_SHA256_REQUIRED:-true}
     volumes:
       - biometric_uploads:/app/uploads
       # /tmp/.deepface — DeepFace weights cache. As of 2026-05-12 the four
