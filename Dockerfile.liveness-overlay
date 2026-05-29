@@ -1,0 +1,29 @@
+# Code-only overlay on the proven, running prod image.
+#
+# WHY THIS EXISTS (2026-05-29): a from-scratch rebuild of the canonical
+# `Dockerfile` currently SEGFAULTS at the UniFace MiniFASNet ONNX load under the
+# prod read_only+cap_drop runtime — caused by dependency/base-image drift (the
+# floating `python:3.12-slim` base moved Debian 13.4→13.5, and torch/nvidia/
+# onnxruntime-transitive natives drifted). numpy/uniface pinned to the exact
+# working versions still crashed, so it's deeper native drift. See task P0-2 /
+# the "Stabilize & Harden" roadmap.
+#
+# To ship the merged-but-undeployed liveness-on-enroll (#119) WITHOUT that risk,
+# this overlay starts FROM the known-good running image (same exact dependency
+# set → no segfault) and replaces ONLY the application source. The canonical
+# reproducible Dockerfile fix (pin base by digest + install from the full
+# requirements-known-good-2026-05-29.lock) remains a tracked follow-up.
+#
+# BUILD (on the prod host, where the base tag exists):
+#   docker tag <working-image-id> biometric-processor-biometric-api:working-75347c98
+#   docker build -f Dockerfile.liveness-overlay -t biometric-processor-biometric-api:latest .
+# Then: docker compose -f docker-compose.prod.yml --env-file .env.prod up -d biometric-api
+ARG BASE_IMAGE=biometric-processor-biometric-api:working-75347c98
+FROM ${BASE_IMAGE}
+
+# Overlay the current application source (incl. liveness-on-enroll). Deps,
+# baked models, WORKDIR (/app), ENV, USER (app) and CMD are all inherited
+# from the proven base — nothing in the dependency layer changes.
+USER root
+COPY --chown=app:app app/ /app/app/
+USER app
