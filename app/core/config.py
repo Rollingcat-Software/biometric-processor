@@ -745,6 +745,25 @@ class Settings(BaseSettings):
             "MediaPipe or the model is unavailable."
         ),
     )
+    # Liveness asymmetry fix (2026-05-29) — close the documented enroll/verify
+    # gap ("Faz 2'de düzeltilecek"). When True, the face /enroll path runs the
+    # SAME server-authoritative liveness + anti-spoof gate that /verify runs
+    # BEFORE persisting the embedding, so a photo/screen spoof cannot be
+    # enrolled. Default is ON for security: enrollment is at least as strict as
+    # verification. Set to False only for controlled migration/observation. The
+    # gate reuses the existing LIVENESS_MODE / LIVENESS_BACKEND /
+    # ANTI_SPOOFING_ENABLED / LIVENESS_VERDICT_POLICY and the ANTISPOOF_*
+    # pipeline flags rather than inventing parallel config.
+    ENROLL_LIVENESS_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "When True, face /enroll runs the same passive liveness + "
+            "anti-spoof veto as /verify before persisting the embedding. "
+            "Default ON (enrollment must be at least as strict as verify). "
+            "Reuses LIVENESS_MODE/LIVENESS_BACKEND/ANTI_SPOOFING_ENABLED and "
+            "the ANTISPOOF_* flags; no parallel config."
+        ),
+    )
     GESTURE_HAND_LANDMARKER_MODEL_PATH: str = Field(
         default=str(_REPO_ROOT / "models" / "hand_landmarker.task"),
         description=(

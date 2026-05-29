@@ -54,6 +54,16 @@ pytest tests/unit/ -v           # Unit tests only
 ### Fully implemented:
 - **Face**: enroll, verify, search, liveness, quality, demographics, landmarks, comparison
 - Routes: `enrollment.py`, `verification.py`, `search.py`, `liveness.py`, `quality.py`, etc.
+- **Enroll/verify liveness parity (2026-05-29)**: face `/enroll` now runs the SAME
+  server-authoritative passive liveness + spoof-detector anti-spoof / EAR veto
+  that `/verify` runs, BEFORE persisting the embedding — a photo/screen spoof
+  can no longer be enrolled. Gated by `ENROLL_LIVENESS_ENABLED` (default `True`).
+  Reuses `LIVENESS_MODE`/`LIVENESS_BACKEND`/`ANTI_SPOOFING_ENABLED`/
+  `LIVENESS_VERDICT_POLICY` (conservative) and the `ANTISPOOF_*` flags incl.
+  `ANTISPOOF_BLOCK_ENFORCE`; the anti-spoof helpers are imported from
+  `verification.py` so both paths share one implementation + one model singleton.
+  Single-image `/enroll` only (single still frame, like `/verify`);
+  `/enroll/multi` is unchanged.
 - **Voice**: enroll, verify, search, delete — Resemblyzer 256-dim speaker embeddings, centroid-based
 - Routes: `voice.py`, repo: `pgvector_voice_repository.py`, embedder: `speaker_embedder.py`
 - **Fingerprint**: removed (P1.4) — server-side fingerprint biometric processing was a SHA-256 hash placeholder, never a real biometric. Platform fingerprint authentication is delivered via WebAuthn (FIDO2) in identity-core-api, not through this service.
