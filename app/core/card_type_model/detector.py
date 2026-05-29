@@ -23,8 +23,9 @@ class CardDetectionResult:
 
 @lru_cache
 def get_yolo_model() -> YOLO:
-    # Load the YOLO model from the 'best.pt' file located in the same directory as this script
-    model_path = Path(__file__).with_name("best.pt")
+    # Load the YOLO model from the 'best.onnx' file located in the same directory as this script
+    # (best.onnx is the 12.3 MB true YOLOv8n, opset 12, from bio #116; best.pt was removed).
+    model_path = Path(__file__).with_name("best.onnx")
     return YOLO(model_path.as_posix())
 
 
