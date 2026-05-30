@@ -59,7 +59,7 @@ h5py==3.14.0
 httpcore==1.0.9
 httptools==0.7.1
 httpx==0.28.1
-idna==3.14
+idna==3.15  # P0-2b 2026-05-30: bumped 3.14->3.15 (pure-Python, no native ABI) to satisfy requirements.txt's idna>=3.15 security floor; the only lock<->requirements.txt conflict that blocked `pip install -c lock -r requirements.txt`.
 itsdangerous==2.2.0
 joblib==1.5.3
 keras==3.14.1
