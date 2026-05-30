@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### 2026-05-30 — Canonical reproducible build restored + honest-green CI (P0-2b, P2-2)
+
+- **P0-2b (PR #125, DEPLOYED)** — canonical from-scratch `Dockerfile` build RESTORED:
+  both `FROM` lines pinned by digest (`python:3.12-slim@sha256:090ba77e…`) and the
+  known-good lock applied as pip `-c` constraints, so the previously-segfaulting
+  UniFace MiniFASNet ONNX preload now boots CLEAN under the prod
+  `read_only`+`cap_drop:ALL` runtime (HTTP 200, 0 restarts). `Dockerfile.liveness-overlay`
+  is demoted to a fallback. See CLAUDE.md "Canonical reproducible build RESTORED".
+- **P2-2 (PR #124–#129)** — CI is honestly green (647 unit pass): removed all
+  `--ignore` / `continue-on-error` masking; lazy DeepFace import lets `app.main`
+  import without TensorFlow; the genuinely-stack-dependent integration files are
+  env-gated (`RUN_FULL_STACK_INTEGRATION` / `RUN_PROCTORING_INTEGRATION`) rather
+  than hidden. All five CI jobs green.
+
 ### Docs — 2026-05-28 (freshness audit)
 - Corrected stale config defaults (`VERIFICATION_THRESHOLD` 0.6 → 0.45, `LIVENESS_MODE` code default vs prod override documented)
 - Added missing env vars (`FIVUCSAS_EMBEDDING_KEY`, `ANTISPOOF_BLOCK_ENFORCE`) to README and DOCKER_SETUP
