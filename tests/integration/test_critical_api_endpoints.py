@@ -27,6 +27,18 @@ from app.infrastructure.persistence.repositories.pgvector_embedding_repository i
     PgVectorEmbeddingRepository,
 )
 
+# Module-level skip. These drive the real request surface through app.main and
+# need the Docker ML stack (DATABASE_URL for embedding-observation logging,
+# Redis for rate limiting, DeepFace for enroll/verify). The per-class
+# RUN_INTEGRATION_PG gates below remain for the persistence-only subset; this
+# outer gate keeps the whole file from failing on the lightweight CI runner
+# where neither DB nor authed-Redis is present. Previously silently --ignored.
+pytestmark = pytest.mark.skipif(
+    os.environ.get("RUN_FULL_STACK_INTEGRATION") != "true",
+    reason="Critical API integration tests require the Docker ML stack "
+    "(DATABASE_URL + Redis + DeepFace). Set RUN_FULL_STACK_INTEGRATION=true.",
+)
+
 
 # Test fixtures
 @pytest.fixture

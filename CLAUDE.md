@@ -76,6 +76,42 @@ pytest --cov=app tests/         # With coverage
 pytest tests/unit/ -v           # Unit tests only
 ```
 
+### Test/CI honesty (P2-2, 2026-05-30)
+
+The CI unit + integration jobs no longer carry any `--ignore` flags. Two
+mechanisms keep the suite honestly green without hiding broken files:
+
+1. **Lazy DeepFace import.** `deepface_detector.py`, `deepface_extractor.py`
+   and `deepface_demographics.py` now `import DeepFace` lazily (inside the
+   methods that call it) instead of at module top. DeepFace pulls in
+   TensorFlow, which is NOT in the lint/unit CI image, so this lets `app.main`
+   and `DeepFaceDetector` import without TF. `test_deepface_detector.py` runs
+   its pure post-filter geometry in CI; its single TF-dependent assertion is
+   `@pytest.mark.skipif(not _TF_AVAILABLE)` (runs only inside the Docker ML
+   stack).
+
+2. **Env-gated full-stack integration.** The five integration files that used
+   to be silently `--ignore`d now COLLECT cleanly (the module-scoped TestClient
+   pattern no longer breaks collection because `app.main` imports without TF).
+   The subset that genuinely needs the live ML + persistence stack is
+   module/class-gated:
+   - `RUN_FULL_STACK_INTEGRATION=true` → `test_api_routes.py`,
+     `test_critical_api_endpoints.py` (whole file), and the
+     `TestSessionFlow` class in `test_gesture_liveness_session.py` (needs
+     Redis). Requires DeepFace+TF weights, `DATABASE_URL`, Redis.
+   - `RUN_PROCTORING_INTEGRATION=true` → `test_proctoring_api.py` (pre-existing).
+   - `test_new_api_routes.py` and the feature-flag / shape-template tests run in
+     CI with no flag (infra-free).
+
+   On a bare host / lightweight CI runner these gated tests SKIP rather than
+   fail. Run the full set inside the Docker ML stack with the flags set.
+
+Bare-host baseline (no DB/Redis/TF): `tests/unit/` = 647 passed, 1 skipped,
+1 xfailed; the five formerly-ignored integration files = 7 passed, 77 skipped,
+0 errors. (`tests/integration/test_verify_challenge_endpoint.py` needs
+`DATABASE_URL`; CI provides Postgres so it is green there — it errors only on a
+bare host without a DB.)
+
 ## Key Directories
 
 - `app/api/routes/` - API route handlers (27 files including `__init__.py`; 26 route modules)

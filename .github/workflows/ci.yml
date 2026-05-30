@@ -79,11 +79,14 @@ jobs:
 
       - name: Run tests with coverage
         run: |
+          # No --ignore flags: test_deepface_detector.py now imports without
+          # TensorFlow (DeepFace is imported lazily in the production detector/
+          # extractor/demographics modules), so its pure post-filter geometry
+          # runs in CI; the single TF-dependent assertion is @skipif-gated.
           pytest tests/unit/ \
             --cov=app \
             --cov-report=xml \
             --cov-report=term-missing \
-            --ignore=tests/unit/infrastructure/test_deepface_detector.py \
             -v
 
       - name: Upload coverage to Codecov
@@ -224,17 +227,16 @@ jobs:
           API_KEY_REQUIRE_AUTH: "false"
           TF_USE_LEGACY_KERAS: "1"
         run: |
-          # Ignore legacy integration test files that have drifted from the
-          # current API surface (route field renames, entity moves, repository
-          # method drift, deprecated TestClient cascades). These are tracked
-          # for separate cleanup; the suites still in scope cover the same
-          # endpoints via the modern fixtures.
-          pytest tests/integration/ -v \
-            --ignore=tests/integration/test_api_routes.py \
-            --ignore=tests/integration/test_critical_api_endpoints.py \
-            --ignore=tests/integration/test_gesture_liveness_session.py \
-            --ignore=tests/integration/test_proctoring_api.py \
-            --ignore=tests/integration/test_new_api_routes.py
+          # The previously-ignored integration files now COLLECT cleanly
+          # (app.main imports without TensorFlow) and no longer break collection
+          # via the module-scoped TestClient pattern. The subset that genuinely
+          # needs the full ML stack (DeepFace weights + TF, which this job does
+          # NOT install — deepface is --no-deps) is module/class-gated behind
+          # RUN_FULL_STACK_INTEGRATION (and RUN_PROCTORING_INTEGRATION); left
+          # unset here, those tests SKIP rather than fail. The infra-free subset
+          # (feature-flag, shape-template, new_api_routes) runs in CI. No more
+          # silently-ignored files masquerading as passing.
+          pytest tests/integration/ -v
 
   # Build frontend
   frontend-build:
