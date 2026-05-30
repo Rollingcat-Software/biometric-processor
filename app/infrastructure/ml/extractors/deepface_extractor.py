@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from deepface import DeepFace
 
 from app.domain.exceptions.face_errors import EmbeddingExtractionError
 
@@ -182,6 +181,10 @@ class DeepFaceExtractor:
         self._detector_backend = detector_backend
         self._enforce_detection = enforce_detection
 
+        # DeepFace is imported lazily (pulls in TensorFlow, absent from the
+        # lint/unit CI image) so this module imports without the ML stack.
+        from deepface import DeepFace
+
         # Warm up the model by building it
         try:
             logger.info(f"Loading {model_name} model...")
@@ -218,6 +221,8 @@ class DeepFaceExtractor:
         Raises:
             EmbeddingExtractionError: When extraction fails
         """
+        from deepface import DeepFace
+
         try:
             logger.debug(f"Extracting embedding using {self._model_name}")
 

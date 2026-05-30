@@ -12,6 +12,7 @@ overrides so no Redis is required.
 from __future__ import annotations
 
 import math
+import os
 import sys
 from typing import List
 from unittest.mock import Mock
@@ -174,6 +175,16 @@ class TestShapeTemplatesEndpoint:
         assert r2.status_code == 304
 
 
+# The session-flow tests persist active-liveness sessions to Redis (the
+# RedisActiveLivenessSessionRepository), so they require a reachable, unauthed
+# Redis. The feature-flag + shape-template tests above need no infra and run in
+# CI. Gate only this class behind the full-stack flag so it skips — rather than
+# fails on Redis AuthenticationError — on the lightweight runner.
+@pytest.mark.skipif(
+    os.environ.get("RUN_FULL_STACK_INTEGRATION") != "true",
+    reason="Active-liveness session flow requires Redis. "
+    "Set RUN_FULL_STACK_INTEGRATION=true (Docker ML stack).",
+)
 class TestSessionFlow:
     def test_start_returns_session_id_and_challenges(self, client, enabled_gesture_backend):
         r = client.post(
