@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### 2026-05-30 — Multi-image enroll liveness + eMRTD NFC passive authentication
+
+- **P0: liveness on `/enroll/multi` (fail-closed).** `/enroll/multi` previously ran
+  NO liveness while single `/enroll` did — a photo/screen replay could be enrolled
+  via the multi-image path. The multi-image use case (`enroll_multi_image.py`) now
+  runs the SAME `CheckLivenessUseCase` (UniFace MiniFASNet passive + DeepFace
+  anti-spoof veto) on EVERY frame BEFORE extracting/fusing its embedding; one
+  non-live frame rejects the whole enrollment (`LivenessCheckFailedError` → 400).
+  Gated by the existing `ENROLL_LIVENESS_ENABLED` (default ON); injected via
+  `get_enroll_multi_image_use_case()`. CPU-only. New unit tests prove spoof-reject,
+  live-accept, first-frame short-circuit, and the disabled-flag escape hatch.
+- **P0: eMRTD NFC passive authentication (`POST /nfc/verify-authenticity`).** New
+  CPU-only endpoint implementing ICAO 9303 Part 11 passive auth: verifies DG hashes
+  against the SOD's LDS Security Object, the SOD CMS signature against the embedded
+  Document Signer cert, and the DS→CSCA chain. Fail-closed authoritative verdict
+  (`is_authentic`, `reason_code`, `ds_subject`, `csca_matched`, `dg_hash_results`,
+  …). Pure Python crypto (`asn1crypto` + `cryptography`) — no GPU, no ML. Domain
+  logic in `app/domain/services/emrtd_passive_auth.py`. Operator-provisioned CSCA
+  trust store at `NFC_CSCA_TRUST_DIR` (default `app/core/csca_trust_store/`); empty
+  store ⇒ `NO_TRUST_STORE`/`is_authentic=false`. Consumed by identity-core-api
+  `NfcDocumentAuthHandler`. New unit tests (service + route) build a self-signed
+  CSCA/DS/SOD fixture and cover happy-path, DG-mismatch, bad-signature, untrusted-DS,
+  empty-store, and ECDSA-DS. Adds `asn1crypto==1.5.1` to the lock (pure-Python,
+  digest-pinned build otherwise unchanged).
+
 ### 2026-05-30 — Canonical reproducible build restored + honest-green CI (P0-2b, P2-2)
 
 - **P0-2b (PR #125, DEPLOYED)** — canonical from-scratch `Dockerfile` build RESTORED:

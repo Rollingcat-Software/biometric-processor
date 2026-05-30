@@ -4,8 +4,10 @@ import pytest
 import numpy as np
 from unittest.mock import Mock, AsyncMock, patch
 
+from app.application.use_cases.check_liveness import CheckLivenessUseCase
 from app.application.use_cases.enroll_multi_image import EnrollMultiImageUseCase
 from app.domain.entities.face_detection import FaceDetectionResult
+from app.domain.entities.liveness_result import LivenessResult
 from app.domain.entities.quality_assessment import QualityAssessment
 from app.domain.services.embedding_fusion_service import EmbeddingFusionService
 from app.domain.exceptions.enrollment_errors import (
@@ -16,6 +18,7 @@ from app.domain.exceptions.face_errors import (
     FaceNotDetectedError,
     PoorImageQualityError,
 )
+from app.domain.exceptions.liveness_errors import LivenessCheckFailedError
 
 
 @pytest.fixture
@@ -513,3 +516,200 @@ class TestEnrollMultiImageUseCase:
         assert call_args.kwargs["tenant_id"] == "test_tenant"
         assert isinstance(call_args.kwargs["embedding"], np.ndarray)
         assert call_args.kwargs["quality_score"] > 0
+
+
+def _live_result(score: float, is_live: bool) -> LivenessResult:
+    """Build a passive-liveness LivenessResult fixture for the gate tests."""
+    return LivenessResult(
+        is_live=is_live,
+        score=score,
+        challenge="passive",
+        challenge_completed=True,
+    )
+
+
+class TestEnrollMultiImageLivenessGate:
+    """The /enroll/multi path must run the SAME server-authoritative passive
+    liveness check that single-image /enroll runs (fail-closed), so a photo or
+    screen replay can no longer be enrolled via the multi-image path.
+
+    The liveness backend verdict is mocked at the CheckLivenessUseCase boundary
+    (the exact use case single-/enroll calls), so these tests assert the WIRING
+    + fail-closed policy without booting UniFace MiniFASNet / ONNX.
+    """
+
+    @pytest.mark.asyncio
+    async def test_rejects_spoof_frame_fail_closed(
+        self,
+        mock_face_detector,
+        mock_embedding_extractor,
+        mock_quality_assessor,
+        mock_embedding_repository,
+        mock_fusion_service,
+        temp_image_files,
+    ):
+        """A single non-live (spoof) frame rejects the WHOLE enrollment and
+        nothing is persisted (fail-closed). The spoof frame is the second of
+        three, proving every frame is gated, not just the first."""
+        call_count = [0]
+
+        async def liveness_side_effect(image_path):
+            call_count[0] += 1
+            # Second frame is a photo/screen replay → not live.
+            return _live_result(score=18.0, is_live=call_count[0] != 2)
+
+        liveness_use_case = Mock(spec=CheckLivenessUseCase)
+        liveness_use_case.execute = AsyncMock(side_effect=liveness_side_effect)
+
+        use_case = EnrollMultiImageUseCase(
+            detector=mock_face_detector,
+            extractor=mock_embedding_extractor,
+            quality_assessor=mock_quality_assessor,
+            repository=mock_embedding_repository,
+            fusion_service=mock_fusion_service,
+            liveness_use_case=liveness_use_case,
+        )
+
+        with patch("cv2.imread") as mock_imread:
+            mock_imread.return_value = np.random.randint(
+                0, 255, (200, 200, 3), dtype=np.uint8
+            )
+
+            with pytest.raises(LivenessCheckFailedError):
+                await use_case.execute(
+                    user_id="spoofer",
+                    image_paths=temp_image_files,
+                )
+
+        # Gate ran on frame 1 (live) then frame 2 (spoof) → stopped there.
+        assert liveness_use_case.execute.await_count == 2
+        # Fail-closed: no embedding persisted on a spoof frame.
+        mock_embedding_repository.save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_first_frame_spoof_rejects_immediately(
+        self,
+        mock_face_detector,
+        mock_embedding_extractor,
+        mock_quality_assessor,
+        mock_embedding_repository,
+        mock_fusion_service,
+        temp_image_files,
+    ):
+        """A spoof on the very first frame short-circuits before any embedding
+        work happens."""
+        liveness_use_case = Mock(spec=CheckLivenessUseCase)
+        liveness_use_case.execute = AsyncMock(
+            return_value=_live_result(score=5.0, is_live=False)
+        )
+
+        use_case = EnrollMultiImageUseCase(
+            detector=mock_face_detector,
+            extractor=mock_embedding_extractor,
+            quality_assessor=mock_quality_assessor,
+            repository=mock_embedding_repository,
+            fusion_service=mock_fusion_service,
+            liveness_use_case=liveness_use_case,
+        )
+
+        with patch("cv2.imread") as mock_imread:
+            mock_imread.return_value = np.random.randint(
+                0, 255, (200, 200, 3), dtype=np.uint8
+            )
+
+            with pytest.raises(LivenessCheckFailedError):
+                await use_case.execute(
+                    user_id="spoofer",
+                    image_paths=temp_image_files,
+                )
+
+        assert liveness_use_case.execute.await_count == 1
+        # Liveness gate sits BEFORE detection/quality/extraction.
+        mock_face_detector.detect.assert_not_called()
+        mock_embedding_extractor.extract.assert_not_called()
+        mock_embedding_repository.save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_accepts_all_live_frames(
+        self,
+        mock_face_detector,
+        mock_embedding_extractor,
+        mock_quality_assessor,
+        mock_embedding_repository,
+        mock_fusion_service,
+        temp_image_files,
+    ):
+        """When every frame is live, enrollment proceeds normally and the gate
+        was exercised once per frame."""
+        liveness_use_case = Mock(spec=CheckLivenessUseCase)
+        liveness_use_case.execute = AsyncMock(
+            return_value=_live_result(score=92.0, is_live=True)
+        )
+
+        use_case = EnrollMultiImageUseCase(
+            detector=mock_face_detector,
+            extractor=mock_embedding_extractor,
+            quality_assessor=mock_quality_assessor,
+            repository=mock_embedding_repository,
+            fusion_service=mock_fusion_service,
+            liveness_use_case=liveness_use_case,
+        )
+
+        with patch("cv2.imread") as mock_imread:
+            mock_imread.return_value = np.random.randint(
+                0, 255, (200, 200, 3), dtype=np.uint8
+            )
+
+            result = await use_case.execute(
+                user_id="real_user",
+                image_paths=temp_image_files,
+            )
+
+        assert result.user_id == "real_user"
+        assert liveness_use_case.execute.await_count == len(temp_image_files)
+        mock_embedding_repository.save.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_gate_skipped_when_disabled(
+        self,
+        mock_face_detector,
+        mock_embedding_extractor,
+        mock_quality_assessor,
+        mock_embedding_repository,
+        mock_fusion_service,
+        temp_image_files,
+    ):
+        """ENROLL_LIVENESS_ENABLED=False is an explicit operator escape hatch:
+        the liveness backend is never called and a spoof frame would pass. This
+        mirrors the single-/enroll gate's config flag."""
+        liveness_use_case = Mock(spec=CheckLivenessUseCase)
+        liveness_use_case.execute = AsyncMock(
+            return_value=_live_result(score=1.0, is_live=False)
+        )
+
+        use_case = EnrollMultiImageUseCase(
+            detector=mock_face_detector,
+            extractor=mock_embedding_extractor,
+            quality_assessor=mock_quality_assessor,
+            repository=mock_embedding_repository,
+            fusion_service=mock_fusion_service,
+            liveness_use_case=liveness_use_case,
+        )
+
+        with patch(
+            "app.application.use_cases.enroll_multi_image.settings.ENROLL_LIVENESS_ENABLED",
+            False,
+        ):
+            with patch("cv2.imread") as mock_imread:
+                mock_imread.return_value = np.random.randint(
+                    0, 255, (200, 200, 3), dtype=np.uint8
+                )
+
+                result = await use_case.execute(
+                    user_id="bypass_user",
+                    image_paths=temp_image_files,
+                )
+
+        assert result.user_id == "bypass_user"
+        liveness_use_case.execute.assert_not_called()
+        mock_embedding_repository.save.assert_called_once()

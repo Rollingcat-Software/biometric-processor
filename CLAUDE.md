@@ -184,8 +184,16 @@ the gated files run.
   `LIVENESS_VERDICT_POLICY` (conservative) and the `ANTISPOOF_*` flags incl.
   `ANTISPOOF_BLOCK_ENFORCE`; the anti-spoof helpers are imported from
   `verification.py` so both paths share one implementation + one model singleton.
-  Single-image `/enroll` only (single still frame, like `/verify`);
-  `/enroll/multi` is unchanged.
+- **Multi-image enroll liveness (2026-05-30)**: `/enroll/multi` now also runs the
+  SAME passive-liveness `CheckLivenessUseCase` that single-`/enroll` calls — on
+  EVERY submitted frame, BEFORE its embedding is extracted/fused, **fail-CLOSED**
+  (one non-live frame rejects the whole enrollment with `LivenessCheckFailedError`
+  → HTTP 400). Closes the documented gap where a photo could be enrolled via the
+  multi-image path. Wired in `enroll_multi_image.py` (the use case takes an
+  optional `liveness_use_case`; `get_enroll_multi_image_use_case()` injects it).
+  Same `ENROLL_LIVENESS_ENABLED` flag (default `True`); when the use case is
+  built without a checker (legacy/unit-test callers) the gate is skipped.
+  CPU-only.
 - **Voice**: enroll, verify, search, delete — Resemblyzer 256-dim speaker embeddings, centroid-based
 - Routes: `voice.py`, repo: `pgvector_voice_repository.py`, embedder: `speaker_embedder.py`
 - **Fingerprint**: removed (P1.4) — server-side fingerprint biometric processing was a SHA-256 hash placeholder, never a real biometric. Platform fingerprint authentication is delivered via WebAuthn (FIDO2) in identity-core-api, not through this service.
@@ -198,6 +206,23 @@ the gated files run.
 - **Liveness pipeline** — server-authoritative liveness verdict with configurable thresholds
 - **Video interview upload** — endpoint for verification pipeline video step
 - Routes: `verification_pipeline.py` (sub-paths: /document-scan, /data-extract, /face-match, /liveness-check, /pipeline/test, /video-interview)
+
+### NFC document (`nfc.py`):
+- **`POST /nfc/mrz`** — pure MRZ string parsing (TD1/TD3, DG1 envelope or raw text).
+- **`POST /nfc/verify-authenticity` (2026-05-30)** — ICAO 9303 Part 11 **passive
+  authentication** (eMRTD chip trust). Accepts `{sod_b64, data_groups:{"<dg#>":b64}}`
+  and verifies, fail-CLOSED: (a) each provided DG hash matches the signed value
+  in EF.SOD's `LDSSecurityObject`, (b) the SOD's CMS signature verifies under the
+  embedded Document Signer cert, (c) DS chains to a trusted CSCA root. Returns
+  `{is_authentic, reason, reason_code, ds_subject, ds_serial, csca_matched,
+  dg_hash_results, sod_hash_algorithm}`. Pure Python crypto (`asn1crypto` +
+  `cryptography`) — **no GPU, no ML**. Logic lives in the framework-free domain
+  service `app/domain/services/emrtd_passive_auth.py`. Consumed by
+  identity-core-api `NfcDocumentAuthHandler` via `BiometricServicePort`.
+  - **CSCA trust store** is an OPERATOR deliverable: drop CSCA root certs
+    (PEM/DER) into `NFC_CSCA_TRUST_DIR` (default `app/core/csca_trust_store/`, see
+    its README). Empty store ⇒ `is_authentic=false` / `reason_code=NO_TRUST_STORE`.
+    Loaded at request time (mtime-keyed cache), so adding a cert needs no rebuild.
 
 ### Not implemented:
 - **Iris**: No endpoints at all

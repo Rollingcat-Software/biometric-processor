@@ -1,18 +1,15 @@
-"""NFC document MRZ parsing route.
+"""NFC document routes — MRZ parsing + eMRTD passive authentication.
 
-Exposes the existing ``mrz_parser`` machinery as a first-class endpoint so the
-identity-core-api ``NfcController`` can verify Machine-Readable Zones from
-chip-read passports / ID cards (DG1) and surface structured fields back to
-clients without falling back to the verification-pipeline data-extract route
-(which is geared towards manual-KYC document scans).
+Two first-class endpoints back the identity-core-api ``NfcController`` /
+``NfcDocumentAuthHandler`` so chip-read passports / ID cards can be both parsed
+and cryptographically trust-verified without the manual-KYC data-extract route:
 
-This route is intentionally narrow:
-- Pure string parsing — no OCR, no ML, no DB writes
-- Input contract matches the task spec (T2-A, INVESTIGATION 2026-05-07 P1):
-  ``{"mrz_text": "...", "dg1_bytes_b64": null}`` (exactly one required)
-- Output contract matches the task spec — flat structured fields plus
-  ``checksum_valid`` boolean and a ``checksum_failures`` list of field names
-  that failed their ICAO 9303 check-digit verification
+- ``POST /nfc/mrz`` — pure MRZ string parsing (DG1 / raw MRZ). No OCR, no DB.
+- ``POST /nfc/verify-authenticity`` — ICAO 9303 Part 11 **passive
+  authentication**: confirm the chip's Data Groups match the signed hashes in
+  EF.SOD, the SOD's CMS signature verifies under the Document Signer cert, and
+  that DS chains to a trusted CSCA root. Pure Python crypto
+  (``asn1crypto`` + ``cryptography``); CPU-only, no GPU, no ML.
 
 The legacy ``/verification/data-extract`` endpoint is left untouched.
 """
@@ -23,11 +20,15 @@ import base64
 import binascii
 import logging
 import re
-from typing import Optional
+from functools import lru_cache
+from pathlib import Path
+from typing import Dict, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app.core.config import settings
+from app.domain.services.emrtd_passive_auth import EmrtdPassiveAuthService
 from app.domain.services.mrz_parser import (
     MRZData,
     detect_and_parse_mrz,
@@ -250,3 +251,181 @@ async def parse_mrz(payload: MrzParseRequest) -> MrzParseResponse:
         response.checksum_failures,
     )
     return response
+
+
+# ============================================================================
+# Passive authentication — POST /nfc/verify-authenticity
+# ============================================================================
+
+
+class VerifyAuthenticityRequest(BaseModel):
+    """Input for ``POST /nfc/verify-authenticity``.
+
+    Field names are frozen against the agent-api JSON contract so the Java
+    ``NfcDocumentAuthHandler`` (via ``BiometricProcessorClient.postJson``) maps
+    without a translation layer.
+    """
+
+    sod_b64: str = Field(
+        ...,
+        description="Base64 (standard) of EF.SOD DER — the CMS SignedData / "
+        "Document Security Object read from the chip.",
+    )
+    data_groups: Dict[str, str] = Field(
+        ...,
+        description="Map of DG number (as a string, '1'..'16') -> base64 of the "
+        "raw DG bytes (full ICAO TLV) the client read from the chip. At least "
+        "one entry required.",
+    )
+
+
+class VerifyAuthenticityResponse(BaseModel):
+    """Authoritative passive-authentication verdict."""
+
+    is_authentic: bool = False
+    reason: str = ""
+    reason_code: str = "SOD_PARSE_ERROR"
+    ds_subject: Optional[str] = None
+    ds_serial: Optional[str] = None
+    csca_matched: bool = False
+    dg_hash_results: Dict[str, bool] = Field(default_factory=dict)
+    sod_hash_algorithm: Optional[str] = None
+
+
+def _load_csca_trust_store(trust_dir: str) -> list:
+    """Load CSCA root certificates from the operator trust-store directory.
+
+    Accepts PEM and DER encodings (``.pem``/``.crt``/``.cer``/``.der``). Files
+    that fail to parse are skipped with a warning rather than aborting the
+    whole load — a single bad file must not knock out an otherwise-valid store.
+    Returns a list of ``cryptography`` Certificate objects (possibly empty).
+    """
+    from cryptography.x509 import load_der_x509_certificate, load_pem_x509_certificate
+
+    certs: list = []
+    base = Path(trust_dir)
+    if not base.is_dir():
+        logger.warning("CSCA trust dir does not exist: %s", trust_dir)
+        return certs
+
+    for path in sorted(base.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in {
+            ".pem",
+            ".crt",
+            ".cer",
+            ".der",
+        }:
+            continue
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:  # pragma: no cover — fs error
+            logger.warning("Could not read CSCA cert %s: %s", path.name, exc)
+            continue
+        loaded = False
+        # Try PEM first (may contain multiple concatenated certs), then DER.
+        try:
+            text = raw
+            marker = b"-----BEGIN CERTIFICATE-----"
+            if marker in text:
+                for block in text.split(marker)[1:]:
+                    pem = marker + block.split(b"-----END CERTIFICATE-----")[0] + (
+                        b"-----END CERTIFICATE-----\n"
+                    )
+                    certs.append(load_pem_x509_certificate(pem))
+                    loaded = True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed PEM parse of %s: %s", path.name, exc)
+        if not loaded:
+            try:
+                certs.append(load_der_x509_certificate(raw))
+                loaded = True
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed DER parse of %s: %s", path.name, exc)
+        if not loaded:
+            logger.warning("Skipped unparseable CSCA cert: %s", path.name)
+
+    logger.info("Loaded %d CSCA trust anchor(s) from %s", len(certs), trust_dir)
+    return certs
+
+
+@lru_cache(maxsize=4)
+def _csca_certs_cached(trust_dir: str, mtime_ns: int) -> tuple:
+    """Cache trust-store loads keyed by (dir, mtime) so a re-provisioned store
+    is picked up automatically (mtime changes) without a process restart."""
+    return tuple(_load_csca_trust_store(trust_dir))
+
+
+def _get_passive_auth_service() -> EmrtdPassiveAuthService:
+    """Build the passive-auth service with the current CSCA trust anchors."""
+    trust_dir = settings.NFC_CSCA_TRUST_DIR
+    try:
+        mtime_ns = Path(trust_dir).stat().st_mtime_ns
+    except OSError:
+        mtime_ns = 0
+    certs = list(_csca_certs_cached(trust_dir, mtime_ns))
+    return EmrtdPassiveAuthService(csca_certificates=certs)
+
+
+def _decode_b64(value: str, field_name: str) -> bytes:
+    try:
+        return base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_name} is not valid base64: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/verify-authenticity",
+    response_model=VerifyAuthenticityResponse,
+    summary="Verify eMRTD chip authenticity (passive authentication)",
+    description=(
+        "ICAO 9303 Part 11 passive authentication. Accepts the chip's EF.SOD "
+        "(Document Security Object) and the Data Groups the client read, then "
+        "verifies (a) each DG hash matches the signed value in the SOD's LDS "
+        "Security Object, (b) the SOD's CMS signature verifies against the "
+        "embedded Document Signer certificate, and (c) that DS certificate "
+        "chains to a trusted CSCA root from the operator trust store. "
+        "Fail-closed: is_authentic is true only when all three checks pass. "
+        "Pure Python crypto — no GPU, no ML."
+    ),
+)
+async def verify_authenticity(
+    payload: VerifyAuthenticityRequest,
+) -> VerifyAuthenticityResponse:
+    """Run passive authentication over a chip-read EF.SOD + Data Groups."""
+
+    if not payload.data_groups:
+        raise HTTPException(
+            status_code=400,
+            detail="data_groups must contain at least one Data Group.",
+        )
+
+    sod_der = _decode_b64(payload.sod_b64, "sod_b64")
+
+    decoded_dgs: Dict[int, bytes] = {}
+    for key, value in payload.data_groups.items():
+        try:
+            dg_number = int(key)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"data_groups key '{key}' is not a valid DG number.",
+            ) from exc
+        decoded_dgs[dg_number] = _decode_b64(value, f"data_groups['{key}']")
+
+    service = _get_passive_auth_service()
+    result = service.verify(sod_der=sod_der, data_groups=decoded_dgs)
+
+    logger.info(
+        "NFC /verify-authenticity: is_authentic=%s reason_code=%s csca_matched=%s "
+        "ds_subject=%s dgs=%s",
+        result.is_authentic,
+        result.reason_code.value,
+        result.csca_matched,
+        result.ds_subject,
+        sorted(decoded_dgs.keys()),
+    )
+
+    return VerifyAuthenticityResponse(**result.to_dict())
