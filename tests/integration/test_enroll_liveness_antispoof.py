@@ -15,6 +15,7 @@ helpers on `verify_route` exactly as the verify tests do.
 from __future__ import annotations
 
 import io
+import os
 import sys
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -41,6 +42,18 @@ from app.core.container import (
 from app.domain.entities.face_embedding import FaceEmbedding
 from app.domain.entities.liveness_result import LivenessResult
 from app.main import app
+
+# Module-level skip. `with TestClient(app)` runs the app startup lifespan, which
+# pre-loads the full native ML stack (torch + uniface MiniFASNet ONNX). On the
+# lightweight CI runner the drifted `>=` deps segfault during that load (the
+# same native-drift crash tracked as P0-2b), taking down the whole
+# `pytest tests/integration/` process (exit 139). Gate behind the full-stack
+# flag so this skips on CI and runs inside the Docker ML stack (pinned deps).
+pytestmark = pytest.mark.skipif(
+    os.environ.get("RUN_FULL_STACK_INTEGRATION") != "true",
+    reason="Loads the full ML stack via app lifespan (TestClient(app)); "
+    "set RUN_FULL_STACK_INTEGRATION=true inside the Docker ML stack.",
+)
 
 
 @pytest.fixture(scope="module")

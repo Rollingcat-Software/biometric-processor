@@ -16,6 +16,7 @@ Each test pins one behavior:
 
 from __future__ import annotations
 
+import os
 import sys
 from unittest.mock import Mock
 
@@ -31,6 +32,17 @@ sys.modules.setdefault("resemblyzer", Mock(VoiceEncoder=Mock()))
 from fastapi.testclient import TestClient
 
 from app.main import app
+
+# Module-level skip. `with TestClient(app)` runs the app startup lifespan, which
+# pre-loads the full native ML stack (torch + uniface MiniFASNet ONNX). On the
+# lightweight CI runner the drifted `>=` deps segfault during that load (the
+# same native-drift crash tracked as P0-2b). Gate behind the full-stack flag so
+# this skips on CI and runs inside the Docker ML stack (pinned deps).
+pytestmark = pytest.mark.skipif(
+    os.environ.get("RUN_FULL_STACK_INTEGRATION") != "true",
+    reason="Loads the full ML stack via app lifespan (TestClient(app)); "
+    "set RUN_FULL_STACK_INTEGRATION=true inside the Docker ML stack.",
+)
 
 
 @pytest.fixture(scope="module")
