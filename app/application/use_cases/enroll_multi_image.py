@@ -8,6 +8,7 @@ from typing import List, Optional
 import cv2
 import numpy as np
 
+from app.application.use_cases.check_liveness import CheckLivenessUseCase
 from app.core.config import settings
 from app.domain.entities.enrollment_session import EnrollmentSession
 from app.domain.entities.face_embedding import FaceEmbedding
@@ -19,6 +20,7 @@ from app.domain.exceptions.enrollment_errors import (
     MLModelTimeoutError,
 )
 from app.domain.exceptions.face_errors import FaceNotDetectedError, PoorImageQualityError
+from app.domain.exceptions.liveness_errors import LivenessCheckFailedError
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
 from app.domain.interfaces.face_detector import IFaceDetector
@@ -52,6 +54,7 @@ class EnrollMultiImageUseCase:
         quality_assessor: IQualityAssessor,
         repository: IEmbeddingRepository,
         fusion_service: Optional[EmbeddingFusionService] = None,
+        liveness_use_case: Optional[CheckLivenessUseCase] = None,
     ) -> None:
         """Initialize multi-image enrollment use case.
 
@@ -61,6 +64,17 @@ class EnrollMultiImageUseCase:
             quality_assessor: Quality assessor implementation
             repository: Embedding repository implementation
             fusion_service: Optional fusion service (creates default if None)
+            liveness_use_case: Optional server-authoritative passive liveness
+                check. When provided AND ``settings.ENROLL_LIVENESS_ENABLED`` is
+                True, EVERY submitted frame must pass liveness BEFORE its
+                embedding is fused — closing the documented gap where
+                ``/enroll/multi`` accepted photos/screen replays that
+                ``/enroll`` already rejects. Fail-closed: a single non-live
+                frame rejects the whole enrollment. Reuses the EXACT
+                ``CheckLivenessUseCase`` (UniFace MiniFASNet passive backend +
+                DeepFace anti-spoof veto per ``LIVENESS_VERDICT_POLICY``) that
+                single-image ``/enroll`` calls — one implementation, one model
+                singleton. CPU-only (no GPU).
         """
         self._detector = detector
         self._extractor = extractor
@@ -69,6 +83,7 @@ class EnrollMultiImageUseCase:
         self._fusion_service = fusion_service or EmbeddingFusionService(
             normalization_strategy=settings.MULTI_IMAGE_NORMALIZATION
         )
+        self._liveness_use_case = liveness_use_case
 
         logger.info("EnrollMultiImageUseCase initialized")
 
@@ -135,6 +150,42 @@ class EnrollMultiImageUseCase:
                 image = await asyncio.to_thread(cv2.imread, image_path)
                 if image is None:
                     raise ValueError(f"Failed to load image: {image_path}")
+
+                # ----------------------------------------------------------
+                # Liveness gate (fail-CLOSED) — close the documented
+                # enroll/verify asymmetry. Single-image /enroll already runs a
+                # server-authoritative passive liveness check before persisting
+                # an embedding; /enroll/multi historically ran NONE, so a photo
+                # or screen replay could be enrolled. We now run the SAME
+                # CheckLivenessUseCase (UniFace MiniFASNet passive + DeepFace
+                # anti-spoof veto) on EVERY frame BEFORE extracting/fusing its
+                # embedding. One non-live frame rejects the whole enrollment.
+                # Gated by ENROLL_LIVENESS_ENABLED (default ON); skipped only
+                # when the use case was constructed without a liveness checker
+                # (e.g. legacy callers / unit tests that don't exercise it).
+                # CPU-only — no GPU, ALLOW_HEAVY_ML stays false.
+                # ----------------------------------------------------------
+                if self._liveness_use_case is not None and settings.ENROLL_LIVENESS_ENABLED:
+                    logger.debug("  Step 0/3: Liveness check...")
+                    liveness_result = await self._liveness_use_case.execute(
+                        image_path=image_path
+                    )
+                    if not liveness_result.is_live:
+                        logger.warning(
+                            "  Image %d rejected — liveness check failed: "
+                            "score=%.2f (multi-image enrollment fail-closed)",
+                            i,
+                            liveness_result.score,
+                        )
+                        raise LivenessCheckFailedError(
+                            liveness_score=liveness_result.score,
+                            challenge=liveness_result.challenge,
+                        )
+                    logger.info(
+                        "  Image %d liveness check passed: score=%.2f",
+                        i,
+                        liveness_result.score,
+                    )
 
                 # Detect face with timeout
                 # For multi-enroll, side-angle faces (30°+) may fail OpenCV detection.

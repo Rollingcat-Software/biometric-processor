@@ -543,6 +543,11 @@ def get_enroll_multi_image_use_case() -> EnrollMultiImageUseCase:
         extractor=get_embedding_extractor(),
         quality_assessor=get_quality_assessor(),
         repository=get_embedding_repository(),
+        # Server-authoritative passive liveness on EVERY frame (fail-closed),
+        # reusing the SAME use case single-image /enroll calls so a photo/screen
+        # replay cannot be enrolled via the multi-image path. Gated at runtime by
+        # settings.ENROLL_LIVENESS_ENABLED inside the use case.
+        liveness_use_case=get_check_liveness_use_case(),
     )
 
 

@@ -764,6 +764,25 @@ class Settings(BaseSettings):
             "the ANTISPOOF_* flags; no parallel config."
         ),
     )
+    # ------------------------------------------------------------------
+    # eMRTD NFC passive authentication (ICAO 9303 Part 11) — CPU-only.
+    # The CSCA trust store holds the Country Signing CA root certificates that
+    # Document Signer certs must chain to. The certificates themselves are an
+    # OPERATOR deliverable (per-country CSCA roots from the ICAO PKD or the
+    # issuing authority); drop PEM/DER/.cer files into this directory and they
+    # are loaded at request time. Empty dir → /nfc/verify-authenticity returns
+    # is_authentic=false with reason_code=NO_TRUST_STORE (fail-closed). The code
+    # works the moment certs are dropped in — no rebuild needed.
+    # ------------------------------------------------------------------
+    NFC_CSCA_TRUST_DIR: str = Field(
+        default=str(_REPO_ROOT / "app" / "core" / "csca_trust_store"),
+        description=(
+            "Directory of trusted CSCA root certificates (PEM/DER/.cer/.crt) "
+            "for eMRTD passive authentication. Operator-provisioned; empty "
+            "store makes /nfc/verify-authenticity fail closed "
+            "(reason_code=NO_TRUST_STORE)."
+        ),
+    )
     GESTURE_HAND_LANDMARKER_MODEL_PATH: str = Field(
         default=str(_REPO_ROOT / "models" / "hand_landmarker.task"),
         description=(
