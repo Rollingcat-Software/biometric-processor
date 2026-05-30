@@ -99,6 +99,15 @@ mechanisms keep the suite honestly green without hiding broken files:
      `test_critical_api_endpoints.py` (whole file), and the
      `TestSessionFlow` class in `test_gesture_liveness_session.py` (needs
      Redis). Requires DeepFace+TF weights, `DATABASE_URL`, Redis.
+   - `RUN_FULL_STACK_INTEGRATION=true` → the four `with TestClient(app)`
+     **ML-lifespan** files (`test_enroll_liveness_antispoof.py`,
+     `test_verify_challenge_endpoint.py`, `test_verify_antispoof_wiring.py`,
+     `test_verify_antispoof_block_enforce.py`). The app startup lifespan
+     pre-loads torch + the uniface MiniFASNet ONNX; on the lightweight CI
+     runner the drifted `>=` deps **segfault** during that load (the same
+     native-drift crash as P0-2b) and take down the whole
+     `pytest tests/integration/` process (exit 139). Gated so they skip on CI
+     and run inside the Docker ML stack (pinned deps).
    - `RUN_PROCTORING_INTEGRATION=true` → `test_proctoring_api.py` (pre-existing).
    - `test_new_api_routes.py` and the feature-flag / shape-template tests run in
      CI with no flag (infra-free).
@@ -106,11 +115,16 @@ mechanisms keep the suite honestly green without hiding broken files:
    On a bare host / lightweight CI runner these gated tests SKIP rather than
    fail. Run the full set inside the Docker ML stack with the flags set.
 
+   **Why this matters:** the CI integration job had been *skipped* for weeks
+   because the unit job perpetually failed (masked by `continue-on-error`), so
+   it `needs: test` never ran. Making the unit job honestly green (P2-2)
+   unblocked the integration job and exposed this latent runner-side segfault;
+   the ML-lifespan gate keeps the integration job honestly green too.
+
 Bare-host baseline (no DB/Redis/TF): `tests/unit/` = 647 passed, 1 skipped,
-1 xfailed; the five formerly-ignored integration files = 7 passed, 77 skipped,
-0 errors. (`tests/integration/test_verify_challenge_endpoint.py` needs
-`DATABASE_URL`; CI provides Postgres so it is green there — it errors only on a
-bare host without a DB.)
+1 xfailed; `tests/integration/` (no flag) = 57 passed, 104 skipped, 0 errors,
+no segfault. With `RUN_FULL_STACK_INTEGRATION=true` inside the Docker ML stack
+the gated files run.
 
 ## Key Directories
 
