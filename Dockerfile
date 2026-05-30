@@ -20,7 +20,16 @@
 #   2.7_80x80_MiniFASNetV2.pth     a5eb02e1843f19b5386b953cc4c9f011c3f985d0ee2bb9819eea9a142099bec0
 #   4_0_0_80x80_MiniFASNetV1SE.pth 84ee1d37d96894d5e82de5a57df044ef80a58be2b218b5ed7cdfd875ec2f5990
 # ============================================================================
-FROM python:3.12-slim AS model-fetcher
+# REPRODUCIBLE BASE (P0-2b, 2026-05-30): pin BOTH FROM lines by DIGEST so the
+# floating `python:3.12-slim` tag can never silently drift the Debian point
+# release out from under us again (the 13.4→13.5 move + torch/onnxruntime
+# native drift is what segfaulted the MiniFASNet ONNX preload under prod
+# read_only+cap_drop). Digest below = `python:3.12.13-slim` (Debian 13 trixie,
+# Python 3.12.13) as resolved on 2026-05-30. See CLAUDE.md P0-2b for the
+# boot-test outcome and the digest-selection rationale (the 13.4-era trixie
+# digest is no longer tag-served by Docker Hub — overwritten by the 13.5
+# rebuild on 2026-05-22 — so this pins the settled, no-longer-floating digest).
+FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203 AS model-fetcher
 
 ARG FACENET512_SHA256=3f76b5117a9ca574d536af8199e6720089eb4ad3dc7e93534496d88265de864f
 ARG CENTERFACE_SHA256=77e394b51108381b4c4f7b4baf1c64ca9f4aba73e5e803b2636419578913b5fe
@@ -62,7 +71,8 @@ RUN set -eux; \
 # ============================================================================
 # Stage 2: runtime
 # ============================================================================
-FROM python:3.12-slim
+# Same digest pin as the model-fetcher stage (see P0-2b note above).
+FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -94,30 +104,50 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gosu \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
+# Copy requirements + the known-good lock.
 COPY requirements.txt .
+COPY requirements-known-good-2026-05-29.lock .
 
-# 1. First install opencv-python-headless to claim cv2 namespace
-RUN pip install --no-cache-dir opencv-python-headless>=4.8.0
+# REPRODUCIBLE DEPS (P0-2b): the lock is a full `pip freeze` of the proven
+# working image (75347c98). We install the staged ML deps + requirements.txt
+# WITH the lock applied as a pip CONSTRAINTS file (`-c`), so every transitive
+# resolves to the exact known-good version — without letting the lock's plain
+# `tensorflow==2.21.0` line pull the GPU wheel (we install `tensorflow-cpu`
+# instead; a constraints file only pins, it never forces an install). The
+# tf-cpu / deepface / opencv special-casing below is preserved verbatim and
+# each version is bumped to the lock's exact pin.
+#
+# Strip the three lines that need special handling out of the constraints file
+# so `-c` does not (a) try to install plain `tensorflow` or (b) conflict with
+# our `--no-deps` deepface / headless-opencv staging:
+#   - tensorflow==      (we use tensorflow-cpu, line kept separately)
+#   - deepface==        (installed --no-deps)
+#   - opencv-python-headless==  (installed/forced separately, last)
+#   - spoof-detector @ git+...  (VCS line; comes from requirements.txt pin)
+RUN grep -viE '^(tensorflow==|deepface==|opencv-python-headless==|spoof-detector @)' \
+        requirements-known-good-2026-05-29.lock > /tmp/constraints.txt
 
-# 2. Install tensorflow-cpu (big dependency)
-RUN pip install --no-cache-dir tensorflow-cpu==2.21.0
+# 1. First install opencv-python-headless to claim cv2 namespace (lock pin).
+RUN pip install --no-cache-dir opencv-python-headless==4.13.0.92
 
-# 3. Install deepface WITHOUT dependencies to avoid opencv-python
-#    Then install missing deepface dependencies manually
+# 2. Install tensorflow-cpu (big dependency) — lock pins tensorflow_cpu==2.21.0.
+RUN pip install --no-cache-dir -c /tmp/constraints.txt tensorflow-cpu==2.21.0
+
+# 3. Install deepface WITHOUT dependencies to avoid opencv-python (lock pin).
+#    Then install missing deepface dependencies manually (lock pins).
 RUN pip install --no-cache-dir --no-deps deepface==0.0.98 && \
-    pip install --no-cache-dir lightphe lightdsa
+    pip install --no-cache-dir -c /tmp/constraints.txt lightphe==0.0.24 lightdsa==0.0.3
 
-# 4. Install remaining requirements
-# Note: requirements.txt pins librosa==0.9.2 to avoid numba @stencil/@guvectorize
-# crash on Python 3.12 (AttributeError: get_call_template). librosa >= 0.10.0
-# introduced eager-compiling numba decorators that crash at import time
-# regardless of NUMBA_DISABLE_JIT. librosa 0.9.2 has no numba stencil usage.
-RUN pip install --no-cache-dir -r requirements.txt
+# 4. Install remaining requirements under the lock constraints so every
+#    transitive (torch, onnxruntime, numpy, uniface, mediapipe, ...) lands on
+#    the exact known-good version. requirements.txt pins librosa==0.9.2 to avoid
+#    the numba @stencil/@guvectorize crash on Python 3.12; the lock agrees.
+RUN pip install --no-cache-dir -c /tmp/constraints.txt -r requirements.txt
 
 # 5. Force uninstall opencv-python if it got installed, reinstall headless
+#    (lock pin, --no-deps so the force-reinstall can't drag numpy back).
 RUN pip uninstall -y opencv-python opencv-contrib-python 2>/dev/null || true && \
-    pip install --no-cache-dir --force-reinstall opencv-python-headless>=4.8.0
+    pip install --no-cache-dir --force-reinstall --no-deps opencv-python-headless==4.13.0.92
 
 # Verify dependencies work together
 RUN python -c "import cv2; print('OpenCV version:', cv2.__version__)" && \

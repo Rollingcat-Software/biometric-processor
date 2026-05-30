@@ -14,41 +14,64 @@ pip install -r requirements.txt
 python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
-## ⚠️ Rebuild caution — dependency lock (2026-05-29)
+## ✅ Canonical reproducible build RESTORED — P0-2b (2026-05-30)
 
-The deployed prod image (`75347c98…`, healthy) is ~2 weeks old. `requirements.txt`
-historically pinned everything with `>=`, so a fresh rebuild drifted ~42 packages
-(numpy 2.4.4→2.4.6, protobuf 7.34.1→7.35.0, uniface 3.6.0→3.7.0, fastapi, nvidia-*, …).
-The drifted set **segfaults** during the UniFace MiniFASNet ONNX session preload at
-full-app boot under the `read_only` rootfs + `cap_drop:ALL` runtime (a native-ABI
-interaction — an isolated MiniFASNet load works in BOTH uniface versions, so it's the
-combination, not one library). Two other rebuild blockers were already fixed in
-`docker-compose.prod.yml` (cap_add CHOWN/SETUID/SETGID for the gosu drop; forward the
-DeepFace SHA pin from .env.prod).
+**The from-scratch `Dockerfile` build now BOOTS CLEAN under the prod
+`read_only`+`cap_drop` runtime — verified, ready to deploy + retire the overlay.**
 
-**UPDATE 2026-05-29 (verified in isolation):** pinning `numpy==2.4.4` + `uniface==3.6.0`
-to the exact working versions is **NOT sufficient** — a from-scratch rebuild STILL
-segfaults at the MiniFASNet ONNX load. The remaining cause is base-image + deeper
-native drift: the floating `python:3.12-slim` base moved **Debian 13.4→13.5**
-(glibc deb13u2→u3) and torch/nvidia-cu13/onnxruntime-transitive libs drifted. So the
-canonical `Dockerfile` cannot currently be rebuilt for prod.
+### What was wrong (history)
+The deployed prod image (`75347c98…`, healthy) was built ~2 weeks before this and
+`requirements.txt` historically pinned everything with `>=`, so a fresh rebuild
+drifted ~42 packages (numpy 2.4.4→2.4.6, protobuf 7.34.1→7.35.0, uniface
+3.6.0→3.7.0, fastapi, nvidia-*, …) AND the floating `python:3.12-slim` base moved
+Debian 13.4→13.5. The drifted set **segfaulted** during the UniFace MiniFASNet ONNX
+session preload at full-app boot under `read_only`+`cap_drop:ALL` (a native-ABI
+interaction — an isolated MiniFASNet load works fine; it was the combination).
 
-**WHAT IS DEPLOYED NOW:** the prod image is built via **`Dockerfile.liveness-overlay`** —
-a code-only layer `FROM` the proven working image (`75347c98`, retagged
-`biometric-processor-biometric-api:working-75347c98`) that overlays the current `app/`
-source (incl. liveness-on-enroll #119) onto the exact known-good dependency set. This
-ships the security feature with zero dep-drift risk. `ENROLL_LIVENESS_ENABLED=True`.
-To redeploy a code change: `docker build -f Dockerfile.liveness-overlay -t
-biometric-processor-biometric-api:latest . && docker compose -f docker-compose.prod.yml
---env-file .env.prod up -d biometric-api` (boot-test first; roll back by retagging
-`working-75347c98` → `:latest`).
+### The fix (P0-2b)
+1. **Both `FROM` lines in `Dockerfile` are now pinned by DIGEST**
+   (`python:3.12-slim@sha256:090ba77e…`) so the base can never float again. (The
+   13.4-era trixie digest is no longer tag-served — Docker Hub overwrote the
+   `3.12.13-slim` tag with the 13.5 rebuild on 2026-05-22 — so this pins the
+   *settled* 13.5 digest. The boot test below proves settled-13.5 + the pinned
+   native set is fine; the segfault was the floating *drift*, not 13.5 per se.)
+2. **Deps install from `requirements-known-good-2026-05-29.lock` applied as a pip
+   `-c` constraints file** over the staged ML install + `requirements.txt`, so every
+   transitive (torch 2.11.0+cu130, onnxruntime 1.26.0, numpy 2.4.4, uniface 3.6.0,
+   nvidia-cu13, …) resolves to the exact proven version. The tf-cpu/deepface/opencv
+   special-casing is preserved: the lock's `tensorflow==`, `deepface==`,
+   `opencv-python-headless==` and the `spoof-detector @ git+` lines are stripped from
+   the constraints (we install `tensorflow-cpu`, deepface `--no-deps`, and headless
+   opencv separately) so the lock's plain-`tensorflow` line can't force a GPU-only
+   resolution. One lock edit: `idna 3.14→3.15` (pure-Python, the only lock↔
+   requirements.txt conflict, needed to satisfy the `idna>=3.15` security floor).
 
-**STILL TODO (tracked — reproducible canonical build):** pin the base image by DIGEST
-(both `FROM` lines) to a known-good build + install from
-`requirements-known-good-2026-05-29.lock` (handling the tf-cpu/deepface/opencv
-special-casing so the lock's `tensorflow` line doesn't pull the GPU wheel). Until then
-the overlay is the deploy path. The `requirements.txt` native pins + the compose
-cap_add/DeepFace-env fixes remain in place as partial groundwork.
+### Boot-test result (2026-05-30, isolated, prod runtime)
+Built to a throwaway tag and booted under an isolated copy of
+`docker-compose.prod.yml`'s hardening (`read_only`+`tmpfs`+`cap_drop:ALL`+
+`cap_add CHOWN/SETUID/SETGID`+`no-new-privileges`), on the `backend` network with
+shared-postgres/redis, the prod `biometric-api` container untouched. With the uniface
+ONNX seeded into the cache volume (as in real prod), boot logged:
+`Pre-loading UniFace MiniFASNet (process-wide shared ONNX session)…` →
+**`UniFace MiniFASNet model loaded (process-wide shared session)`** →
+`Startup health-check: liveness detector OK` → `Application startup complete` →
+`/api/v1/health` **HTTP 200**. **Zero segfault/SIGSEGV signatures, 0 restarts, no
+OOM.** The exact previously-segfaulting ONNX session load now succeeds.
+
+### Deploy (operator) — retire the overlay
+```bash
+cd /opt/projects/fivucsas/biometric-processor
+docker compose -f docker-compose.prod.yml --env-file .env.prod build biometric-api   # canonical Dockerfile, digest-pinned
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d biometric-api
+# rollback: retag biometric-processor-biometric-api:working-75347c98 → :latest, up -d
+```
+Two earlier rebuild blockers remain fixed in `docker-compose.prod.yml` (cap_add
+CHOWN/SETUID/SETGID for the gosu drop; DeepFace SHA pin forwarded from .env.prod).
+
+### Overlay (still available as fallback)
+`Dockerfile.liveness-overlay` (code-only layer `FROM` the proven `75347c98` image)
+remains in-repo as the zero-risk fallback path if a future base/lock refresh
+reintroduces drift. It is NO LONGER the required deploy path.
 
 ## Migrations (Alembic)
 
