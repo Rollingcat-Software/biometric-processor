@@ -20,6 +20,7 @@ class IEmbeddingRepository(Protocol):
         embedding: np.ndarray,
         quality_score: float,
         tenant_id: Optional[str] = None,
+        fuse_with_existing: bool = False,
     ) -> None:
         """Save or update a face embedding.
 
@@ -28,6 +29,11 @@ class IEmbeddingRepository(Protocol):
             embedding: Face embedding vector
             quality_score: Quality score of the enrolled face (0-100)
             tenant_id: Optional tenant identifier for multi-tenancy
+            fuse_with_existing: "Re-enroll & optimize" path — when True AND the
+                user already has a stored template, the new sample is fused into
+                the existing centroid (quality-weighted incremental running
+                average) rather than producing a plain replace/average. When
+                False (default), normal enroll behaviour is unchanged.
 
         Raises:
             RepositoryError: When save operation fails

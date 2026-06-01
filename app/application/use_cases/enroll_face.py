@@ -57,6 +57,7 @@ class EnrollFaceUseCase:
         user_id: str,
         image_path: str,
         tenant_id: Optional[str] = None,
+        optimize: bool = False,
     ) -> FaceEmbedding:
         """Execute face enrollment.
 
@@ -64,6 +65,10 @@ class EnrollFaceUseCase:
             user_id: Unique identifier for the user
             image_path: Path to image file
             tenant_id: Optional tenant identifier for multi-tenancy
+            optimize: "Re-enroll & optimize" — when True, the new capture is
+                fused into the user's existing template (centroid update) rather
+                than just appended; forwarded to the repository as
+                ``fuse_with_existing``. Default False (normal enroll).
 
         Returns:
             FaceEmbedding entity with enrollment result
@@ -126,6 +131,7 @@ class EnrollFaceUseCase:
                 embedding=embedding_vector,
                 quality_score=quality.score,
                 tenant_id=tenant_id,
+                fuse_with_existing=optimize,
             )
 
             # Step 7: Create and return result entity

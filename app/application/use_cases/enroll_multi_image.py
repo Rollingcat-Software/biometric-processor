@@ -92,6 +92,7 @@ class EnrollMultiImageUseCase:
         user_id: str,
         image_paths: List[str],
         tenant_id: Optional[str] = None,
+        optimize: bool = False,
     ) -> MultiImageEnrollmentResult:
         """Execute multi-image face enrollment.
 
@@ -99,6 +100,11 @@ class EnrollMultiImageUseCase:
             user_id: Unique identifier for the user
             image_paths: List of paths to face image files (2-5 images)
             tenant_id: Optional tenant identifier for multi-tenancy
+            optimize: "Re-enroll & optimize" — when True, the fused template of
+                this batch is in turn fused into the user's existing stored
+                centroid (forwarded to the repository as ``fuse_with_existing``)
+                so re-enrolling improves the accumulated template across
+                sessions. Default False (normal enroll).
 
         Returns:
             MultiImageEnrollmentResult with fused template and quality details
@@ -318,6 +324,7 @@ class EnrollMultiImageUseCase:
             embedding=fused_embedding,
             quality_score=fused_quality,
             tenant_id=tenant_id,
+            fuse_with_existing=optimize,
         )
 
         # Step 7: Mark session as completed

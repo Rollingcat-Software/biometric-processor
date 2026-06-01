@@ -249,3 +249,142 @@ class TestEmbeddingFusionService:
 
         assert isinstance(fused, np.ndarray)
         assert fused.dtype == np.float32 or fused.dtype == np.float64
+
+
+class TestIncrementalFusion:
+    """Test the re-enroll & optimize incremental centroid fusion."""
+
+    def test_equal_weight_single_prior_sample_is_midpoint(self):
+        """A 1-sample prior at equal quality blends to the L2-normalized midpoint."""
+        service = EmbeddingFusionService(normalization_strategy="l2")
+
+        existing = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        new = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+
+        fused, fused_q = service.fuse_incremental(
+            existing_centroid=existing,
+            existing_quality=80.0,
+            existing_sample_count=1,
+            new_embedding=new,
+            new_quality=80.0,
+        )
+
+        # Equal weights → unit vector along the (1,1) diagonal in the first two
+        # dims, i.e. (1/sqrt2, 1/sqrt2, 0, 0).
+        expected = np.array([1.0, 1.0, 0.0, 0.0], dtype=np.float32)
+        expected = expected / np.linalg.norm(expected)
+        np.testing.assert_allclose(fused, expected, atol=1e-6)
+        assert np.isclose(np.linalg.norm(fused), 1.0)
+        assert fused_q == pytest.approx(80.0)
+
+    def test_accumulated_template_has_inertia(self):
+        """A 5-sample prior moves only slightly when one new sample is folded in."""
+        service = EmbeddingFusionService(normalization_strategy="none")
+
+        existing = np.array([1.0, 0.0], dtype=np.float32)
+        new = np.array([0.0, 1.0], dtype=np.float32)
+
+        fused, _ = service.fuse_incremental(
+            existing_centroid=existing,
+            existing_quality=50.0,
+            existing_sample_count=5,
+            new_embedding=new,
+            new_quality=50.0,
+        )
+
+        # w_existing = 50 * 5 = 250, w_new = 50 → new contributes 50/300 ≈ 0.167.
+        assert fused[0] == pytest.approx(250.0 / 300.0, abs=1e-5)
+        assert fused[1] == pytest.approx(50.0 / 300.0, abs=1e-5)
+        # The fused centroid stays much closer to the accumulated template than
+        # to the single new sample (inertia).
+        assert fused[0] > fused[1]
+
+    def test_higher_new_quality_pulls_more(self):
+        """A higher-quality new sample pulls the centroid more than a low one."""
+        service = EmbeddingFusionService(normalization_strategy="none")
+
+        existing = np.array([1.0, 0.0], dtype=np.float32)
+        new = np.array([0.0, 1.0], dtype=np.float32)
+
+        low, _ = service.fuse_incremental(existing, 50.0, 1, new, 10.0)
+        high, _ = service.fuse_incremental(existing, 50.0, 1, new, 90.0)
+
+        # The new-direction component is larger when the new sample's quality is higher.
+        assert high[1] > low[1]
+
+    def test_fused_quality_is_weighted_average(self):
+        """Fused quality is the weight-respecting blend of the two qualities."""
+        service = EmbeddingFusionService(normalization_strategy="none")
+
+        existing = np.array([1.0, 0.0], dtype=np.float32)
+        new = np.array([0.0, 1.0], dtype=np.float32)
+
+        _, fused_q = service.fuse_incremental(
+            existing_centroid=existing,
+            existing_quality=60.0,
+            existing_sample_count=2,  # w_existing = 120
+            new_embedding=new,
+            new_quality=90.0,  # w_new = 90
+        )
+        expected_q = (120.0 * 60.0 + 90.0 * 90.0) / (120.0 + 90.0)
+        assert fused_q == pytest.approx(expected_q, abs=1e-4)
+
+    def test_degenerate_zero_quality_falls_back_to_unweighted(self):
+        """Both qualities zero → unweighted mean, no division by zero."""
+        service = EmbeddingFusionService(normalization_strategy="none")
+
+        existing = np.array([2.0, 0.0], dtype=np.float32)
+        new = np.array([0.0, 4.0], dtype=np.float32)
+
+        fused, fused_q = service.fuse_incremental(
+            existing_centroid=existing,
+            existing_quality=0.0,
+            existing_sample_count=1,
+            new_embedding=new,
+            new_quality=0.0,
+        )
+        # Fallback weights: w_existing = sample_count(1), w_new = 1 → simple mean.
+        np.testing.assert_allclose(fused, np.array([1.0, 2.0], dtype=np.float32), atol=1e-6)
+        assert fused_q == pytest.approx(0.0)
+
+    def test_sample_count_floor_at_one(self):
+        """A non-positive prior sample count is clamped to 1 (template keeps its weight)."""
+        service = EmbeddingFusionService(normalization_strategy="none")
+
+        existing = np.array([1.0, 0.0], dtype=np.float32)
+        new = np.array([0.0, 1.0], dtype=np.float32)
+
+        fused, _ = service.fuse_incremental(existing, 50.0, 0, new, 50.0)
+        # Clamped to count=1 → equal weights → midpoint.
+        assert fused[0] == pytest.approx(0.5, abs=1e-6)
+        assert fused[1] == pytest.approx(0.5, abs=1e-6)
+
+    def test_dimension_mismatch_raises(self):
+        service = EmbeddingFusionService()
+        with pytest.raises(ValueError):
+            service.fuse_incremental(
+                existing_centroid=np.zeros(4, dtype=np.float32),
+                existing_quality=80.0,
+                existing_sample_count=1,
+                new_embedding=np.zeros(8, dtype=np.float32),
+                new_quality=80.0,
+            )
+
+    def test_empty_new_embedding_raises(self):
+        service = EmbeddingFusionService()
+        with pytest.raises(ValueError):
+            service.fuse_incremental(
+                existing_centroid=np.zeros(4, dtype=np.float32),
+                existing_quality=80.0,
+                existing_sample_count=1,
+                new_embedding=np.array([], dtype=np.float32),
+                new_quality=80.0,
+            )
+
+    def test_result_is_float32(self):
+        service = EmbeddingFusionService()
+        existing = np.random.randn(256).astype(np.float32)
+        new = np.random.randn(256).astype(np.float32)
+        fused, _ = service.fuse_incremental(existing, 70.0, 3, new, 80.0)
+        assert isinstance(fused, np.ndarray)
+        assert fused.dtype == np.float32

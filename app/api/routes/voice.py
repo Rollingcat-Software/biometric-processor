@@ -43,6 +43,11 @@ router = APIRouter(tags=["Voice"])
 class VoiceRequest(BaseModel):
     user_id: str = Field(..., max_length=255)
     voice_data: str = Field(..., max_length=50_000_000)  # ~37MB decoded max
+    # Re-enroll & optimize: when True (and the user already has a voiceprint),
+    # the new sample is fused into the existing centroid instead of a plain
+    # append/average. Optional + default False, so the normal enroll JSON body
+    # is unchanged and older callers keep working.
+    optimize: bool = Field(False)
 
 
 class BiometricResponse(_SharedBiometricResponse):
@@ -154,11 +159,12 @@ async def enroll_voice(request: VoiceRequest) -> BiometricResponse:
             user_id=user_id,
             embedding=embedding,
             quality_score=round(quality_score / 100.0, 4),
+            fuse_with_existing=request.optimize,
         )
 
         logger.info(
             f"Voice enrolled: user_id={user_id}, dim={len(embedding)}, "
-            f"quality={quality_score:.1f}"
+            f"quality={quality_score:.1f}, optimize={request.optimize}"
         )
 
         return BiometricResponse(
