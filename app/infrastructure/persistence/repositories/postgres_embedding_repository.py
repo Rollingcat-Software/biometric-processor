@@ -115,6 +115,7 @@ class PostgresEmbeddingRepository:
         embedding: np.ndarray,
         quality_score: float,
         tenant_id: Optional[str] = None,
+        fuse_with_existing: bool = False,
     ) -> None:
         """Save or update a face embedding.
 
@@ -123,6 +124,11 @@ class PostgresEmbeddingRepository:
             embedding: Face embedding vector
             quality_score: Quality score of the enrolled face
             tenant_id: Optional tenant identifier
+            fuse_with_existing: Accepted for interface parity with the
+                production centroid-based ``PgVectorEmbeddingRepository``. This
+                legacy single-row UPSERT backend has no centroid/individual
+                model to fuse into, so it gracefully degrades to a plain
+                re-enroll (replace) — the documented fallback behaviour.
 
         Raises:
             RepositoryError: When save operation fails

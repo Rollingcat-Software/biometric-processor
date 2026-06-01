@@ -47,6 +47,13 @@ class PgVectorVoiceRepository:
         self._cipher: EmbeddingCipher = cipher if cipher is not None else EmbeddingCipher.from_env()
         self._key_version: int = 1
 
+        # Domain service used only on the "re-enroll & optimize" path
+        # (save(fuse_with_existing=True)) to incrementally blend a new sample
+        # into the existing voice centroid. Stateless — constructed once here.
+        from app.domain.services.embedding_fusion_service import EmbeddingFusionService
+
+        self._fusion_service = EmbeddingFusionService(normalization_strategy="l2")
+
         logger.info(
             f"Initialized PgVectorVoiceRepository "
             f"(dim={embedding_dimension}, pool={pool_min_size}-{pool_max_size})"
@@ -87,6 +94,7 @@ class PgVectorVoiceRepository:
         embedding: np.ndarray,
         quality_score: float = 1.0,
         tenant_id: Optional[str] = None,
+        fuse_with_existing: bool = False,
     ) -> None:
         """Save a voice embedding (INDIVIDUAL) and update CENTROID.
 
@@ -95,6 +103,15 @@ class PgVectorVoiceRepository:
             embedding: 256-dim speaker embedding vector.
             quality_score: Quality score (0-1).
             tenant_id: Optional tenant identifier.
+            fuse_with_existing: When True AND the user already has a stored
+                CENTROID, the "re-enroll & optimize" path is taken: the new
+                sample is accumulated as usual, but the persisted centroid is a
+                quality-weighted INCREMENTAL fusion of the PRIOR centroid with
+                the freshly-recomputed average-of-individuals
+                (:meth:`EmbeddingFusionService.fuse_incremental`), so the
+                accumulated voiceprint keeps the inertia it earned across
+                captures. When False (normal enroll, the default), behaviour is
+                unchanged — the centroid is the plain AVG-of-individuals.
         """
         if len(embedding) != self._embedding_dimension:
             raise ValueError(
@@ -122,14 +139,41 @@ class PgVectorVoiceRepository:
                     ciphertext, self._key_version,
                 )
 
-                # Check if centroid exists
-                has_centroid = await conn.fetchval(
-                    """
-                    SELECT count(*) FROM voice_enrollments
-                    WHERE user_id = $1::varchar AND enrollment_type = 'CENTROID' AND deleted_at IS NULL
-                    """,
-                    user_id,
-                )
+                # Check if centroid exists. In optimize mode we also grab the
+                # PRIOR centroid vector + quality so we can fold the new sample
+                # into the accumulated voiceprint with proper inertia.
+                prior_centroid_vec: Optional[np.ndarray] = None
+                prior_centroid_quality: float = 0.0
+                if fuse_with_existing:
+                    prior_row = await conn.fetchrow(
+                        """
+                        SELECT embedding, embedding_ciphertext, quality_score
+                        FROM voice_enrollments
+                        WHERE user_id = $1::varchar
+                          AND enrollment_type = 'CENTROID'
+                          AND deleted_at IS NULL
+                        LIMIT 1
+                        """,
+                        user_id,
+                    )
+                    has_centroid = 1 if prior_row else 0
+                    if prior_row is not None:
+                        prior_centroid_vec = self._decode_row_embedding(
+                            prior_row, user_id=user_id
+                        )
+                        prior_centroid_quality = (
+                            float(prior_row["quality_score"])
+                            if prior_row["quality_score"] is not None
+                            else 0.0
+                        )
+                else:
+                    has_centroid = await conn.fetchval(
+                        """
+                        SELECT count(*) FROM voice_enrollments
+                        WHERE user_id = $1::varchar AND enrollment_type = 'CENTROID' AND deleted_at IS NULL
+                        """,
+                        user_id,
+                    )
 
                 centroid_sql_avg = f"AVG(embedding)::vector({dim})"
 
@@ -137,7 +181,8 @@ class PgVectorVoiceRepository:
                 centroid_row = await conn.fetchrow(
                     f"""
                     SELECT {centroid_sql_avg} AS avg_emb,
-                           AVG(quality_score) AS avg_q
+                           AVG(quality_score) AS avg_q,
+                           count(*) AS n
                     FROM voice_enrollments
                     WHERE user_id = $1::varchar
                       AND enrollment_type = 'INDIVIDUAL'
@@ -152,6 +197,27 @@ class PgVectorVoiceRepository:
                         if centroid_row["avg_q"] is not None
                         else 0.0
                     )
+
+                    # Re-enroll & optimize: incremental quality-weighted fusion
+                    # of the prior centroid with the new average-of-individuals.
+                    # Normal enroll skips this (persists the plain AVG).
+                    if (
+                        fuse_with_existing
+                        and has_centroid
+                        and prior_centroid_vec is not None
+                    ):
+                        individual_count = int(centroid_row["n"]) if centroid_row["n"] else 1
+                        prior_sample_count = max(1, individual_count - 1)
+                        fused_vec, fused_q = self._fusion_service.fuse_incremental(
+                            existing_centroid=prior_centroid_vec,
+                            existing_quality=prior_centroid_quality,
+                            existing_sample_count=prior_sample_count,
+                            new_embedding=centroid_vec,
+                            new_quality=centroid_quality,
+                        )
+                        centroid_vec = np.asarray(fused_vec, dtype=np.float32)
+                        centroid_quality = float(fused_q)
+
                     centroid_ciphertext = self._cipher.encrypt_vector(centroid_vec)
                     centroid_list = centroid_vec.tolist()
 

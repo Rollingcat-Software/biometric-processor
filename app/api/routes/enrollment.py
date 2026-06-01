@@ -41,6 +41,7 @@ async def enroll_face(
     user_id: str = Form(..., description="User identifier"),
     file: UploadFile = File(..., description="Face image file"),
     tenant_id: str = Form(None, description="Optional tenant identifier"),
+    optimize: bool = Form(False, description="Re-enroll & optimize: fuse this capture into the user's existing template instead of a plain append/replace"),
     client_embedding: Optional[str] = Form(None, description="Optional client-side pre-filter embedding (JSON array, 128-dim, D1 log-only)"),
     client_embeddings: Optional[str] = Form(None, description="Optional client-side embeddings (JSON array-of-arrays, D1 log-only)"),
     client_model_version: Optional[str] = Form(None, description="Optional client model version tag"),
@@ -211,7 +212,12 @@ async def enroll_face(
             )
 
         # Execute enrollment use case
-        result = await use_case.execute(user_id=user_id, image_path=image_path, tenant_id=tenant_id)
+        result = await use_case.execute(
+            user_id=user_id,
+            image_path=image_path,
+            tenant_id=tenant_id,
+            optimize=optimize,
+        )
 
         response = EnrollmentResponse(
             success=True,
@@ -290,6 +296,7 @@ async def enroll_face_multi_image(
     user_id: str = Form(..., description="User identifier"),
     files: List[UploadFile] = File(..., description="2-5 face image files"),
     tenant_id: str = Form(None, description="Optional tenant identifier"),
+    optimize: bool = Form(False, description="Re-enroll & optimize: fuse this batch into the user's existing template instead of a plain append/replace"),
     client_embedding: Optional[str] = Form(None, description="Optional client-side pre-filter embedding (JSON array, 128-dim, D1 log-only)"),
     client_embeddings: Optional[str] = Form(None, description="Optional client-side embeddings (JSON array-of-arrays, D1 log-only)"),
     client_model_version: Optional[str] = Form(None, description="Optional client model version tag"),
@@ -425,7 +432,7 @@ async def enroll_face_multi_image(
 
         # Execute multi-image enrollment use case
         result = await use_case.execute(
-            user_id=user_id, image_paths=image_paths, tenant_id=tenant_id
+            user_id=user_id, image_paths=image_paths, tenant_id=tenant_id, optimize=optimize
         )
 
         # Use actual quality scores from the enrollment result
