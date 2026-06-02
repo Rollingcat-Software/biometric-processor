@@ -179,7 +179,11 @@ class VerifyFaceUseCase:
             logger.warning(f"Adaptive threshold lookup failed, using default: {_threshold_err}")
 
         verified = distance < threshold
-        confidence = self._similarity_calculator.get_confidence(distance)
+        # FIX #12 (2026-06-02): anchor the reported confidence on the SAME
+        # (possibly adaptive aged) threshold used for the verdict, so the accept
+        # boundary reads ~50% and an identical match ~100% instead of the
+        # misleading naive ``1 - distance``. Decision logic is unchanged.
+        confidence = self._similarity_calculator.get_confidence(distance, threshold)
 
         total_ms = (time.perf_counter() - t_start) * 1000
         timing_summary = " ".join(f"{k}={v:.0f}ms" for k, v in stage_ms.items())

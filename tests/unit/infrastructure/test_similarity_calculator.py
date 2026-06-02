@@ -124,15 +124,40 @@ class TestCosineSimilarityCalculator:
         assert is_match is False
 
     def test_get_confidence(self):
-        """Test converting distance to confidence."""
-        calculator = CosineSimilarityCalculator()
+        """Test threshold-anchored distance -> confidence mapping (FIX #12).
 
-        # Low distance = high confidence
-        assert calculator.get_confidence(0.1) == 0.9
-        assert calculator.get_confidence(0.3) == 0.7
-        assert calculator.get_confidence(0.5) == 0.5
+        Confidence is ``clamp01(1 - distance / (2 * threshold))`` so the accept
+        boundary (distance == threshold) reads ~0.5 and an identical match reads
+        1.0, instead of the misleading naive ``1 - distance``.
+        """
+        calculator = CosineSimilarityCalculator()  # default threshold 0.6
+
+        # Identical match -> full confidence
         assert calculator.get_confidence(0.0) == 1.0
-        assert calculator.get_confidence(1.0) == 0.0
+        # Low distance -> high confidence, but anchored on the 0.6 threshold
+        assert calculator.get_confidence(0.1) == pytest.approx(1 - 0.1 / 1.2)  # ~0.9167
+        assert calculator.get_confidence(0.3) == pytest.approx(1 - 0.3 / 1.2)  # 0.75
+        assert calculator.get_confidence(0.5) == pytest.approx(1 - 0.5 / 1.2)  # ~0.5833
+        # Accept boundary (distance == threshold) -> ~0.5
+        assert calculator.get_confidence(0.6) == pytest.approx(0.5)
+        # At / beyond 2*threshold -> clamped to 0.0
+        assert calculator.get_confidence(1.2) == 0.0
+        assert calculator.get_confidence(2.0) == 0.0
+
+    def test_get_confidence_explicit_threshold_anchor(self):
+        """An explicit threshold overrides the calculator's default anchor.
+
+        The verify path passes its effective (possibly adaptive aged) threshold
+        so the reported % stays consistent with the verdict.
+        """
+        calculator = CosineSimilarityCalculator()  # default threshold 0.6
+
+        # 1:1 verify-style threshold 0.4: boundary maps to 0.5
+        assert calculator.get_confidence(0.4, threshold=0.4) == pytest.approx(0.5)
+        assert calculator.get_confidence(0.2, threshold=0.4) == pytest.approx(0.75)
+        assert calculator.get_confidence(0.0, threshold=0.4) == 1.0
+        # Pathological non-positive anchor falls back to legacy inverse, clamped
+        assert calculator.get_confidence(0.3, threshold=0.0) == pytest.approx(0.7)
 
     def test_l2_normalize_unit_vector(self):
         """Test L2 normalization produces unit vectors."""

@@ -9,15 +9,25 @@ class SearchMatchResponse(BaseModel):
     """Individual search match response."""
 
     user_id: str = Field(..., description="Matched user identifier")
-    distance: float = Field(..., ge=0, le=2, description="Cosine distance (0=identical)")
-    confidence: float = Field(..., ge=0, le=1, description="Match confidence (0-1)")
+    distance: float = Field(..., ge=0, le=2, description="Cosine distance (0=identical); raw engineering value")
+    confidence: float = Field(
+        ...,
+        ge=0,
+        le=1,
+        description=(
+            "Threshold-anchored match confidence (0-1): accept boundary ~0.5, "
+            "identical match ~1.0. Not the naive 1 - distance."
+        ),
+    )
 
     model_config = {
         "json_schema_extra": {
+            # confidence is threshold-anchored on the default 0.6 search threshold:
+            # 1 - distance / (2 * 0.6). distance 0.15 -> 0.875, 0.25 -> 0.7917.
             "example": {
                 "user_id": "user_123",
                 "distance": 0.15,
-                "confidence": 0.85,
+                "confidence": 0.875,
             }
         }
     }
@@ -39,18 +49,20 @@ class SearchResponse(BaseModel):
 
     model_config = {
         "json_schema_extra": {
+            # confidence is threshold-anchored: 1 - distance / (2 * threshold).
+            # With threshold 0.6: distance 0.15 -> 0.875, 0.25 -> 0.7917.
             "example": {
                 "found": True,
                 "matches": [
-                    {"user_id": "user_123", "distance": 0.15, "confidence": 0.85},
-                    {"user_id": "user_456", "distance": 0.25, "confidence": 0.75},
+                    {"user_id": "user_123", "distance": 0.15, "confidence": 0.875},
+                    {"user_id": "user_456", "distance": 0.25, "confidence": 0.7917},
                 ],
                 "total_searched": 100,
                 "threshold": 0.6,
                 "best_match": {
                     "user_id": "user_123",
                     "distance": 0.15,
-                    "confidence": 0.85,
+                    "confidence": 0.875,
                 },
                 "message": "Found 2 matches",
             }
