@@ -41,8 +41,20 @@ from app.domain.services.emrtd_passive_auth import (
 # ---------------------------------------------------------------------------
 
 
-def _make_cert(subject_cn, issuer_cn, issuer_key, subject_pub, is_ca, sign_hash=None):
+def _make_cert(
+    subject_cn,
+    issuer_cn,
+    issuer_key,
+    subject_pub,
+    is_ca,
+    sign_hash=None,
+    *,
+    not_before=None,
+    not_after=None,
+):
     sign_hash = sign_hash or hashes.SHA256()
+    not_before = not_before or datetime.datetime(2020, 1, 1)
+    not_after = not_after or datetime.datetime(2035, 1, 1)
     subject = x509.Name(
         [
             x509.NameAttribute(NameOID.COMMON_NAME, subject_cn),
@@ -61,8 +73,8 @@ def _make_cert(subject_cn, issuer_cn, issuer_key, subject_pub, is_ca, sign_hash=
         .issuer_name(issuer)
         .public_key(subject_pub)
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.datetime(2020, 1, 1))
-        .not_valid_after(datetime.datetime(2035, 1, 1))
+        .not_valid_before(not_before)
+        .not_valid_after(not_after)
     )
     if is_ca:
         builder = builder.add_extension(
@@ -309,3 +321,97 @@ class TestEmrtdPassiveAuth:
         result = svc.verify(sod_der=sod_der, data_groups=data_groups)
         assert result.is_authentic is True
         assert result.reason_code == ReasonCode.OK
+
+    def test_expired_document_signer_rejects(self):
+        """BIO-M2: an EXPIRED DS cert must NOT yield is_authentic=true.
+
+        The SOD signature still verifies cryptographically (the key is fine),
+        but the Document Signer cert is past its not_after, so passive auth must
+        fail-closed with DS_CERT_EXPIRED rather than trusting the document.
+        """
+        csca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        ds_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        csca_cert = _make_cert(
+            "Expiry CSCA", "Expiry CSCA", csca_key, csca_key.public_key(), True
+        )
+        # DS cert that expired in the past (valid 2010-01-01 .. 2012-01-01).
+        ds_cert = _make_cert(
+            "Expired Document Signer",
+            "Expiry CSCA",
+            csca_key,
+            ds_key.public_key(),
+            False,
+            not_before=datetime.datetime(2010, 1, 1),
+            not_after=datetime.datetime(2012, 1, 1),
+        )
+        data_groups = {1: b"\x61\x08DG1-EXP!"}
+        lds_der = _build_lds(data_groups)
+        sod_der = _build_sod(lds_der, ds_cert, ds_key)
+
+        svc = EmrtdPassiveAuthService(csca_certificates=[csca_cert])
+        result = svc.verify(sod_der=sod_der, data_groups=data_groups)
+        assert result.is_authentic is False
+        assert result.reason_code == ReasonCode.DS_CERT_EXPIRED
+        # DG integrity + signature were fine; only the validity window failed.
+        assert result.dg_hash_results == {"1": True}
+
+    def test_not_yet_valid_document_signer_rejects(self):
+        """A DS cert whose not_before is in the FUTURE is also rejected."""
+        csca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        ds_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        csca_cert = _make_cert(
+            "Future CSCA", "Future CSCA", csca_key, csca_key.public_key(), True
+        )
+        ds_cert = _make_cert(
+            "Future Document Signer",
+            "Future CSCA",
+            csca_key,
+            ds_key.public_key(),
+            False,
+            not_before=datetime.datetime(2099, 1, 1),
+            not_after=datetime.datetime(2100, 1, 1),
+        )
+        data_groups = {1: b"\x61\x08DG1-FUT!"}
+        lds_der = _build_lds(data_groups)
+        sod_der = _build_sod(lds_der, ds_cert, ds_key)
+
+        svc = EmrtdPassiveAuthService(csca_certificates=[csca_cert])
+        result = svc.verify(sod_der=sod_der, data_groups=data_groups)
+        assert result.is_authentic is False
+        assert result.reason_code == ReasonCode.DS_CERT_EXPIRED
+
+    def test_expired_csca_root_rejects(self):
+        """An in-validity DS that chains to an EXPIRED CSCA root is rejected.
+
+        The DS is current and its signature verifies, but the trusted anchor it
+        chains to is itself past its validity window, so it can no longer vouch
+        for the signer → CSCA_CERT_EXPIRED (fail-closed).
+        """
+        csca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        ds_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        # Expired CSCA root (valid 2000-01-01 .. 2005-01-01).
+        csca_cert = _make_cert(
+            "Old CSCA",
+            "Old CSCA",
+            csca_key,
+            csca_key.public_key(),
+            True,
+            not_before=datetime.datetime(2000, 1, 1),
+            not_after=datetime.datetime(2005, 1, 1),
+        )
+        # Current DS cert (defaults to 2020 .. 2035).
+        ds_cert = _make_cert(
+            "Current Document Signer",
+            "Old CSCA",
+            csca_key,
+            ds_key.public_key(),
+            False,
+        )
+        data_groups = {1: b"\x61\x08DG1-CSC!"}
+        lds_der = _build_lds(data_groups)
+        sod_der = _build_sod(lds_der, ds_cert, ds_key)
+
+        svc = EmrtdPassiveAuthService(csca_certificates=[csca_cert])
+        result = svc.verify(sod_der=sod_der, data_groups=data_groups)
+        assert result.is_authentic is False
+        assert result.reason_code == ReasonCode.CSCA_CERT_EXPIRED

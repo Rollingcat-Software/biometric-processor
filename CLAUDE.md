@@ -196,6 +196,15 @@ the gated files run.
   CPU-only.
 - **Voice**: enroll, verify, search, delete — Resemblyzer 256-dim speaker embeddings, centroid-based
 - Routes: `voice.py`, repo: `pgvector_voice_repository.py`, embedder: `speaker_embedder.py`
+- **Voice verify centroid normalization (P1-10, 2026-06-02)**: the default enroll
+  path stores the centroid as `AVG(embedding)::vector` (the mean of unit-norm
+  embeddings has norm < 1 and shrinks as enrollments accumulate). `/voice/verify`
+  now L2-normalizes BOTH the probe and the stored centroid before the dot product
+  so `confidence` is a true cosine similarity, invariant to enrollment count
+  (previously decayed ≈0.71 @2 → ≈0.47 @5 and false-rejected genuine users). The
+  accept threshold is UNCHANGED (verify ≥ 0.65). The `optimize=True` re-enroll
+  fusion path already L2-normalizes its centroid, and `/voice/search` uses
+  pgvector `<=>` cosine distance (norm-invariant) — both unaffected.
 - **Fingerprint**: removed (P1.4) — server-side fingerprint biometric processing was a SHA-256 hash placeholder, never a real biometric. Platform fingerprint authentication is delivered via WebAuthn (FIDO2) in identity-core-api, not through this service.
 
 ### Verification Pipeline (Phase 8B/8C, 2026-03-28):
@@ -213,7 +222,10 @@ the gated files run.
   authentication** (eMRTD chip trust). Accepts `{sod_b64, data_groups:{"<dg#>":b64}}`
   and verifies, fail-CLOSED: (a) each provided DG hash matches the signed value
   in EF.SOD's `LDSSecurityObject`, (b) the SOD's CMS signature verifies under the
-  embedded Document Signer cert, (c) DS chains to a trusted CSCA root. Returns
+  embedded Document Signer cert, (b2, BIO-M2 2026-06-02) the DS cert AND the CSCA
+  root it chains to are each within their `[not_valid_before, not_valid_after]`
+  validity window (an expired/not-yet-valid DS → `reason_code=DS_CERT_EXPIRED`; an
+  expired CSCA anchor → `CSCA_CERT_EXPIRED`), (c) DS chains to a trusted CSCA root. Returns
   `{is_authentic, reason, reason_code, ds_subject, ds_serial, csca_matched,
   dg_hash_results, sod_hash_algorithm}`. Pure Python crypto (`asn1crypto` +
   `cryptography`) — **no GPU, no ML**. Logic lives in the framework-free domain
