@@ -132,7 +132,10 @@ class VerifyFaceCachedUseCase:
         # Determine verification result
         effective_threshold = threshold or self._similarity_calculator.get_threshold()
         verified = distance < effective_threshold
-        confidence = self._similarity_calculator.get_confidence(distance)
+        # FIX #12 (2026-06-02): threshold-anchored confidence (see verify_face.py)
+        # so the accept boundary reads ~50% and an identical match ~100% instead
+        # of the misleading naive ``1 - distance``. Decision logic is unchanged.
+        confidence = self._similarity_calculator.get_confidence(distance, effective_threshold)
 
         result = VerificationResult(
             verified=verified,

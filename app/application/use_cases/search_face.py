@@ -168,11 +168,19 @@ class SearchFaceUseCase:
             tenant_id=tenant_id,
         )
 
-        # Convert to SearchMatch objects with confidence scores
+        # Convert to SearchMatch objects with confidence scores.
+        #
+        # FIX #12 (2026-06-02): the reported confidence is THRESHOLD-ANCHORED, not
+        # the naive ``1 - distance``. pgvector cosine distance is in [0, 2] and the
+        # operational accept band sits in the low-distance region, so ``1 - distance``
+        # made a genuinely excellent match (e.g. distance 0.26) read a misleading
+        # ~74%, with the accept boundary itself at a scary ~40%. We anchor on the
+        # SAME threshold used for acceptance above so the accept boundary reads ~50%
+        # and an identical match ~100%. The accept/reject decision is unchanged, and
+        # the raw ``distance`` is kept verbatim in the response as the honest value.
         matches = []
         for user_id, distance in similar:
-            # Calculate confidence as inverse of distance (higher is better, 0-1 range)
-            confidence = max(0.0, min(1.0, 1 - distance))
+            confidence = self._similarity_calculator.get_confidence(distance, threshold)
             matches.append(
                 SearchMatch(
                     user_id=user_id,
