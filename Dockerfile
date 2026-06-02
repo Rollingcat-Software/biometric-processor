@@ -94,6 +94,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender-dev \
     libgomp1 \
     libgl1 \
+    libgles2 \
+    libegl1 \
     curl \
     ffmpeg \
     gcc \
