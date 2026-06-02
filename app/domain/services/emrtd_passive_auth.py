@@ -29,6 +29,7 @@ primitives). Both are CPU-only and already part of the pinned requirements.
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import logging
 from dataclasses import dataclass, field
@@ -122,6 +123,12 @@ class ReasonCode(str, Enum):
     NO_TRUST_STORE = "NO_TRUST_STORE"
     MISSING_DG = "MISSING_DG"
     UNSUPPORTED_ALGORITHM = "UNSUPPORTED_ALGORITHM"
+    # ICAO 9303 Part 12 §7: a Document Signer / CSCA certificate may only be
+    # relied upon inside its validity window. An expired (or not-yet-valid) DS
+    # or CSCA cert means the chip's trust assertion can no longer be relied
+    # upon, even if the CMS signature itself still verifies cryptographically.
+    DS_CERT_EXPIRED = "DS_CERT_EXPIRED"
+    CSCA_CERT_EXPIRED = "CSCA_CERT_EXPIRED"
 
 
 @dataclass
@@ -271,6 +278,26 @@ class EmrtdPassiveAuthService:
                 dg_hash_results=dg_hash_results,
             )
 
+        # --- (b2) DS certificate validity period --------------------------
+        # ICAO 9303 Part 12: a Document Signer cert must be relied upon only
+        # within its [not_valid_before, not_valid_after] window. A cryptograph-
+        # ically valid signature from an EXPIRED DS cert must NOT yield
+        # is_authentic=true (fail-closed).
+        now = self._now()
+        if not _cert_within_validity(ds_cert, now):
+            return PassiveAuthResult(
+                is_authentic=False,
+                reason=(
+                    "Document Signer certificate is outside its validity period "
+                    f"({_validity_window_str(ds_cert)})."
+                ),
+                reason_code=ReasonCode.DS_CERT_EXPIRED,
+                ds_subject=ds_subject,
+                ds_serial=ds_serial,
+                sod_hash_algorithm=sod_hash_algorithm,
+                dg_hash_results=dg_hash_results,
+            )
+
         # --- (c) DS -> CSCA chain -----------------------------------------
         if not self._csca_certs:
             # No trust anchors configured → we cannot assert authenticity.
@@ -283,12 +310,28 @@ class EmrtdPassiveAuthService:
                 sod_hash_algorithm=sod_hash_algorithm,
                 dg_hash_results=dg_hash_results,
             )
-        csca_matched = self._ds_chains_to_csca(ds_cert)
-        if not csca_matched:
+        matched_csca = self._ds_chains_to_csca(ds_cert)
+        if matched_csca is None:
             return PassiveAuthResult(
                 is_authentic=False,
                 reason="Document Signer certificate does not chain to any trusted CSCA root.",
                 reason_code=ReasonCode.DS_UNTRUSTED,
+                ds_subject=ds_subject,
+                ds_serial=ds_serial,
+                sod_hash_algorithm=sod_hash_algorithm,
+                dg_hash_results=dg_hash_results,
+            )
+
+        # The trusted root the DS chains to must itself be in-validity. An
+        # expired CSCA anchor can no longer vouch for the document signer.
+        if not _cert_within_validity(matched_csca, now):
+            return PassiveAuthResult(
+                is_authentic=False,
+                reason=(
+                    "The CSCA root the Document Signer chains to is outside its "
+                    f"validity period ({_validity_window_str(matched_csca)})."
+                ),
+                reason_code=ReasonCode.CSCA_CERT_EXPIRED,
                 ds_subject=ds_subject,
                 ds_serial=ds_serial,
                 sod_hash_algorithm=sod_hash_algorithm,
@@ -437,20 +480,29 @@ class EmrtdPassiveAuthService:
         except InvalidSignature:
             return False
 
-    def _ds_chains_to_csca(self, ds_cert: CryptoCertificate) -> bool:
-        """True if the DS cert's signature verifies under a trusted CSCA key.
+    @staticmethod
+    def _now() -> datetime.datetime:
+        """Current UTC instant (timezone-aware); seam for deterministic tests."""
+        return datetime.datetime.now(datetime.timezone.utc)
+
+    def _ds_chains_to_csca(
+        self, ds_cert: CryptoCertificate
+    ) -> Optional[CryptoCertificate]:
+        """Return the trusted CSCA the DS cert chains to, else ``None``.
 
         eMRTD chains are short (DS signed directly by a CSCA root), so a direct
         issuer-match + signature check is sufficient and avoids pulling in a
         full path-validation engine. We match candidate CSCAs by subject==issuer
-        then cryptographically verify the DS signature under the CSCA key.
+        then cryptographically verify the DS signature under the CSCA key. The
+        matched anchor is RETURNED (not just a bool) so the caller can in turn
+        enforce the CSCA's own validity period.
         """
         for csca in self._csca_certs:
             if csca.subject != ds_cert.issuer:
                 continue
             if _cert_signed_by(ds_cert, csca):
-                return True
-        return False
+                return csca
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -462,6 +514,36 @@ def _constant_time_eq(a: bytes, b: bytes) -> bool:
     import hmac
 
     return hmac.compare_digest(a, b)
+
+
+def _cert_bounds(
+    cert: CryptoCertificate,
+) -> tuple[datetime.datetime, datetime.datetime]:
+    """Return the cert's (not_before, not_after) as timezone-aware UTC datetimes.
+
+    Prefers the timezone-aware ``*_utc`` accessors (cryptography >= 42); falls
+    back to the deprecated naive ones (assumed UTC, per X.509) on older builds.
+    """
+    try:
+        not_before = cert.not_valid_before_utc
+        not_after = cert.not_valid_after_utc
+    except AttributeError:  # pragma: no cover - legacy cryptography
+        not_before = cert.not_valid_before.replace(tzinfo=datetime.timezone.utc)
+        not_after = cert.not_valid_after.replace(tzinfo=datetime.timezone.utc)
+    return not_before, not_after
+
+
+def _cert_within_validity(cert: CryptoCertificate, now: datetime.datetime) -> bool:
+    """True iff ``now`` is within the cert's [not_before, not_after] window."""
+    not_before, not_after = _cert_bounds(cert)
+    return not_before <= now <= not_after
+
+
+def _validity_window_str(cert: CryptoCertificate) -> str:
+    not_before, not_after = _cert_bounds(cert)
+    return (
+        f"not_before={not_before.isoformat()}, not_after={not_after.isoformat()}"
+    )
 
 
 def _as_octet_bytes(value) -> bytes:

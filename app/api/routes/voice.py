@@ -37,6 +37,27 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Voice"])
 
+
+def _l2_normalize(vec: np.ndarray) -> np.ndarray:
+    """Return ``vec`` scaled to unit L2 norm (zero-norm vectors pass through).
+
+    P1-10: the default enroll path persists the centroid as ``AVG(embedding)``
+    (see ``PgVectorVoiceRepository.save``). Averaging unit-norm speaker
+    embeddings yields a vector whose norm is **< 1** and shrinks as more
+    (slightly divergent) enrollments are accumulated. A raw ``np.dot`` against
+    such a centroid is therefore NOT a cosine similarity — it under-reports
+    proportionally to ``||centroid||``, so genuine users get false-rejected as
+    their enrollment count grows (≈0.71 @2 → ≈0.47 @5 enrollments). Normalising
+    both operands to unit length before the dot product makes the result a true
+    cosine similarity that is invariant to the number of enrollments, without
+    touching the accept threshold.
+    """
+    norm = float(np.linalg.norm(vec))
+    if norm == 0.0:
+        return vec
+    return vec / norm
+
+
 # -- Request / Response schemas ------------------------------------------------
 
 
@@ -230,8 +251,15 @@ async def verify_voice(request: VoiceRequest) -> BiometricResponse:
                 confidence=0.0,
             )
 
-        # Cosine similarity (both vectors are already L2-normalized)
-        similarity = float(np.dot(probe_embedding, enrolled_embedding))
+        # Cosine similarity. P1-10: the stored centroid (default enroll path) is
+        # AVG(embedding) and is NOT unit-norm, so a raw dot product decays with
+        # enrollment count. L2-normalize BOTH operands here so the result is a
+        # true cosine similarity regardless of how many samples were enrolled.
+        # (The probe is already unit-norm from the embedder; normalizing it too
+        # is a harmless no-op and keeps the path robust to any future change.)
+        unit_probe = _l2_normalize(probe_embedding)
+        unit_centroid = _l2_normalize(enrolled_embedding)
+        similarity = float(np.dot(unit_probe, unit_centroid))
         # Clamp to [0, 1]
         similarity = max(0.0, min(1.0, similarity))
 
