@@ -19,7 +19,10 @@ from app.domain.exceptions.enrollment_errors import (
     InvalidImageCountError,
     MLModelTimeoutError,
 )
-from app.domain.exceptions.face_errors import FaceNotDetectedError, PoorImageQualityError
+from app.domain.exceptions.face_errors import (
+    FaceNotDetectedError,
+    PoorImageQualityError,
+)
 from app.domain.exceptions.liveness_errors import LivenessCheckFailedError
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
@@ -28,6 +31,22 @@ from app.domain.interfaces.quality_assessor import IQualityAssessor
 from app.domain.services.embedding_fusion_service import EmbeddingFusionService
 
 logger = logging.getLogger(__name__)
+
+# Per-frame failures that are SAFE to skip-and-continue during multi-image
+# enrollment: they mean "this one frame isn't usable", NOT "this is an
+# attack". Skipping a poor-quality frame and continuing toward
+# MULTI_IMAGE_MIN_IMAGES mirrors how a human retake works and removes the
+# asymmetric rejection where one 40-59-scoring frame aborted the whole batch.
+# FaceNotDetected is normally absorbed earlier by the full-image fallback;
+# it is listed here only as a defensive belt-and-braces for any path that
+# re-raises it per-frame.
+#
+# SECURITY: liveness (LivenessCheckFailedError) and anti-spoof
+# (SpoofDetectedError) failures are DELIBERATELY excluded — a non-live /
+# spoofed frame MUST fail the whole enrollment fail-closed, never be
+# silently skipped. Model timeouts (MLModelTimeoutError), MultipleFaces and
+# any unexpected error also remain fatal.
+_SKIPPABLE_FRAME_ERRORS = (PoorImageQualityError, FaceNotDetectedError)
 
 
 class EnrollMultiImageUseCase:
@@ -111,11 +130,25 @@ class EnrollMultiImageUseCase:
 
         Raises:
             InvalidImageCountError: When number of images is not 2-5
-            FaceNotDetectedError: When no face is found in an image
-            MultipleFacesError: When multiple faces are found in an image
-            PoorImageQualityError: When image quality is below threshold
+            InsufficientImagesError: When too many frames were skipped on the
+                per-frame quality gate to reach ``MULTI_IMAGE_MIN_IMAGES``
+                usable frames (the user should retry with clearer photos).
+            LivenessCheckFailedError: When any frame fails the server-side
+                passive liveness check — FATAL, aborts the whole batch
+                (fail-closed; a non-live/spoofed frame is never skipped).
+            SpoofDetectedError: When anti-spoof flags a frame — FATAL (as above).
+            MultipleFacesError: When multiple faces are found in a frame — FATAL.
+            MLModelTimeoutError: When an ML model operation times out — FATAL.
             FusionError: When embedding fusion fails
             RepositoryError: When save to repository fails
+
+        Note:
+            A frame that fails ONLY the per-frame QUALITY gate
+            (``PoorImageQualityError`` / defensively ``FaceNotDetectedError``) is
+            SKIPPED — logged, not added to the fusion set — and the loop
+            continues toward ``MULTI_IMAGE_MIN_IMAGES``. One weak photo no longer
+            aborts an otherwise-good multi-image enrollment. Security-relevant
+            failures (liveness, anti-spoof) still abort fail-closed.
         """
         logger.info(
             f"Starting multi-image enrollment: user_id={user_id}, "
@@ -263,7 +296,32 @@ class EnrollMultiImageUseCase:
                 embeddings.append(embedding_vector)
                 quality_scores.append(quality.score)
 
+            except _SKIPPABLE_FRAME_ERRORS as e:
+                # SKIP-AND-CONTINUE: a frame that fails ONLY the per-frame quality
+                # gate (or, defensively, face-not-detected) is dropped from the
+                # fusion set and we move on to the next frame. We do NOT abort the
+                # whole batch — one weak photo out of several should not fail an
+                # otherwise-good enrollment. After the loop we check that enough
+                # good frames survived (>= min_images), raising InsufficientImages
+                # otherwise. Liveness/spoof/timeout/unexpected errors do NOT match
+                # this tuple and fall through to the fatal handler below.
+                error_code = getattr(e, "error_code", type(e).__name__)
+                logger.warning(
+                    "  Image %d SKIPPED (%s): %s — continuing toward %d good frame(s)",
+                    i,
+                    error_code,
+                    str(e),
+                    min_images,
+                )
+                # Note: deliberately do NOT mark_failed / clear_submissions here —
+                # the surviving good frames stay in the session for fusion.
+                continue
+
             except Exception as e:
+                # FATAL: liveness failure, anti-spoof / SpoofDetected, ML timeout,
+                # MultipleFaces, or any unexpected error aborts the entire batch
+                # fail-closed (security-preserving). This is the same behaviour as
+                # before for these error types.
                 logger.error(f"Failed to process image {i}: {str(e)}")
                 session.mark_failed()
 
@@ -284,11 +342,38 @@ class EnrollMultiImageUseCase:
                 if face_region is not None:
                     del face_region
 
-        # Step 4: Verify we have enough images
+        # Step 4: Verify enough GOOD frames survived the per-frame quality gate.
+        # Quality-failing frames were skipped (not added), so the submission count
+        # may be below len(image_paths). If too many were skipped to reach
+        # min_images, tell the caller to retry with better images.
+        accepted = session.get_submission_count()
+        skipped = len(image_paths) - accepted
+        if skipped:
+            logger.info(
+                "Multi-image enrollment: %d/%d frame(s) accepted, %d skipped on "
+                "quality (min required=%d)",
+                accepted,
+                len(image_paths),
+                skipped,
+                session.min_images,
+            )
         if not session.is_ready_for_fusion():
+            logger.warning(
+                "Multi-image enrollment for user_id=%s has only %d usable frame(s) "
+                "after skipping %d poor-quality frame(s); minimum is %d",
+                user_id,
+                accepted,
+                skipped,
+                session.min_images,
+            )
+            session.mark_failed()
+            # Release any partial state before bailing.
+            session.clear_submissions()
+            embeddings.clear()
+            quality_scores.clear()
             raise InsufficientImagesError(
                 session_id=session.session_id,
-                current=session.get_submission_count(),
+                current=accepted,
                 minimum=session.min_images,
             )
 
