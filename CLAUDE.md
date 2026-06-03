@@ -194,6 +194,21 @@ the gated files run.
   Same `ENROLL_LIVENESS_ENABLED` flag (default `True`); when the use case is
   built without a checker (legacy/unit-test callers) the gate is skipped.
   CPU-only.
+- **Multi-image enroll quality-floor + per-frame skip (fix #7, 2026-06-03)**:
+  two related hardenings in `enroll_multi_image.py` / `config.py`. (1) The
+  per-frame quality floor `MULTI_IMAGE_MIN_QUALITY_PER_IMAGE` default dropped
+  **60.0 → 40.0** to match the single-image `QUALITY_THRESHOLD` (=40 in prod),
+  removing the asymmetry where a 40-59-scoring frame passed single `/enroll`
+  but was rejected per-frame on `/enroll/multi` (env-overridable). (2) A frame
+  that fails ONLY the per-frame **quality** gate (`PoorImageQualityError`, or
+  defensively `FaceNotDetectedError`) is now **skipped** — logged, not fused —
+  and the loop continues toward `MULTI_IMAGE_MIN_IMAGES`; one weak photo no
+  longer aborts the whole batch. If too many frames are skipped to reach the
+  minimum, `InsufficientImagesError` is raised (HTTP-mapped) so the user is
+  told to retry. **Security preserved**: liveness (`LivenessCheckFailedError`)
+  and anti-spoof (`SpoofDetectedError`) failures, ML timeouts, MultipleFaces,
+  and any unexpected error stay **FATAL** (abort fail-closed) — only
+  quality-class failures are skippable (see `_SKIPPABLE_FRAME_ERRORS`).
 - **Voice**: enroll, verify, search, delete — Resemblyzer 256-dim speaker embeddings, centroid-based
 - Routes: `voice.py`, repo: `pgvector_voice_repository.py`, embedder: `speaker_embedder.py`
 - **Voice verify centroid normalization (P1-10, 2026-06-02)**: the default enroll

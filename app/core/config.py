@@ -516,7 +516,16 @@ class Settings(BaseSettings):
         default="weighted_average"
     )
     MULTI_IMAGE_NORMALIZATION: Literal["l2", "none"] = Field(default="l2")
-    MULTI_IMAGE_MIN_QUALITY_PER_IMAGE: float = Field(default=60.0, ge=0.0, le=100.0)
+    # Per-frame quality floor for the multi-image enrollment path.
+    # Aligned (2026-06-03) with the single-image floor so the two enroll paths
+    # reject identically: the deployed single-image `/enroll` floor is
+    # ``QUALITY_THRESHOLD`` (=40 in prod `.env.prod`). Previously this defaulted
+    # to 60.0, so a frame scoring 40-59 passed single `/enroll` but was rejected
+    # per-frame on `/enroll/multi` — an asymmetric rejection. Frames below this
+    # floor are now SKIPPED (not added to the fusion set) and the enrollment
+    # continues toward MULTI_IMAGE_MIN_IMAGES; only liveness/anti-spoof failures
+    # are fatal. Env-overridable. See enroll_multi_image.py.
+    MULTI_IMAGE_MIN_QUALITY_PER_IMAGE: float = Field(default=40.0, ge=0.0, le=100.0)
 
     # Embedding Cache Settings
     EMBEDDING_CACHE_ENABLED: bool = Field(default=True, description="Enable LRU cache for embedding lookups")
