@@ -1,14 +1,56 @@
 """Verification API schemas."""
 
-from typing import Any, Optional
+from typing import Any, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+# Facenet512 embedding dimensionality. The precomputed-embedding routes accept
+# ONLY a full-length vector — a wrong length is a hard 422, never a silent
+# truncate/pad.
+EMBEDDING_DIMENSION = 512
 
 
 class VerificationRequest(BaseModel):
     """Face verification request (not used with multipart/form-data, kept for reference)."""
 
     user_id: str = Field(..., description="User identifier to verify against")
+
+
+class EmbeddingVerifyRequest(BaseModel):
+    """Request body for ``POST /verify-embedding`` (client-side embedding).
+
+    The client (browser/device) has ALREADY computed the Facenet512 embedding
+    locally — no image leaves the device — and submits the raw 512-vector. The
+    route runs ONLY the pgvector match + threshold/decision logic against the
+    user's stored template; it SKIPS detection, quality, liveness and the
+    server-side Facenet512 forward pass.
+
+    SECURITY: because there is NO image, this path performs NO liveness /
+    anti-spoof. It MUST be paired with a liveness factor (puzzle / passive)
+    enforced at the Identity Core layer (sub-projects B/C) before it is trusted
+    as a login factor.
+    """
+
+    tenant_id: str = Field(..., description="Tenant identifier for multi-tenancy")
+    user_id: str = Field(..., description="User identifier to verify against")
+    embedding: List[float] = Field(
+        ...,
+        description=(
+            f"Precomputed {EMBEDDING_DIMENSION}-d Facenet512 embedding, "
+            "L2-normalized by the client. Must be exactly "
+            f"{EMBEDDING_DIMENSION} floats."
+        ),
+    )
+
+    @field_validator("embedding")
+    @classmethod
+    def _validate_embedding_length(cls, value: List[float]) -> List[float]:
+        if len(value) != EMBEDDING_DIMENSION:
+            raise ValueError(
+                f"embedding must have exactly {EMBEDDING_DIMENSION} elements, "
+                f"got {len(value)}"
+            )
+        return value
 
 
 class VerificationResponse(BaseModel):
