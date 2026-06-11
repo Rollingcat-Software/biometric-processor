@@ -13,6 +13,7 @@ import numpy as np
 from app.application.services.face_signal_metrics import extract_face_signal_metrics
 from app.core.config import get_settings
 from app.domain.entities.liveness_result import LivenessResult
+from app.domain.exceptions.liveness_errors import LivenessModelLoadError
 from app.domain.interfaces.face_detector import IFaceDetector
 from app.domain.interfaces.landmark_detector import ILandmarkDetector
 from app.domain.interfaces.liveness_detector import ILivenessDetector
@@ -110,7 +111,14 @@ class CheckLivenessUseCase:
         # Step 2: Detect face (to ensure there's a face before liveness check)
         logger.debug("Step 1/2: Detecting face...")
         t0 = time.perf_counter()
-        detection = await self._detector.detect(image)
+        try:
+            detection = await self._detector.detect(image)
+        except LivenessModelLoadError as exc:
+            # 2026-05-12 compound liveness bug: the DeepFace anti-spoof model
+            # (MiniFASNet) failed to load. Apply the configured policy
+            # (LIVENESS_ANTISPOOF_MODEL_MISSING_POLICY) instead of silently
+            # tagging every user as a spoof.
+            return self._handle_antispoof_model_missing(exc)
         detect_ms = (time.perf_counter() - t0) * 1000
 
         logger.debug(f"Face detected with confidence: {detection.confidence:.2f}")
@@ -203,11 +211,29 @@ class CheckLivenessUseCase:
                     DEEPFACE_VETO_CONFIDENCE_THRESHOLD,
                 )
 
+        # Carry through any diagnostic context from the detector (e.g.
+        # spoof-fallback exception-path metadata under
+        # FaceDetectionResult.details). This lets the use case and the
+        # route layer reason about WHY antispoof_label is "spoof" — real
+        # verdict vs exception-path fallback.
+        detector_details: dict[str, Any] = dict(detection.details or {})
+
         if apply_veto:
+            # Reason category lets the route surface an operator-readable
+            # explanation. Today the only veto trigger is the conservative
+            # policy on a DeepFace spoof label, but the detector may also
+            # have flagged this as an exception-path fallback (which is
+            # less reliable than a clean in-band verdict).
+            veto_reason = "deepface_spoof_label"
+            if detector_details.get("fallback_triggered"):
+                veto_reason = (
+                    f"deepface_spoof_label_via_{detector_details.get('fallback_reason', 'fallback')}"
+                )
             logger.warning(
-                "DeepFace anti-spoof veto applied (policy=%s): "
+                "DeepFace anti-spoof veto applied (policy=%s, reason=%s): "
                 "antispoof_score=%.3f, liveness_confidence=%.3f",
                 verdict_policy,
+                veto_reason,
                 antispoof_score if antispoof_score is not None else 0.0,
                 liveness_result.confidence,
             )
@@ -218,8 +244,11 @@ class CheckLivenessUseCase:
                 "antispoof_score": antispoof_score,
                 "antispoof_label": antispoof_label,
                 "deepface_veto_applied": True,
+                "deepface_veto_reason": veto_reason,
                 "verdict_policy": verdict_policy,
                 "verdict_contradiction": contradiction,
+                "detector_fallback_triggered": bool(detector_details.get("fallback_triggered", False)),
+                "detector_fallback_reason": detector_details.get("fallback_reason"),
             }
             liveness_result = replace(
                 liveness_result,
@@ -236,8 +265,11 @@ class CheckLivenessUseCase:
                     "antispoof_score": antispoof_score,
                     "antispoof_label": antispoof_label,
                     "deepface_veto_applied": False,
+                    "deepface_veto_reason": None,
                     "verdict_policy": verdict_policy,
                     "verdict_contradiction": contradiction,
+                    "detector_fallback_triggered": bool(detector_details.get("fallback_triggered", False)),
+                    "detector_fallback_reason": detector_details.get("fallback_reason"),
                 },
             )
 
@@ -380,6 +412,76 @@ class CheckLivenessUseCase:
         )
 
         return liveness_result
+
+    # ------------------------------------------------------------------
+    # Anti-spoof model-missing policy (2026-05-12)
+    # ------------------------------------------------------------------
+
+    def _handle_antispoof_model_missing(
+        self, exc: LivenessModelLoadError
+    ) -> LivenessResult:
+        """Apply ``LIVENESS_ANTISPOOF_MODEL_MISSING_POLICY``.
+
+        Three behaviours:
+            - ``"hard_error"`` (default): re-raise so the operator sees a 5xx
+              on the first request. This is the loud-and-correct behaviour:
+              the same failure used to be silently encoded as
+              ``antispoof_label="spoof"`` for every user.
+            - ``"fail_closed"``: return ``is_live=False`` with reason
+              ``"antispoof_model_missing"``. Safer for end-user-visible
+              gates but masks the operational issue.
+            - ``"fail_open"``: return ``is_live=True`` with a warning log.
+              Use only when verification is a soft gate AND an external
+              monitor catches the warning.
+        """
+        policy = settings.LIVENESS_ANTISPOOF_MODEL_MISSING_POLICY
+        details: dict[str, Any] = {
+            "reason": "antispoof_model_missing",
+            "antispoof_model_missing": True,
+            "antispoof_model_name": exc.model_name,
+            "antispoof_model_target_path": exc.target_path,
+            "antispoof_model_cause": exc.cause,
+            "antispoof_model_missing_policy": policy,
+        }
+
+        if policy == "hard_error":
+            logger.error(
+                "Anti-spoof model unavailable; LIVENESS_ANTISPOOF_MODEL_MISSING_POLICY="
+                "'hard_error' — re-raising. Operator action required: %s",
+                exc.message,
+            )
+            raise exc
+
+        if policy == "fail_open":
+            logger.warning(
+                "Anti-spoof model unavailable; LIVENESS_ANTISPOOF_MODEL_MISSING_POLICY="
+                "'fail_open' — accepting user despite missing anti-spoof. "
+                "Operator action recommended: %s",
+                exc.message,
+            )
+            return LivenessResult(
+                is_live=True,
+                score=0.0,
+                challenge="passive",
+                challenge_completed=False,
+                confidence=0.0,
+                details=details,
+            )
+
+        # Default fall-through: "fail_closed"
+        logger.warning(
+            "Anti-spoof model unavailable; LIVENESS_ANTISPOOF_MODEL_MISSING_POLICY="
+            "'fail_closed' — rejecting user as not-live. %s",
+            exc.message,
+        )
+        return LivenessResult(
+            is_live=False,
+            score=0.0,
+            challenge="passive",
+            challenge_completed=False,
+            confidence=0.0,
+            details=details,
+        )
 
 
 def _build_temporal_signal_summary(details: dict[str, Any]) -> dict[str, Any]:
