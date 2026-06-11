@@ -375,9 +375,9 @@ class BiometricDemo:
 
         # ML Components
         self._deepface = None
-        self._mp_face_mesh = None  # Legacy Solutions API
-        self._mp_face_landmarker = None  # New Tasks API
-        self._mp_use_tasks_api = False
+        # 2026-05-12: legacy Solutions API removed from mediapipe 0.10.35;
+        # we keep only the Tasks-API path.
+        self._mp_face_landmarker = None
         self._mediapipe_loaded = False
         self._quality_assessor = SimpleQualityAssessor()
         self._liveness_detector = SimpleLivenessDetector()
@@ -465,55 +465,34 @@ class BiometricDemo:
 
         print("[2/3] Loading MediaPipe (468 landmarks)...")
         self._mediapipe_loaded = False
-        self._mp_face_mesh = None
-        self._mp_use_tasks_api = False
 
         try:
-            import mediapipe as mp
+            from mediapipe.tasks import python as mp_tasks
+            from mediapipe.tasks.python import vision
 
-            # Try new Tasks API first (MediaPipe 0.10.14+)
-            if hasattr(mp, 'tasks'):
-                try:
-                    from mediapipe.tasks import python as mp_tasks
-                    from mediapipe.tasks.python import vision
-
-                    # Download model if needed
-                    import urllib.request
-                    import os
-                    model_path = "face_landmarker.task"
-                    if not os.path.exists(model_path):
-                        print("      Downloading face landmark model...")
-                        url = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
-                        urllib.request.urlretrieve(url, model_path)
-
-                    base_options = mp_tasks.BaseOptions(model_asset_path=model_path)
-                    options = vision.FaceLandmarkerOptions(
-                        base_options=base_options,
-                        output_face_blendshapes=False,
-                        output_facial_transformation_matrixes=False,
-                        num_faces=5
-                    )
-                    self._mp_face_landmarker = vision.FaceLandmarker.create_from_options(options)
-                    self._mp_use_tasks_api = True
-                    self._mediapipe_loaded = True
-                    print("      MediaPipe Tasks API ready!")
-                except Exception as e:
-                    print(f"      Tasks API failed: {e}")
-
-            # Fall back to legacy solutions API
-            if not self._mediapipe_loaded and hasattr(mp, 'solutions'):
-                self._mp_face_mesh = mp.solutions.face_mesh.FaceMesh(
-                    static_image_mode=False,
-                    max_num_faces=5,
-                    refine_landmarks=True,
-                    min_detection_confidence=0.5,
-                    min_tracking_confidence=0.5
+            # Download model if needed
+            import urllib.request
+            import os
+            model_path = "face_landmarker.task"
+            if not os.path.exists(model_path):
+                print("      Downloading face landmark model...")
+                url = (
+                    "https://storage.googleapis.com/mediapipe-models/"
+                    "face_landmarker/face_landmarker/float16/latest/"
+                    "face_landmarker.task"
                 )
-                self._mediapipe_loaded = True
-                print("      MediaPipe Solutions API ready!")
+                urllib.request.urlretrieve(url, model_path)
 
-            if not self._mediapipe_loaded:
-                print("      MediaPipe: No compatible API found")
+            base_options = mp_tasks.BaseOptions(model_asset_path=model_path)
+            options = vision.FaceLandmarkerOptions(
+                base_options=base_options,
+                output_face_blendshapes=False,
+                output_facial_transformation_matrixes=False,
+                num_faces=5,
+            )
+            self._mp_face_landmarker = vision.FaceLandmarker.create_from_options(options)
+            self._mediapipe_loaded = True
+            print("      MediaPipe Tasks API ready!")
 
         except Exception as e:
             print(f"      MediaPipe unavailable: {e}")
@@ -716,8 +695,8 @@ class BiometricDemo:
         h, w = frame.shape[:2]
 
         try:
-            # Use Tasks API (MediaPipe 0.10.14+)
-            if self._mp_use_tasks_api and hasattr(self, '_mp_face_landmarker'):
+            # MediaPipe Tasks API (legacy Solutions API removed in 0.10.35).
+            if self._mp_face_landmarker is not None:
                 import mediapipe as mp
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
@@ -731,16 +710,6 @@ class BiometricDemo:
                         points = [(int(lm.x * w), int(lm.y * h)) for lm in face]
                         all_landmarks.append(points)
                     self._landmarks_cache = all_landmarks
-
-            # Use legacy Solutions API
-            elif self._mp_face_mesh is not None:
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                results = self._mp_face_mesh.process(rgb)
-                if not results.multi_face_landmarks:
-                    self._landmarks_cache = []
-                else:
-                    self._landmarks_cache = [[(int(lm.x * w), int(lm.y * h)) for lm in face.landmark]
-                                             for face in results.multi_face_landmarks]
 
             self._last_landmarks_time = current_time
 

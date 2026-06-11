@@ -71,8 +71,15 @@ def test_active_liveness_manager_prepares_light_challenge_on_start():
     assert challenge.metadata["ready_for_flash"] is False
 
 
-def test_active_liveness_manager_generates_verification_token_on_pass():
-    manager = ActiveLivenessManager(token_service=ActiveLivenessTokenService(ttl_seconds=60))
+def test_active_liveness_manager_generates_verification_token_on_pass(monkeypatch):
+    # The token service signs an HS256 JWT from settings.JWT_SECRET; CI does not
+    # export a JWT_SECRET, so without this the encode raises
+    # `jwt.exceptions.InvalidKeyError: HMAC key must not be empty`. Pin a
+    # deterministic test secret on the settings singleton so the test does not
+    # depend on ambient environment.
+    token_service = ActiveLivenessTokenService(ttl_seconds=60)
+    monkeypatch.setattr(token_service._settings, "JWT_SECRET", "test-secret-key-for-active-liveness-token", raising=False)
+    manager = ActiveLivenessManager(token_service=token_service)
 
     session = manager.create_session(
         ActiveLivenessConfig(

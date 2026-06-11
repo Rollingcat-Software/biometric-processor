@@ -8,6 +8,7 @@ from typing import List, Optional
 import cv2
 import numpy as np
 
+from app.application.use_cases.check_liveness import CheckLivenessUseCase
 from app.core.config import settings
 from app.domain.entities.enrollment_session import EnrollmentSession
 from app.domain.entities.face_embedding import FaceEmbedding
@@ -18,7 +19,11 @@ from app.domain.exceptions.enrollment_errors import (
     InvalidImageCountError,
     MLModelTimeoutError,
 )
-from app.domain.exceptions.face_errors import FaceNotDetectedError, PoorImageQualityError
+from app.domain.exceptions.face_errors import (
+    FaceNotDetectedError,
+    PoorImageQualityError,
+)
+from app.domain.exceptions.liveness_errors import LivenessCheckFailedError
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
 from app.domain.interfaces.face_detector import IFaceDetector
@@ -26,6 +31,22 @@ from app.domain.interfaces.quality_assessor import IQualityAssessor
 from app.domain.services.embedding_fusion_service import EmbeddingFusionService
 
 logger = logging.getLogger(__name__)
+
+# Per-frame failures that are SAFE to skip-and-continue during multi-image
+# enrollment: they mean "this one frame isn't usable", NOT "this is an
+# attack". Skipping a poor-quality frame and continuing toward
+# MULTI_IMAGE_MIN_IMAGES mirrors how a human retake works and removes the
+# asymmetric rejection where one 40-59-scoring frame aborted the whole batch.
+# FaceNotDetected is normally absorbed earlier by the full-image fallback;
+# it is listed here only as a defensive belt-and-braces for any path that
+# re-raises it per-frame.
+#
+# SECURITY: liveness (LivenessCheckFailedError) and anti-spoof
+# (SpoofDetectedError) failures are DELIBERATELY excluded — a non-live /
+# spoofed frame MUST fail the whole enrollment fail-closed, never be
+# silently skipped. Model timeouts (MLModelTimeoutError), MultipleFaces and
+# any unexpected error also remain fatal.
+_SKIPPABLE_FRAME_ERRORS = (PoorImageQualityError, FaceNotDetectedError)
 
 
 class EnrollMultiImageUseCase:
@@ -52,6 +73,7 @@ class EnrollMultiImageUseCase:
         quality_assessor: IQualityAssessor,
         repository: IEmbeddingRepository,
         fusion_service: Optional[EmbeddingFusionService] = None,
+        liveness_use_case: Optional[CheckLivenessUseCase] = None,
     ) -> None:
         """Initialize multi-image enrollment use case.
 
@@ -61,6 +83,17 @@ class EnrollMultiImageUseCase:
             quality_assessor: Quality assessor implementation
             repository: Embedding repository implementation
             fusion_service: Optional fusion service (creates default if None)
+            liveness_use_case: Optional server-authoritative passive liveness
+                check. When provided AND ``settings.ENROLL_LIVENESS_ENABLED`` is
+                True, EVERY submitted frame must pass liveness BEFORE its
+                embedding is fused — closing the documented gap where
+                ``/enroll/multi`` accepted photos/screen replays that
+                ``/enroll`` already rejects. Fail-closed: a single non-live
+                frame rejects the whole enrollment. Reuses the EXACT
+                ``CheckLivenessUseCase`` (UniFace MiniFASNet passive backend +
+                DeepFace anti-spoof veto per ``LIVENESS_VERDICT_POLICY``) that
+                single-image ``/enroll`` calls — one implementation, one model
+                singleton. CPU-only (no GPU).
         """
         self._detector = detector
         self._extractor = extractor
@@ -69,6 +102,7 @@ class EnrollMultiImageUseCase:
         self._fusion_service = fusion_service or EmbeddingFusionService(
             normalization_strategy=settings.MULTI_IMAGE_NORMALIZATION
         )
+        self._liveness_use_case = liveness_use_case
 
         logger.info("EnrollMultiImageUseCase initialized")
 
@@ -77,6 +111,7 @@ class EnrollMultiImageUseCase:
         user_id: str,
         image_paths: List[str],
         tenant_id: Optional[str] = None,
+        optimize: bool = False,
     ) -> MultiImageEnrollmentResult:
         """Execute multi-image face enrollment.
 
@@ -84,17 +119,36 @@ class EnrollMultiImageUseCase:
             user_id: Unique identifier for the user
             image_paths: List of paths to face image files (2-5 images)
             tenant_id: Optional tenant identifier for multi-tenancy
+            optimize: "Re-enroll & optimize" — when True, the fused template of
+                this batch is in turn fused into the user's existing stored
+                centroid (forwarded to the repository as ``fuse_with_existing``)
+                so re-enrolling improves the accumulated template across
+                sessions. Default False (normal enroll).
 
         Returns:
             MultiImageEnrollmentResult with fused template and quality details
 
         Raises:
             InvalidImageCountError: When number of images is not 2-5
-            FaceNotDetectedError: When no face is found in an image
-            MultipleFacesError: When multiple faces are found in an image
-            PoorImageQualityError: When image quality is below threshold
+            InsufficientImagesError: When too many frames were skipped on the
+                per-frame quality gate to reach ``MULTI_IMAGE_MIN_IMAGES``
+                usable frames (the user should retry with clearer photos).
+            LivenessCheckFailedError: When any frame fails the server-side
+                passive liveness check — FATAL, aborts the whole batch
+                (fail-closed; a non-live/spoofed frame is never skipped).
+            SpoofDetectedError: When anti-spoof flags a frame — FATAL (as above).
+            MultipleFacesError: When multiple faces are found in a frame — FATAL.
+            MLModelTimeoutError: When an ML model operation times out — FATAL.
             FusionError: When embedding fusion fails
             RepositoryError: When save to repository fails
+
+        Note:
+            A frame that fails ONLY the per-frame QUALITY gate
+            (``PoorImageQualityError`` / defensively ``FaceNotDetectedError``) is
+            SKIPPED — logged, not added to the fusion set — and the loop
+            continues toward ``MULTI_IMAGE_MIN_IMAGES``. One weak photo no longer
+            aborts an otherwise-good multi-image enrollment. Security-relevant
+            failures (liveness, anti-spoof) still abort fail-closed.
         """
         logger.info(
             f"Starting multi-image enrollment: user_id={user_id}, "
@@ -135,6 +189,42 @@ class EnrollMultiImageUseCase:
                 image = await asyncio.to_thread(cv2.imread, image_path)
                 if image is None:
                     raise ValueError(f"Failed to load image: {image_path}")
+
+                # ----------------------------------------------------------
+                # Liveness gate (fail-CLOSED) — close the documented
+                # enroll/verify asymmetry. Single-image /enroll already runs a
+                # server-authoritative passive liveness check before persisting
+                # an embedding; /enroll/multi historically ran NONE, so a photo
+                # or screen replay could be enrolled. We now run the SAME
+                # CheckLivenessUseCase (UniFace MiniFASNet passive + DeepFace
+                # anti-spoof veto) on EVERY frame BEFORE extracting/fusing its
+                # embedding. One non-live frame rejects the whole enrollment.
+                # Gated by ENROLL_LIVENESS_ENABLED (default ON); skipped only
+                # when the use case was constructed without a liveness checker
+                # (e.g. legacy callers / unit tests that don't exercise it).
+                # CPU-only — no GPU, ALLOW_HEAVY_ML stays false.
+                # ----------------------------------------------------------
+                if self._liveness_use_case is not None and settings.ENROLL_LIVENESS_ENABLED:
+                    logger.debug("  Step 0/3: Liveness check...")
+                    liveness_result = await self._liveness_use_case.execute(
+                        image_path=image_path
+                    )
+                    if not liveness_result.is_live:
+                        logger.warning(
+                            "  Image %d rejected — liveness check failed: "
+                            "score=%.2f (multi-image enrollment fail-closed)",
+                            i,
+                            liveness_result.score,
+                        )
+                        raise LivenessCheckFailedError(
+                            liveness_score=liveness_result.score,
+                            challenge=liveness_result.challenge,
+                        )
+                    logger.info(
+                        "  Image %d liveness check passed: score=%.2f",
+                        i,
+                        liveness_result.score,
+                    )
 
                 # Detect face with timeout
                 # For multi-enroll, side-angle faces (30°+) may fail OpenCV detection.
@@ -206,7 +296,32 @@ class EnrollMultiImageUseCase:
                 embeddings.append(embedding_vector)
                 quality_scores.append(quality.score)
 
+            except _SKIPPABLE_FRAME_ERRORS as e:
+                # SKIP-AND-CONTINUE: a frame that fails ONLY the per-frame quality
+                # gate (or, defensively, face-not-detected) is dropped from the
+                # fusion set and we move on to the next frame. We do NOT abort the
+                # whole batch — one weak photo out of several should not fail an
+                # otherwise-good enrollment. After the loop we check that enough
+                # good frames survived (>= min_images), raising InsufficientImages
+                # otherwise. Liveness/spoof/timeout/unexpected errors do NOT match
+                # this tuple and fall through to the fatal handler below.
+                error_code = getattr(e, "error_code", type(e).__name__)
+                logger.warning(
+                    "  Image %d SKIPPED (%s): %s — continuing toward %d good frame(s)",
+                    i,
+                    error_code,
+                    str(e),
+                    min_images,
+                )
+                # Note: deliberately do NOT mark_failed / clear_submissions here —
+                # the surviving good frames stay in the session for fusion.
+                continue
+
             except Exception as e:
+                # FATAL: liveness failure, anti-spoof / SpoofDetected, ML timeout,
+                # MultipleFaces, or any unexpected error aborts the entire batch
+                # fail-closed (security-preserving). This is the same behaviour as
+                # before for these error types.
                 logger.error(f"Failed to process image {i}: {str(e)}")
                 session.mark_failed()
 
@@ -227,11 +342,38 @@ class EnrollMultiImageUseCase:
                 if face_region is not None:
                     del face_region
 
-        # Step 4: Verify we have enough images
+        # Step 4: Verify enough GOOD frames survived the per-frame quality gate.
+        # Quality-failing frames were skipped (not added), so the submission count
+        # may be below len(image_paths). If too many were skipped to reach
+        # min_images, tell the caller to retry with better images.
+        accepted = session.get_submission_count()
+        skipped = len(image_paths) - accepted
+        if skipped:
+            logger.info(
+                "Multi-image enrollment: %d/%d frame(s) accepted, %d skipped on "
+                "quality (min required=%d)",
+                accepted,
+                len(image_paths),
+                skipped,
+                session.min_images,
+            )
         if not session.is_ready_for_fusion():
+            logger.warning(
+                "Multi-image enrollment for user_id=%s has only %d usable frame(s) "
+                "after skipping %d poor-quality frame(s); minimum is %d",
+                user_id,
+                accepted,
+                skipped,
+                session.min_images,
+            )
+            session.mark_failed()
+            # Release any partial state before bailing.
+            session.clear_submissions()
+            embeddings.clear()
+            quality_scores.clear()
             raise InsufficientImagesError(
                 session_id=session.session_id,
-                current=session.get_submission_count(),
+                current=accepted,
                 minimum=session.min_images,
             )
 
@@ -267,6 +409,7 @@ class EnrollMultiImageUseCase:
             embedding=fused_embedding,
             quality_score=fused_quality,
             tenant_id=tenant_id,
+            fuse_with_existing=optimize,
         )
 
         # Step 7: Mark session as completed

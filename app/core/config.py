@@ -177,6 +177,13 @@ class Settings(BaseSettings):
     )
 
     # Thresholds
+    # Comparator semantics: ``verified = distance < threshold``.
+    # → HIGHER threshold = MORE LENIENT (allows greater distance ⇒ still a match).
+    # → LOWER threshold  = STRICTER (only very close distances accepted).
+    # This is the cosine-distance convention used in
+    # ``verify_face.py`` (line 181). Do not flip the comparator without also
+    # flipping every threshold pin in env.example / .env.prod, otherwise the
+    # FAR/FRR will silently invert.
     VERIFICATION_THRESHOLD: float = Field(default=0.45, ge=0.0, le=1.0)
     LIVENESS_THRESHOLD: float = Field(default=70.0, ge=0.0, le=100.0)
     QUALITY_THRESHOLD: float = Field(default=70.0, ge=0.0, le=100.0)
@@ -184,6 +191,12 @@ class Settings(BaseSettings):
     # Adaptive verification threshold for aged embeddings (Faz 3-1)
     # When the stored embedding is older than VERIFICATION_THRESHOLD_AGED_YEARS,
     # a more lenient threshold is used to account for natural appearance changes.
+    # Bug fix 2026-05-12: previously default=0.38 which is LOWER than the
+    # standard 0.45 — under ``distance < threshold`` semantics that made aged
+    # users *stricter*, the opposite of intent (higher FRR). The default is
+    # now 0.55, raising the allowed distance ceiling so aged users match more
+    # easily, while staying well below the Facenet cosine-distance ceiling
+    # of ~0.6 (the model's known operating point for cosine distance).
     VERIFICATION_THRESHOLD_AGED_YEARS: float = Field(
         default=2.0,
         ge=0.0,
@@ -193,15 +206,39 @@ class Settings(BaseSettings):
         ),
     )
     VERIFICATION_THRESHOLD_AGED: float = Field(
-        default=0.38,
+        default=0.55,
         ge=0.0,
         le=1.0,
         description=(
             "Cosine-distance threshold applied when embedding age exceeds "
-            "VERIFICATION_THRESHOLD_AGED_YEARS. Lower than the default (0.45) "
-            "to be more lenient with aged embeddings."
+            "VERIFICATION_THRESHOLD_AGED_YEARS. HIGHER than the default (0.45) "
+            "because the comparator is ``distance < threshold`` — a larger "
+            "allowed-distance ceiling means more lenient matching for aged "
+            "embeddings. Must remain below the Facenet cosine-distance "
+            "ceiling (~0.6) to keep FAR under control."
         ),
     )
+
+    @model_validator(mode="after")
+    def _validate_aged_threshold_lenience(self) -> "Settings":
+        """Catch the pre-2026-05-12 inversion regression at config-load time.
+
+        ``VERIFICATION_THRESHOLD_AGED`` must be >= ``VERIFICATION_THRESHOLD``
+        because the comparator is ``distance < threshold`` — a stricter
+        ceiling for aged embeddings is meaningless (it would force aged users
+        to match the standard with *additional* margin, the opposite of the
+        adaptive feature's purpose).
+        """
+        if self.VERIFICATION_THRESHOLD_AGED < self.VERIFICATION_THRESHOLD:
+            raise ValueError(
+                "Configuration inversion detected: VERIFICATION_THRESHOLD_AGED "
+                f"({self.VERIFICATION_THRESHOLD_AGED}) must be >= "
+                f"VERIFICATION_THRESHOLD ({self.VERIFICATION_THRESHOLD}) "
+                "under the ``distance < threshold`` comparator. A lower aged "
+                "threshold makes aged users *stricter*, not more lenient. "
+                "See app/application/use_cases/verify_face.py:181."
+            )
+        return self
 
     # ML Model Timeouts (prevents hung requests)
     ML_MODEL_TIMEOUT_SECONDS: int = Field(default=30, ge=5, le=120, description="Timeout for ML model operations")
@@ -503,7 +540,16 @@ class Settings(BaseSettings):
         default="weighted_average"
     )
     MULTI_IMAGE_NORMALIZATION: Literal["l2", "none"] = Field(default="l2")
-    MULTI_IMAGE_MIN_QUALITY_PER_IMAGE: float = Field(default=60.0, ge=0.0, le=100.0)
+    # Per-frame quality floor for the multi-image enrollment path.
+    # Aligned (2026-06-03) with the single-image floor so the two enroll paths
+    # reject identically: the deployed single-image `/enroll` floor is
+    # ``QUALITY_THRESHOLD`` (=40 in prod `.env.prod`). Previously this defaulted
+    # to 60.0, so a frame scoring 40-59 passed single `/enroll` but was rejected
+    # per-frame on `/enroll/multi` — an asymmetric rejection. Frames below this
+    # floor are now SKIPPED (not added to the fusion set) and the enrollment
+    # continues toward MULTI_IMAGE_MIN_IMAGES; only liveness/anti-spoof failures
+    # are fatal. Env-overridable. See enroll_multi_image.py.
+    MULTI_IMAGE_MIN_QUALITY_PER_IMAGE: float = Field(default=40.0, ge=0.0, le=100.0)
 
     # Embedding Cache Settings
     EMBEDDING_CACHE_ENABLED: bool = Field(default=True, description="Enable LRU cache for embedding lookups")
@@ -702,6 +748,74 @@ class Settings(BaseSettings):
             "toggle."
         ),
     )
+    # Bug 1 (2026-05-12) — enforcement flag for `recommended_action="block"`.
+    # Before this, the assembler's block verdict was attached to the
+    # response but the route still returned 200/verified=True (advisory
+    # only). Default is now ON: any "block" verdict from the assembler or
+    # any closed-eye signal from the EAR check yields a 403 with a
+    # structured reason. Flip to false for canary/observation rollout.
+    ANTISPOOF_BLOCK_ENFORCE: bool = Field(
+        default=True,
+        description=(
+            "When True, AntispoofPipelineAssembler 'recommended_action=block' "
+            "and EAR closed-eye detection cause the /verify route to return "
+            "HTTP 403 (was advisory-only prior to 2026-05-12)."
+        ),
+    )
+    # Bug 2 (2026-05-12) — single-frame EAR liveness signal flag.
+    # When True, /verify runs MediaPipe FaceLandmarker on the uploaded
+    # frame and computes Eye Aspect Ratio via the spoof-detector library
+    # (calibration EAR_THRESHOLD=0.18, paper-P0 2026-05-11). If both eyes
+    # are clearly closed, the request is vetoed alongside the assembler.
+    # Default OFF until ops deploys the face_landmarker.task asset to the
+    # container — the helper fails-soft to None when the model is missing.
+    ANTISPOOF_EAR_VETO_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enable the single-frame EAR (Eye Aspect Ratio) closed-eye veto "
+            "on /verify. Requires FACE_LANDMARKER_MODEL_PATH to point at a "
+            "deployed face_landmarker.task asset. Fails-soft to no-op when "
+            "MediaPipe or the model is unavailable."
+        ),
+    )
+    # Liveness asymmetry fix (2026-05-29) — close the documented enroll/verify
+    # gap ("Faz 2'de düzeltilecek"). When True, the face /enroll path runs the
+    # SAME server-authoritative liveness + anti-spoof gate that /verify runs
+    # BEFORE persisting the embedding, so a photo/screen spoof cannot be
+    # enrolled. Default is ON for security: enrollment is at least as strict as
+    # verification. Set to False only for controlled migration/observation. The
+    # gate reuses the existing LIVENESS_MODE / LIVENESS_BACKEND /
+    # ANTI_SPOOFING_ENABLED / LIVENESS_VERDICT_POLICY and the ANTISPOOF_*
+    # pipeline flags rather than inventing parallel config.
+    ENROLL_LIVENESS_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "When True, face /enroll runs the same passive liveness + "
+            "anti-spoof veto as /verify before persisting the embedding. "
+            "Default ON (enrollment must be at least as strict as verify). "
+            "Reuses LIVENESS_MODE/LIVENESS_BACKEND/ANTI_SPOOFING_ENABLED and "
+            "the ANTISPOOF_* flags; no parallel config."
+        ),
+    )
+    # ------------------------------------------------------------------
+    # eMRTD NFC passive authentication (ICAO 9303 Part 11) — CPU-only.
+    # The CSCA trust store holds the Country Signing CA root certificates that
+    # Document Signer certs must chain to. The certificates themselves are an
+    # OPERATOR deliverable (per-country CSCA roots from the ICAO PKD or the
+    # issuing authority); drop PEM/DER/.cer files into this directory and they
+    # are loaded at request time. Empty dir → /nfc/verify-authenticity returns
+    # is_authentic=false with reason_code=NO_TRUST_STORE (fail-closed). The code
+    # works the moment certs are dropped in — no rebuild needed.
+    # ------------------------------------------------------------------
+    NFC_CSCA_TRUST_DIR: str = Field(
+        default=str(_REPO_ROOT / "app" / "core" / "csca_trust_store"),
+        description=(
+            "Directory of trusted CSCA root certificates (PEM/DER/.cer/.crt) "
+            "for eMRTD passive authentication. Operator-provisioned; empty "
+            "store makes /nfc/verify-authenticity fail closed "
+            "(reason_code=NO_TRUST_STORE)."
+        ),
+    )
     GESTURE_HAND_LANDMARKER_MODEL_PATH: str = Field(
         default=str(_REPO_ROOT / "models" / "hand_landmarker.task"),
         description=(
@@ -717,11 +831,24 @@ class Settings(BaseSettings):
             ".env.prod when shipping; empty = skip verification (dev only)."
         ),
     )
+    FACE_LANDMARKER_MODEL_PATH: str = Field(
+        default=str(_REPO_ROOT / "models" / "face_landmarker.task"),
+        description=(
+            "Filesystem path to the MediaPipe face_landmarker.task asset. "
+            "Used by server-side facial-landmark consumers (gaze tracker, "
+            "active liveness, quality assessor) after the 2026-05-12 port "
+            "from mp.solutions to mp.tasks.vision. The runtime container "
+            "bakes this file at /app/models/face_landmarker.task; override "
+            "via the env var to point at an operator-rotated asset."
+        ),
+    )
     FACE_LANDMARKER_MODEL_SHA256: str = Field(
         default="",
         description=(
             "Expected SHA256 hex digest for face_landmarker.task. Set in "
-            ".env.prod; empty = skip verification with a log warning."
+            ".env.prod; empty = skip verification with a log warning. "
+            "Live asset SHA256 (float16/latest, 2026-05-12): "
+            "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff"
         ),
     )
 
@@ -755,6 +882,20 @@ class Settings(BaseSettings):
     DEEPFACE_FACENET512_SHA256: str = Field(
         default="",
         description="Expected SHA256 hex digest for Facenet512 weights file (empty = skip with warning)",
+    )
+    # Bug 5 (2026-05-12) — fail-fast in prod when SHA pin is missing.
+    # Previously an empty DEEPFACE_FACENET512_SHA256 only logged a warning,
+    # which let an undetected weight rotation (or supply-chain compromise of
+    # ``~/.deepface/weights/``) silently change embeddings. With this flag on
+    # and ENVIRONMENT=production, an empty pin now raises at model-load time.
+    DEEPFACE_SHA256_REQUIRED: bool = Field(
+        default=True,
+        description=(
+            "When True (default) AND ENVIRONMENT=production, refuse to load "
+            "the DeepFace model unless DEEPFACE_FACENET512_SHA256 is pinned. "
+            "Set False to opt out (e.g. first-deploy of a new model version "
+            "before the hash has been captured)."
+        ),
     )
 
     # ML-M5: server-side caps on find_similar threshold/limit (caller-controlled today).

@@ -6,7 +6,6 @@ import time
 from typing import List, Optional
 
 import numpy as np
-from deepface import DeepFace
 
 from app.domain.entities.demographics import (
     AgeEstimate,
@@ -120,6 +119,10 @@ class DeepFaceDemographicsAnalyzer:
                 actions.append("race")
             if self._include_emotion:
                 actions.append("emotion")
+
+            # DeepFace is imported lazily (pulls in TensorFlow, absent from the
+            # lint/unit CI image) so this module imports without the ML stack.
+            from deepface import DeepFace
 
             # Analyze with DeepFace
             # Note: enforce_detection=True to ensure face is properly detected

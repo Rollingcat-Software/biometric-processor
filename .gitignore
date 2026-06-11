@@ -227,6 +227,11 @@ render-cli.zip
 # Demo local data
 face_landmarker.task
 *.tflite
+
+# Local prod-secret backups (e.g. .env.prod.bak-YYYYMMDD) — NEVER commit
+.env*.bak*
+# Claude Code local scratch (worktrees, agent state)
+.claude/
 analysis_*.json
 recording_*.mp4
 screenshot_*.jpg

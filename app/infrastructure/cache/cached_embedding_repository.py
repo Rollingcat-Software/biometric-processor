@@ -200,6 +200,7 @@ class CachedEmbeddingRepository:
         embedding: np.ndarray,
         quality_score: float,
         tenant_id: Optional[str] = None,
+        fuse_with_existing: bool = False,
     ) -> None:
         """Save embedding and invalidate cache.
 
@@ -208,6 +209,9 @@ class CachedEmbeddingRepository:
             embedding: Face embedding vector
             quality_score: Quality score
             tenant_id: Optional tenant identifier
+            fuse_with_existing: Forwarded to the underlying repository — the
+                "re-enroll & optimize" fusion flag. See
+                :meth:`IEmbeddingRepository.save`.
         """
         # Save to underlying repository
         await self._repository.save(
@@ -215,6 +219,7 @@ class CachedEmbeddingRepository:
             embedding=embedding,
             quality_score=quality_score,
             tenant_id=tenant_id,
+            fuse_with_existing=fuse_with_existing,
         )
 
         # Invalidate cache for this user

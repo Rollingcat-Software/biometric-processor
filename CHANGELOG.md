@@ -2,6 +2,89 @@
 
 ## [Unreleased]
 
+### 2026-05-30 — Multi-image enroll liveness + eMRTD NFC passive authentication
+
+- **P0: liveness on `/enroll/multi` (fail-closed).** `/enroll/multi` previously ran
+  NO liveness while single `/enroll` did — a photo/screen replay could be enrolled
+  via the multi-image path. The multi-image use case (`enroll_multi_image.py`) now
+  runs the SAME `CheckLivenessUseCase` (UniFace MiniFASNet passive + DeepFace
+  anti-spoof veto) on EVERY frame BEFORE extracting/fusing its embedding; one
+  non-live frame rejects the whole enrollment (`LivenessCheckFailedError` → 400).
+  Gated by the existing `ENROLL_LIVENESS_ENABLED` (default ON); injected via
+  `get_enroll_multi_image_use_case()`. CPU-only. New unit tests prove spoof-reject,
+  live-accept, first-frame short-circuit, and the disabled-flag escape hatch.
+- **P0: eMRTD NFC passive authentication (`POST /nfc/verify-authenticity`).** New
+  CPU-only endpoint implementing ICAO 9303 Part 11 passive auth: verifies DG hashes
+  against the SOD's LDS Security Object, the SOD CMS signature against the embedded
+  Document Signer cert, and the DS→CSCA chain. Fail-closed authoritative verdict
+  (`is_authentic`, `reason_code`, `ds_subject`, `csca_matched`, `dg_hash_results`,
+  …). Pure Python crypto (`asn1crypto` + `cryptography`) — no GPU, no ML. Domain
+  logic in `app/domain/services/emrtd_passive_auth.py`. Operator-provisioned CSCA
+  trust store at `NFC_CSCA_TRUST_DIR` (default `app/core/csca_trust_store/`); empty
+  store ⇒ `NO_TRUST_STORE`/`is_authentic=false`. Consumed by identity-core-api
+  `NfcDocumentAuthHandler`. New unit tests (service + route) build a self-signed
+  CSCA/DS/SOD fixture and cover happy-path, DG-mismatch, bad-signature, untrusted-DS,
+  empty-store, and ECDSA-DS. Adds `asn1crypto==1.5.1` to the lock (pure-Python,
+  digest-pinned build otherwise unchanged).
+
+### 2026-05-30 — Canonical reproducible build restored + honest-green CI (P0-2b, P2-2)
+
+- **P0-2b (PR #125, DEPLOYED)** — canonical from-scratch `Dockerfile` build RESTORED:
+  both `FROM` lines pinned by digest (`python:3.12-slim@sha256:090ba77e…`) and the
+  known-good lock applied as pip `-c` constraints, so the previously-segfaulting
+  UniFace MiniFASNet ONNX preload now boots CLEAN under the prod
+  `read_only`+`cap_drop:ALL` runtime (HTTP 200, 0 restarts). `Dockerfile.liveness-overlay`
+  is demoted to a fallback. See CLAUDE.md "Canonical reproducible build RESTORED".
+- **P2-2 (PR #124–#129)** — CI is honestly green (647 unit pass): removed all
+  `--ignore` / `continue-on-error` masking; lazy DeepFace import lets `app.main`
+  import without TensorFlow; the genuinely-stack-dependent integration files are
+  env-gated (`RUN_FULL_STACK_INTEGRATION` / `RUN_PROCTORING_INTEGRATION`) rather
+  than hidden. All five CI jobs green.
+
+### Docs — 2026-05-28 (freshness audit)
+- Corrected stale config defaults (`VERIFICATION_THRESHOLD` 0.6 → 0.45, `LIVENESS_MODE` code default vs prod override documented)
+- Added missing env vars (`FIVUCSAS_EMBEDDING_KEY`, `ANTISPOOF_BLOCK_ENFORCE`) to README and DOCKER_SETUP
+- Marked GPU-only models/backends (`ArcFace`, `VGG-Face`, `GhostFaceNet`, `retinaface`, `yolo*`) with `ALLOW_HEAVY_ML=true` requirement
+- Fixed Quick Start demo script name (`demo_local.py` → `demo_local_fast.py`)
+- Fixed API auth header (`Authorization: Bearer` → `X-API-Key`) in API_DOCUMENTATION
+- Corrected Python version references from 3.11 to 3.12
+- Fixed route module count in CLAUDE.md (17 → 27 files / 26 route modules)
+- Removed MobileFaceNet attribution from client-embedding description in CLAUDE.md
+- Corrected CLAUDE.md route references: removed non-existent `document.py` / `video_interview.py`, removed `TODO.md` reference
+- Closed voice roadmap items (fully shipped: /voice/enroll|verify|search|delete, Resemblyzer 256-dim)
+- Added anti-spoof algorithm provenance note to ARCHITECTURE.md
+- Migrated DOCKER_SETUP.md to `docker compose` v2 syntax; added prod usage section
+- Documented undocumented endpoints in README (flash-challenge, nfc, proctoring, liveness-puzzle, verification sub-paths, admin, health probes, metrics)
+- Updated copyright year 2025 → 2026
+
+## [2026-05-12] ML review — anti-spoof enforcement + EAR + verify hardening
+
+### Security / Fixes (PR #102)
+- **Anti-spoof block enforcement**: `ANTISPOOF_BLOCK_ENFORCE` (default `true`) — assembler "block" verdicts and EAR closed-eye signals now return HTTP 403 (was advisory-only).
+- **EAR veto** (`ANTISPOOF_EAR_VETO_ENABLED`, default `false`): single-frame Eye Aspect Ratio closed-eye detection on `/verify`; fails-soft when `face_landmarker.task` asset is absent.
+- **Aged-threshold inversion fix**: `VERIFICATION_THRESHOLD_AGED` default corrected from 0.38 to 0.55 (under `distance < threshold`, a lower aged threshold made aged users stricter — the opposite of intent).
+- **SHA-256 model pin**: model file integrity checked at startup.
+- **Verify-challenge endpoint** added to liveness puzzle router.
+
+## [2026-05-11] Paper P0 + blink cache + anti-spoof wiring
+
+### Features / Fixes
+- EAR/blink cache wired from `spoof-detector` package (paper P0, PR #89/#88).
+- Anti-spoof flags (`ANTISPOOF_*`) wired through to the assembler (PR #89).
+- `spoof-detector` bumped to v0.2.1; `git` added to Dockerfile so pip can fetch the git dep (PR #90).
+- NFC MRZ route exposed at `/api/v1/nfc/mrz` (PR #95).
+- Real occlusion detection + liveness contradiction policy (PR #94).
+- CI green-up: stale test repair across 7 commits (PR #99 + follow-ups).
+
+## [2026-05-07] Embedding encryption-at-rest + P0 session
+
+### Security
+- Embedding Fernet encryption-at-rest activated: `pgvector_embedding_repository` now reads/writes ciphertext column with `EmbeddingCipher.from_env()` (PR #73). `FIVUCSAS_EMBEDDING_KEY` is a hard boot requirement from this point.
+- `FIVUCSAS_EMBEDDING_KEY` wired through to runtime container in `docker-compose.prod.yml` (PR #78).
+- Live-camera analysis fail-closed when liveness detector unavailable (PR #74).
+- Anti-replay counts corrupt frames as failures (PR #76).
+- Liveness verdict policy + 413 i18n (PR #77).
+
 ### Docs — 2026-04-26 (iOS / macOS scope dropped — no-op for this repo)
 - Parent FIVUCSAS scope updated 2026-04-26 to permanently drop iOS / iPadOS / macOS (no Apple hardware available). This repo's `README.md`, `ROADMAP.md`, and `CHANGELOG.md` had no forward-looking iOS/macOS content; macOS-as-developer-environment install instructions for Redis and PostgreSQL in `README.md` are unaffected. No code or config changes required.
 

@@ -5,7 +5,6 @@ import os
 from typing import Optional, Tuple
 
 import numpy as np
-from deepface import DeepFace
 
 from app.domain.entities.face_detection import FaceDetectionResult
 from app.domain.exceptions.face_errors import FaceNotDetectedError
@@ -280,7 +279,16 @@ class DeepFaceDetector:
         return self._detector_backend
 
     def _extract_faces(self, image: np.ndarray, anti_spoofing: bool) -> list[dict]:
-        """Call DeepFace.extract_faces with the current detector settings."""
+        """Call DeepFace.extract_faces with the current detector settings.
+
+        DeepFace is imported lazily here (not at module load) because it pulls
+        in TensorFlow, a heavy native dependency that is not available in the
+        lint/unit CI image. Keeping the import inside the method lets the pure
+        post-filter geometry (e.g. ``_is_nested_false_positive``) be unit-tested
+        without TensorFlow, while the real detection path imports it on demand.
+        """
+        from deepface import DeepFace
+
         return DeepFace.extract_faces(
             img_path=image,
             detector_backend=self._detector_backend,

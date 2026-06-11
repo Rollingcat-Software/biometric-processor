@@ -1,6 +1,7 @@
 """Cosine similarity calculator implementation."""
 
 import logging
+from typing import Optional
 
 import numpy as np
 
@@ -132,17 +133,43 @@ class CosineSimilarityCalculator:
         distance = self.calculate(embedding1, embedding2)
         return distance < self._threshold
 
-    def get_confidence(self, distance: float) -> float:
-        """Convert distance to confidence score (0.0-1.0).
+    def get_confidence(self, distance: float, threshold: Optional[float] = None) -> float:
+        """Convert distance to a threshold-anchored confidence score (0.0-1.0).
+
+        The naive ``1 - distance`` mapping under-reports strong matches because
+        the operational accept band lives in the low-distance region: with the
+        default 0.6 threshold an *excellent* match at distance 0.26 would read a
+        scary 74%, and the accept boundary itself reads only ~40%. The matching
+        decision is unchanged — only the reported number was misleading.
+
+        This maps the accept boundary to ~50% and an identical match to 100%,
+        anchored on the SAME threshold used for the accept/reject decision::
+
+            confidence = clamp01(1 - distance / (2 * threshold))
+
+        - distance = 0          -> 1.0  (identical)
+        - distance = threshold  -> 0.5  (accept boundary)
+        - distance > threshold  -> < 0.5 (rejected region)
 
         Args:
-            distance: Cosine distance (0.0-1.0)
+            distance: Cosine distance (>= 0.0; pgvector cosine distance is [0, 2])
+            threshold: Accept/reject distance threshold to anchor on. Defaults to
+                this calculator's configured threshold. Pass the *effective*
+                threshold the caller used for the decision (e.g. the adaptive
+                aged-embedding threshold) so the reported % stays consistent with
+                the verdict.
 
         Returns:
             Confidence score (0.0-1.0), higher = more confident
         """
-        # Confidence is inverse of distance
-        return 1.0 - distance
+        anchor = self._threshold if threshold is None else threshold
+        # Guard against a zero/negative anchor producing a div-by-zero / inverted
+        # scale; fall back to the legacy inverse mapping in that pathological case.
+        if anchor <= 0.0:
+            confidence = 1.0 - distance
+        else:
+            confidence = 1.0 - distance / (2.0 * anchor)
+        return max(0.0, min(1.0, confidence))
 
     @staticmethod
     def _l2_normalize(embedding: np.ndarray) -> np.ndarray:

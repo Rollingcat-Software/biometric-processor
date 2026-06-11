@@ -543,6 +543,11 @@ def get_enroll_multi_image_use_case() -> EnrollMultiImageUseCase:
         extractor=get_embedding_extractor(),
         quality_assessor=get_quality_assessor(),
         repository=get_embedding_repository(),
+        # Server-authoritative passive liveness on EVERY frame (fail-closed),
+        # reusing the SAME use case single-image /enroll calls so a photo/screen
+        # replay cannot be enrolled via the multi-image path. Gated at runtime by
+        # settings.ENROLL_LIVENESS_ENABLED inside the use case.
+        liveness_use_case=get_check_liveness_use_case(),
     )
 
 
@@ -859,6 +864,47 @@ def get_voice_repository() -> PgVectorVoiceRepository:
     )
 
 
+@lru_cache()
+def get_voice_replay_detector() -> "VoiceReplayDetector":
+    """Get voice replay-attack detector instance (singleton).
+
+    ML-H4: log-only spectral-fingerprint replay detector backed by a Redis
+    LRU cache. Gated by ``VOICE_REPLAY_DETECTION_ENABLED`` (default False) so
+    wiring it onto the verify path is a no-op until ops flip the flag. If the
+    flag is off we skip building a Redis client entirely; when on, a Redis
+    client is created with the same URL used elsewhere and the detector
+    degrades silently if Redis is unreachable.
+    """
+    # Imported lazily (not at module top) so container.py never pulls the
+    # replay detector at import time — a top-level import here introduced a
+    # circular-import collection failure in CI (broke clear_cache import).
+    from app.infrastructure.ml.voice.replay_detector import VoiceReplayDetector
+
+    redis_client = None
+    if settings.VOICE_REPLAY_DETECTION_ENABLED:
+        try:
+            import redis.asyncio as _redis
+
+            redis_client = _redis.from_url(
+                settings.redis_url,
+                encoding="utf-8",
+                decode_responses=False,
+                max_connections=5,
+            )
+        except Exception as exc:  # noqa: BLE001 — never block voice auth on Redis
+            logger.warning(
+                "Voice replay detector: Redis client init failed; "
+                "detector will run cache-less (no-op): %s",
+                exc,
+            )
+
+    logger.info(
+        "Creating voice replay detector (enabled=%s)",
+        settings.VOICE_REPLAY_DETECTION_ENABLED,
+    )
+    return VoiceReplayDetector(redis_client=redis_client)
+
+
 # ============================================================================
 # Fingerprint server-side biometric dependencies REMOVED (P1.4).
 # The SHA-256 hash placeholder was never a real biometric. Platform fingerprint
@@ -1151,4 +1197,5 @@ def clear_cache() -> None:
     get_puzzle_spot_check_liveness_detector.cache_clear()
     get_speaker_embedder.cache_clear()
     get_voice_repository.cache_clear()
+    get_voice_replay_detector.cache_clear()
     get_client_embedding_observation_repository.cache_clear()

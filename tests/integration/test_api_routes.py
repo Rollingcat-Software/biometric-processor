@@ -1,5 +1,16 @@
-"""Integration tests for API routes."""
+"""Integration tests for API routes.
 
+These exercise the full request/response surface through ``app.main`` and depend
+on the live ML + persistence stack (e.g. the enrollment path now fires a
+client-embedding-observation BackgroundTask that requires ``DATABASE_URL``, and
+several routes touch Redis). They collect cleanly (the module imports without
+TensorFlow), but are gated behind ``RUN_FULL_STACK_INTEGRATION=true`` so they
+skip — rather than fail — on the lightweight CI/bare-host runner. Run them inside
+the Docker ML stack (Postgres+pgvector+Redis wired) where the full surface is
+available. Previously these were silently ``--ignore``d in CI.
+"""
+
+import os
 import pytest
 import io
 import sys
@@ -7,6 +18,13 @@ from unittest.mock import Mock, AsyncMock
 from fastapi.testclient import TestClient
 import numpy as np
 import cv2
+
+# Module-level skip — see module docstring. Full request-surface integration.
+pytestmark = pytest.mark.skipif(
+    os.environ.get("RUN_FULL_STACK_INTEGRATION") != "true",
+    reason="Full-stack API integration tests require the Docker ML stack "
+    "(DATABASE_URL + Redis + DeepFace). Set RUN_FULL_STACK_INTEGRATION=true.",
+)
 
 # Mock DeepFace before any imports that depend on it
 sys.modules['deepface'] = Mock()
