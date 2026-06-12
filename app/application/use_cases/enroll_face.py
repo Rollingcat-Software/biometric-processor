@@ -30,6 +30,13 @@ class EnrollFaceUseCase:
     Dependencies are injected for testability (Dependency Inversion Principle).
     """
 
+    # Quality score assigned to a CLIENT-PRECOMPUTED embedding (the
+    # /enroll-embedding path), where there is no server-side image to assess.
+    # The client already gated capture quality before computing the embedding,
+    # so a precomputed template is treated as a full-confidence sample. Stored
+    # like any other enrollment via the same dual-column Fernet path.
+    PRECOMPUTED_EMBEDDING_QUALITY_SCORE = 100.0
+
     def __init__(
         self,
         detector: IFaceDetector,
@@ -125,27 +132,16 @@ class EnrollFaceUseCase:
             logger.debug("Step 4/4: Extracting embedding...")
             embedding_vector = await self._extractor.extract(face_region)
 
-            # Step 6: Save to repository
-            await self._repository.save(
+            # Steps 6-7: persist via the dual-column Fernet path + build the
+            # result entity. Shared with the client-side embedding route
+            # (/enroll-embedding) via store_embedding so the crypto-at-rest
+            # storage is written in exactly one place.
+            face_embedding = await self.store_embedding(
                 user_id=user_id,
                 embedding=embedding_vector,
                 quality_score=quality.score,
                 tenant_id=tenant_id,
-                fuse_with_existing=optimize,
-            )
-
-            # Step 7: Create and return result entity
-            face_embedding = FaceEmbedding.create_new(
-                user_id=user_id,
-                vector=embedding_vector,
-                quality_score=quality.score,
-                tenant_id=tenant_id,
-            )
-
-            logger.info(
-                f"Enrollment completed successfully for user_id={user_id}, "
-                f"quality={quality.score:.1f}, "
-                f"embedding_dim={len(embedding_vector)}"
+                optimize=optimize,
             )
 
             return face_embedding
@@ -158,3 +154,62 @@ class EnrollFaceUseCase:
                 del image
             if face_region is not None:
                 del face_region
+
+    async def store_embedding(
+        self,
+        user_id: str,
+        embedding,
+        quality_score: float,
+        tenant_id: Optional[str] = None,
+        optimize: bool = False,
+    ) -> FaceEmbedding:
+        """Persist an ALREADY-EXTRACTED embedding as the user's template.
+
+        This is the storage tail of :meth:`execute` — the dual-column Fernet
+        write (``repository.save``) plus building the returned
+        :class:`FaceEmbedding` entity — factored out so the
+        precomputed-embedding route (``/enroll-embedding``) can store a
+        client-computed vector through the EXACT same crypto-at-rest path
+        without re-detecting / re-embedding. ``execute`` calls this with the
+        freshly-extracted embedding and the assessed quality, so its behaviour
+        is unchanged.
+
+        The Fernet encryption + plaintext-vs-ciphertext dual-column handling
+        lives entirely inside ``repository.save``; this method never touches the
+        crypto directly.
+
+        Args:
+            user_id: Unique identifier for the user.
+            embedding: Embedding vector to persist.
+            quality_score: Quality score (0-100) associated with this sample.
+            tenant_id: Optional tenant identifier for multi-tenancy.
+            optimize: Forwarded as ``fuse_with_existing`` (re-enroll & optimize).
+
+        Returns:
+            FaceEmbedding entity describing the stored template.
+
+        Raises:
+            RepositoryError: When the save operation fails.
+        """
+        await self._repository.save(
+            user_id=user_id,
+            embedding=embedding,
+            quality_score=quality_score,
+            tenant_id=tenant_id,
+            fuse_with_existing=optimize,
+        )
+
+        face_embedding = FaceEmbedding.create_new(
+            user_id=user_id,
+            vector=embedding,
+            quality_score=quality_score,
+            tenant_id=tenant_id,
+        )
+
+        logger.info(
+            f"Enrollment completed successfully for user_id={user_id}, "
+            f"quality={quality_score:.1f}, "
+            f"embedding_dim={len(embedding)}"
+        )
+
+        return face_embedding

@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 
-from app.api.schemas.verification import VerificationResponse
+from app.api.schemas.verification import EmbeddingVerifyRequest, VerificationResponse
 from app.application.services.device_spoof_risk_evaluator import (
     DeviceSpoofRiskEvaluator,
 )
@@ -544,6 +544,84 @@ async def verify_face(
         # Cleanup temporary file
         if image_path:
             await storage.cleanup(image_path)
+
+
+@router.post("/verify-embedding", response_model=VerificationResponse, status_code=200)
+async def verify_embedding(
+    request: EmbeddingVerifyRequest,
+    use_case: VerifyFaceUseCase = Depends(get_verify_face_use_case),
+) -> VerificationResponse:
+    """Verify a user from a PRECOMPUTED face embedding (client-side embedding).
+
+    The client (browser/device) computed the Facenet512 embedding locally — no
+    image leaves the device — and submits the raw, L2-normalized 512-vector.
+    This endpoint runs ONLY the pgvector match + threshold/decision logic
+    against the user's stored template via the SAME ``match_embedding`` code
+    that the image ``/verify`` path runs after it extracts the embedding. It
+    SKIPS face detection, quality assessment, liveness and the server-side
+    Facenet512 forward pass, because the client already produced the embedding.
+
+    SECURITY — NO LIVENESS HERE: this path receives no image, so NO liveness /
+    anti-spoof check is (or can be) performed. It therefore REQUIRES a paired
+    liveness factor (puzzle / passive) enforced at the Identity Core layer
+    (sub-projects B/C) before the result is trusted as a login factor. On its
+    own a matched embedding only proves "this vector matches the template", not
+    "a live person produced it now".
+
+    Normalization: the embedding is passed through to the similarity calculator
+    unchanged. The cosine calculator L2-normalizes both operands internally, so
+    a client-sent already-normalized vector and the stored template are compared
+    consistently without double-normalizing here.
+
+    Args:
+        request: tenant_id, user_id and the 512-d embedding (length-validated to
+            exactly 512 by the schema → HTTP 422 otherwise).
+        use_case: Injected verification use case (reused for its match logic).
+
+    Returns:
+        VerificationResponse with the same shape the image path returns. The
+        anti-spoof attachment fields are always None on this path (no image).
+
+    Raises:
+        HTTPException 400: Invalid user_id / tenant_id.
+        HTTPException 404: User not enrolled (EmbeddingNotFoundError).
+    """
+    # Validate identifiers for parity with the image path (the schema already
+    # guarantees the embedding length).
+    try:
+        user_id = validate_user_id(request.user_id)
+        tenant_id = validate_tenant_id(request.tenant_id)
+    except ValidationError as e:
+        logger.warning(f"Input validation failed: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Invalid input: {str(e)}")
+
+    logger.info(
+        "verify-embedding request (no image, liveness enforced upstream): "
+        f"user_id={user_id}, tenant_id={tenant_id}"
+    )
+
+    import numpy as np
+
+    probe = np.asarray(request.embedding, dtype=np.float32)
+
+    # Reuse the EXACT match + adaptive-threshold + decision logic from
+    # VerifyFaceUseCase. EmbeddingNotFoundError propagates to the global handler
+    # as HTTP 404, identical to the image path.
+    result = await use_case.match_embedding(
+        user_id=user_id,
+        embedding=probe,
+        tenant_id=tenant_id,
+    )
+
+    message = "Face verified successfully" if result.verified else "Face does not match"
+
+    return VerificationResponse(
+        verified=result.verified,
+        confidence=result.confidence,
+        distance=result.distance,
+        threshold=result.threshold,
+        message=message,
+    )
 
 
 def _pick_single_client_embedding(

@@ -6,7 +6,7 @@ from typing import List, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException, Request, UploadFile
 
 from app.api.routes import verification as verify_route
-from app.api.schemas.enrollment import EnrollmentResponse
+from app.api.schemas.enrollment import EmbeddingEnrollRequest, EnrollmentResponse
 from app.api.schemas.multi_image_enrollment import MultiImageEnrollmentResponse
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
 from app.application.use_cases.delete_enrollment import DeleteEnrollmentUseCase
@@ -287,6 +287,79 @@ def _pick_single_client_embedding(
     except Exception:
         return None
     return None
+
+
+@router.post("/enroll-embedding", response_model=EnrollmentResponse, status_code=200)
+async def enroll_embedding(
+    request: EmbeddingEnrollRequest,
+    use_case: EnrollFaceUseCase = Depends(get_enroll_face_use_case),
+) -> EnrollmentResponse:
+    """Enroll a user from a PRECOMPUTED face embedding (client-side embedding).
+
+    The client computed the Facenet512 embedding locally — no image leaves the
+    device — and submits the raw, L2-normalized 512-vector. This endpoint stores
+    it as the user's template via the SAME dual-column Fernet path that the image
+    ``/enroll`` path uses after it computes the embedding (``store_embedding`` on
+    the enroll use case). It SKIPS face detection, quality assessment and the
+    server-side Facenet512 forward pass, because the client already produced the
+    embedding. The embedding is persisted exactly as supplied (no
+    re-normalization); the cosine match path normalizes consistently at verify
+    time, so verify parity with the image path is preserved.
+
+    SECURITY — NO LIVENESS HERE: this path receives no image, so NO liveness /
+    anti-spoof check is (or can be) performed before persisting. The Identity
+    Core layer (sub-projects B/C) MUST pair it with a liveness factor (puzzle /
+    passive) before trusting the enrollment, exactly as ``/verify-embedding``
+    requires one at verify time.
+
+    Args:
+        request: tenant_id, user_id and the 512-d embedding (length-validated to
+            exactly 512 by the schema → HTTP 422 otherwise).
+        use_case: Injected enrollment use case (reused for its storage logic).
+
+    Returns:
+        EnrollmentResponse describing the stored template.
+
+    Raises:
+        HTTPException 400: Invalid user_id / tenant_id.
+        HTTPException 500: Storage failure (RepositoryError → global handler).
+    """
+    try:
+        user_id = validate_user_id(request.user_id)
+        tenant_id = validate_tenant_id(request.tenant_id)
+    except ValidationError as e:
+        logger.warning(f"Input validation failed: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Invalid input: {str(e)}")
+
+    logger.info(
+        "enroll-embedding request (no image, liveness enforced upstream): "
+        f"user_id={user_id}, tenant_id={tenant_id}"
+    )
+
+    import numpy as np
+
+    embedding = np.asarray(request.embedding, dtype=np.float32)
+
+    # Reuse the EXACT dual-column Fernet storage tail of EnrollFaceUseCase. There
+    # is no server-side image to assess, so the sample is stored at the
+    # precomputed-embedding quality score (the client gated capture quality
+    # before computing the embedding).
+    result = await use_case.store_embedding(
+        user_id=user_id,
+        embedding=embedding,
+        quality_score=EnrollFaceUseCase.PRECOMPUTED_EMBEDDING_QUALITY_SCORE,
+        tenant_id=tenant_id,
+        optimize=False,
+    )
+
+    return EnrollmentResponse(
+        success=True,
+        user_id=result.user_id,
+        quality_score=result.quality_score,
+        message="Face enrolled successfully (precomputed embedding)",
+        embedding_dimension=result.get_embedding_dimension(),
+        liveness_score=None,
+    )
 
 
 @router.post("/enroll/multi", response_model=MultiImageEnrollmentResponse, status_code=200)

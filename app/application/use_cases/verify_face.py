@@ -146,21 +146,70 @@ class VerifyFaceUseCase:
         new_embedding = await self._extractor.extract(face_region)
         stage_ms["embed"] = (time.perf_counter() - t0) * 1000
 
-        # Step 6: Retrieve stored embedding
-        logger.debug("Step 5/6: Retrieving stored embedding...")
-        t0 = time.perf_counter()
+        # Steps 6-7: retrieve stored template, compute distance, resolve the
+        # (possibly adaptive aged) threshold, and decide. Shared with the
+        # client-side embedding route (/verify-embedding) via match_embedding.
+        result = await self.match_embedding(
+            user_id=user_id,
+            embedding=new_embedding,
+            tenant_id=tenant_id,
+        )
+
+        total_ms = (time.perf_counter() - t_start) * 1000
+        timing_summary = " ".join(f"{k}={v:.0f}ms" for k, v in stage_ms.items())
+        logger.info(
+            f"face/verify: {timing_summary} total={total_ms:.0f}ms "
+            f"user_id={user_id} verified={result.verified} "
+            f"distance={result.distance:.4f} confidence={result.confidence:.4f} "
+            f"threshold={result.threshold}"
+        )
+
+        return result
+
+    async def match_embedding(
+        self,
+        user_id: str,
+        embedding,
+        tenant_id: Optional[str] = None,
+    ) -> VerificationResult:
+        """Match an ALREADY-EXTRACTED embedding against the user's template.
+
+        This is the pgvector match + threshold/decision logic that
+        :meth:`execute` runs after it computes the embedding from an image,
+        factored out so the precomputed-embedding route (``/verify-embedding``)
+        can reuse the EXACT same matching, adaptive-aged-threshold and
+        confidence logic without re-detecting / re-embedding. ``execute`` calls
+        this with the freshly-extracted embedding, so its behaviour is
+        unchanged.
+
+        The ``embedding`` is compared via the injected similarity calculator,
+        which L2-normalizes both operands internally — a client-supplied
+        already-normalized vector and the stored template are therefore compared
+        consistently whether or not either is pre-normalized.
+
+        Args:
+            user_id: User identifier to verify against.
+            embedding: Probe embedding (numpy array or sequence of floats).
+            tenant_id: Optional tenant identifier for multi-tenancy.
+
+        Returns:
+            VerificationResult with the verdict, distance, threshold and the
+            threshold-anchored confidence.
+
+        Raises:
+            EmbeddingNotFoundError: When no stored embedding exists for the user.
+        """
+        # Retrieve stored embedding
         stored_embedding = await self._repository.find_by_user_id(user_id, tenant_id)
-        stage_ms["fetch"] = (time.perf_counter() - t0) * 1000
 
         if stored_embedding is None:
             logger.warning(f"No embedding found for user_id={user_id}")
             raise EmbeddingNotFoundError(user_id)
 
-        # Step 7: Calculate similarity
-        logger.debug("Step 6/6: Calculating similarity...")
-        distance = self._similarity_calculator.calculate(new_embedding, stored_embedding)
+        # Calculate similarity
+        distance = self._similarity_calculator.calculate(embedding, stored_embedding)
 
-        # Step 7: Determine threshold — use adaptive (lenient) threshold for aged embeddings
+        # Determine threshold — use adaptive (lenient) threshold for aged embeddings
         threshold = self._similarity_calculator.get_threshold()
         try:
             if hasattr(self._repository, "find_created_at"):
@@ -184,15 +233,6 @@ class VerifyFaceUseCase:
         # boundary reads ~50% and an identical match ~100% instead of the
         # misleading naive ``1 - distance``. Decision logic is unchanged.
         confidence = self._similarity_calculator.get_confidence(distance, threshold)
-
-        total_ms = (time.perf_counter() - t_start) * 1000
-        timing_summary = " ".join(f"{k}={v:.0f}ms" for k, v in stage_ms.items())
-        logger.info(
-            f"face/verify: {timing_summary} total={total_ms:.0f}ms "
-            f"user_id={user_id} verified={verified} "
-            f"distance={distance:.4f} confidence={confidence:.4f} "
-            f"threshold={threshold}"
-        )
 
         return VerificationResult(
             verified=verified,
