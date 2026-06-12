@@ -647,6 +647,35 @@ class Settings(BaseSettings):
         ),
     )
 
+    # GPU-less hardening (2026-06-12): gate the card-type router OFF by default.
+    # The /api/v1/card-type/detect-live endpoint runs server-side YOLOv8n card
+    # detection but has ZERO live callers: the web-app does card detection
+    # fully CLIENT-SIDE (onnxruntime-web in useCardDetection.ts — the
+    # identity-core-api /biometric/card-detect proxy was removed 2026-05-29),
+    # client-apps never call it, and the only remaining references are the
+    # bundled demo-ui and a stale worktree. OFF by default so the unused YOLO
+    # surface is not mounted on the CPU-only box (Hetzner CX43). Flip True to
+    # restore — mirrors DEMOGRAPHICS_ROUTER_ENABLED / PROCTORING_ROUTER_ENABLED /
+    # FLASH_CHALLENGE_ROUTE_ENABLED.
+    #
+    # NOTE: this flag intentionally does NOT gate the /verification/* pipeline
+    # (document-scan / data-extract / face-match / liveness-check). That pipeline
+    # IS a live, wired surface: identity-core-api BiometricProcessorClient calls
+    # it from DocumentScan/DataExtract/FaceMatch/LivenessCheck step handlers,
+    # dispatched by VerificationStepHandlerRegistry, and V27__seed_verification_flows
+    # seeds default flows (Simple Document Verification / Healthcare Basic) that
+    # use those steps. Gating it OFF would break those flows — left mounted.
+    KYC_ROUTER_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enable the /api/v1/card-type/* router (server-side YOLO card "
+            "detection). OFF by default — card detection runs client-side in the "
+            "web-app (onnxruntime-web), so this endpoint has zero live callers. "
+            "Set KYC_ROUTER_ENABLED=true to restore. Does NOT affect the live "
+            "/verification/* document pipeline, which stays mounted."
+        ),
+    )
+
     # Feature Flags
     PROCTOR_ENABLED: bool = Field(default=True)
     PROCTOR_GAZE_ENABLED: bool = Field(default=True)

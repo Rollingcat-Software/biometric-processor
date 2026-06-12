@@ -310,9 +310,32 @@ app.include_router(liveness.router, prefix=API_PREFIX)
 app.include_router(puzzle.router, prefix=API_PREFIX)
 app.include_router(search.router, prefix=API_PREFIX)
 app.include_router(batch.router, prefix=API_PREFIX)
-app.include_router(card_type_router.router, prefix=API_PREFIX)
 
-# Verification Pipeline routes (Phase 8B/8C: Document Processing + Face-to-Document Matching)
+# Card-type router (/api/v1/card-type/detect-live) is gated behind
+# KYC_ROUTER_ENABLED (default OFF, GPU-less hardening 2026-06-12). It runs
+# server-side YOLOv8n card detection but has ZERO live callers: the web-app does
+# card detection fully client-side (onnxruntime-web in useCardDetection.ts; the
+# identity-core-api /biometric/card-detect proxy was removed 2026-05-29) and
+# client-apps never call it. Mirrors DEMOGRAPHICS_ROUTER_ENABLED /
+# PROCTORING_ROUTER_ENABLED. Flip KYC_ROUTER_ENABLED=true to restore.
+if settings.KYC_ROUTER_ENABLED:
+    app.include_router(card_type_router.router, prefix=API_PREFIX)
+    logger.info("Card-type router enabled (KYC_ROUTER_ENABLED=true)")
+else:
+    logger.info(
+        "Card-type router DISABLED (KYC_ROUTER_ENABLED=false). Card detection "
+        "runs client-side in the web-app; set KYC_ROUTER_ENABLED=true to mount "
+        "/api/v1/card-type/*."
+    )
+
+# Verification Pipeline routes (Phase 8B/8C: Document Processing + Face-to-Document Matching).
+# NOT gated: this /verification/* pipeline (document-scan / data-extract /
+# face-match / liveness-check) is a LIVE, wired surface — identity-core-api
+# BiometricProcessorClient calls it from the DocumentScan/DataExtract/FaceMatch/
+# LivenessCheck step handlers (dispatched via VerificationStepHandlerRegistry),
+# and V27__seed_verification_flows seeds default flows that use those steps.
+# Gating it OFF would break those flows, so it stays mounted (see KYC_ROUTER_ENABLED
+# docstring in config.py). Reachable via the Admin verification-flow builder UI.
 app.include_router(verification_pipeline.router, prefix=API_PREFIX)
 
 # NFC document MRZ parsing route (T2-A, INVESTIGATION 2026-05-07 P1).
