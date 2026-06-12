@@ -16,11 +16,11 @@ Integration:
 """
 
 import logging
-from typing import Optional
+from typing import List, Optional
 
 import numpy as np
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.schemas.biometric_response import BiometricResponse as _SharedBiometricResponse
 from app.core.container import (
@@ -36,6 +36,13 @@ from app.infrastructure.ml.voice.speaker_embedder import compute_voice_quality_s
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Voice"])
+
+# Accept threshold for 1:1 voice verification (cosine *similarity* >= this).
+# Shared by the audio ``/voice/verify`` and the precomputed-embedding
+# ``/voice/verify-embedding`` paths so both apply the IDENTICAL decision — the
+# only difference between the two is WHERE the probe embedding is produced
+# (server-side ``embed_utterance`` vs client-side, flag-gated).
+VERIFY_THRESHOLD = 0.65
 
 
 def _l2_normalize(vec: np.ndarray) -> np.ndarray:
@@ -58,6 +65,55 @@ def _l2_normalize(vec: np.ndarray) -> np.ndarray:
     return vec / norm
 
 
+async def _match_probe_against_enrollment(
+    user_id: str, probe_embedding: np.ndarray
+) -> "BiometricResponse":
+    """Run the shared pgvector cosine compare + decision for a probe embedding.
+
+    This is the EXACT tail both ``/voice/verify`` (server-embedded probe) and
+    ``/voice/verify-embedding`` (client-supplied probe) run AFTER a 256-d probe
+    embedding exists: load the enrolled centroid, L2-normalize both operands,
+    cosine-compare, threshold at :data:`VERIFY_THRESHOLD`. Centralising it
+    guarantees the two paths can never drift in their match semantics.
+    """
+    repo = get_voice_repository()
+    enrolled_embedding = await repo.find_by_user_id(user_id)
+
+    if enrolled_embedding is None:
+        return BiometricResponse(
+            success=False,
+            verified=False,
+            message="No voice enrollment found for this user",
+            user_id=user_id,
+            confidence=0.0,
+        )
+
+    # Cosine similarity. P1-10: the stored centroid (default enroll path) is
+    # AVG(embedding) and is NOT unit-norm, so a raw dot product decays with
+    # enrollment count. L2-normalize BOTH operands so the result is a true
+    # cosine similarity regardless of how many samples were enrolled.
+    unit_probe = _l2_normalize(probe_embedding)
+    unit_centroid = _l2_normalize(enrolled_embedding)
+    similarity = float(np.dot(unit_probe, unit_centroid))
+    similarity = max(0.0, min(1.0, similarity))
+
+    verified = similarity >= VERIFY_THRESHOLD
+
+    logger.info(
+        f"Voice verification: user_id={user_id}, "
+        f"similarity={similarity:.4f}, threshold={VERIFY_THRESHOLD}, "
+        f"verified={verified}"
+    )
+
+    return BiometricResponse(
+        success=True,
+        verified=verified,
+        confidence=round(similarity, 4),
+        message="Voice verified successfully" if verified else "Voice verification failed",
+        user_id=user_id,
+    )
+
+
 # -- Request / Response schemas ------------------------------------------------
 
 
@@ -68,6 +124,58 @@ class VoiceRequest(BaseModel):
     # the new sample is fused into the existing centroid instead of a plain
     # append/average. Optional + default False, so the normal enroll JSON body
     # is unchanged and older callers keep working.
+    optimize: bool = Field(False)
+
+
+# Resemblyzer GE2E speaker-embedding dimensionality. The precomputed-embedding
+# routes accept EXACTLY this many floats (mirrors the 256-dim pgvector column
+# and ``speaker_embedder.VOICE_EMBEDDING_DIM``). A wrong length is HTTP 422.
+VOICE_EMBEDDING_DIMENSION = 256
+
+
+class VoiceEmbeddingRequest(BaseModel):
+    """Request body for the precomputed-voice-embedding routes (client-side).
+
+    The client (browser/device) has ALREADY computed the 256-d Resemblyzer
+    speaker embedding locally — the raw audio never leaves the device — and
+    submits the raw vector. The server SKIPS the audio decode + VAD +
+    Resemblyzer forward pass and runs ONLY the same pgvector cosine compare /
+    centroid storage the audio routes run AFTER ``embed_utterance``.
+
+    SECURITY: like the FACE ``/verify-embedding`` route, this path receives no
+    audio so NO liveness / replay-attack check is (or can be) performed here.
+    A matched embedding only proves "this vector matches the template", not "a
+    live person spoke now"; the Identity Core layer MUST pair it with a liveness
+    factor before trusting it as a login factor.
+    """
+
+    user_id: str = Field(..., max_length=255)
+    embedding: List[float] = Field(
+        ...,
+        description=(
+            f"Precomputed {VOICE_EMBEDDING_DIMENSION}-d Resemblyzer speaker "
+            "embedding, computed client-side."
+        ),
+    )
+
+    @field_validator("embedding")
+    @classmethod
+    def _validate_embedding_length(cls, value: List[float]) -> List[float]:
+        if len(value) != VOICE_EMBEDDING_DIMENSION:
+            raise ValueError(
+                f"embedding must have exactly {VOICE_EMBEDDING_DIMENSION} "
+                f"elements, got {len(value)}"
+            )
+        return value
+
+
+class VoiceEnrollEmbeddingRequest(VoiceEmbeddingRequest):
+    """Request body for ``POST /voice/enroll-embedding`` (client-side embedding).
+
+    Adds the ``optimize`` re-enroll fusion flag (same semantics as
+    :class:`VoiceRequest`) on top of the shared length-validated embedding body.
+    """
+
     optimize: bool = Field(False)
 
 
@@ -217,10 +325,9 @@ async def enroll_voice(request: VoiceRequest) -> BiometricResponse:
 async def verify_voice(request: VoiceRequest) -> BiometricResponse:
     """Verify a user's voice against their enrolled centroid.
 
-    Returns cosine similarity as confidence. Threshold is 0.65.
+    Returns cosine similarity as confidence. Threshold is
+    :data:`VERIFY_THRESHOLD` (0.65).
     """
-    VERIFY_THRESHOLD = 0.65
-
     try:
         user_id = validate_user_id(request.user_id)
 
@@ -235,49 +342,10 @@ async def verify_voice(request: VoiceRequest) -> BiometricResponse:
         # its anti-spoof check. Never blocks verification today.
         await _run_replay_check(voice_data, user_id=user_id)
 
-        # Extract speaker embedding from probe audio (CPU-bound)
+        # Extract speaker embedding from probe audio (CPU-bound), then run the
+        # shared cosine compare + decision (identical to /voice/verify-embedding).
         probe_embedding = await _extract_voice_embedding(voice_data)
-
-        # Load enrolled centroid (async I/O)
-        repo = get_voice_repository()
-        enrolled_embedding = await repo.find_by_user_id(user_id)
-
-        if enrolled_embedding is None:
-            return BiometricResponse(
-                success=False,
-                verified=False,
-                message="No voice enrollment found for this user",
-                user_id=user_id,
-                confidence=0.0,
-            )
-
-        # Cosine similarity. P1-10: the stored centroid (default enroll path) is
-        # AVG(embedding) and is NOT unit-norm, so a raw dot product decays with
-        # enrollment count. L2-normalize BOTH operands here so the result is a
-        # true cosine similarity regardless of how many samples were enrolled.
-        # (The probe is already unit-norm from the embedder; normalizing it too
-        # is a harmless no-op and keeps the path robust to any future change.)
-        unit_probe = _l2_normalize(probe_embedding)
-        unit_centroid = _l2_normalize(enrolled_embedding)
-        similarity = float(np.dot(unit_probe, unit_centroid))
-        # Clamp to [0, 1]
-        similarity = max(0.0, min(1.0, similarity))
-
-        verified = similarity >= VERIFY_THRESHOLD
-
-        logger.info(
-            f"Voice verification: user_id={user_id}, "
-            f"similarity={similarity:.4f}, threshold={VERIFY_THRESHOLD}, "
-            f"verified={verified}"
-        )
-
-        return BiometricResponse(
-            success=True,
-            verified=verified,
-            confidence=round(similarity, 4),
-            message="Voice verified successfully" if verified else "Voice verification failed",
-            user_id=user_id,
-        )
+        return await _match_probe_against_enrollment(user_id, probe_embedding)
 
     except ValueError as e:
         logger.warning(f"Voice verification validation error: {e}")
@@ -289,6 +357,129 @@ async def verify_voice(request: VoiceRequest) -> BiometricResponse:
         raise HTTPException(
             status_code=500,
             detail="Voice verification failed. Please try again.",
+        )
+
+
+# -- POST /voice/verify-embedding ---------------------------------------------
+
+
+@router.post("/voice/verify-embedding", response_model=BiometricResponse)
+async def verify_voice_embedding(request: VoiceEmbeddingRequest) -> BiometricResponse:
+    """Verify a user from a PRECOMPUTED 256-d speaker embedding (client-side).
+
+    The client (browser/device) computed the Resemblyzer speaker embedding
+    locally — the raw audio never leaves the device — and submits only the
+    256-vector. This endpoint runs the SAME pgvector cosine compare + threshold
+    decision as the audio ``/voice/verify`` path (via
+    :func:`_match_probe_against_enrollment`), but SKIPS the audio decode, VAD,
+    quality scoring, replay check and the server-side Resemblyzer forward pass —
+    the client already produced the embedding. The schema validates the length
+    to exactly 256 (HTTP 422 otherwise).
+
+    SECURITY — NO REPLAY/LIVENESS CHECK HERE: this path receives no audio, so
+    the spectral-fingerprint replay detector (which needs the decoded samples)
+    cannot run, and there is no live-capture proof. It therefore REQUIRES a
+    paired liveness factor enforced at the Identity Core layer before the result
+    is trusted as a login factor. On its own a matched embedding only proves
+    "this vector matches the template", not "a live person spoke now". Gated by
+    Identity Core ``app.auth.client-side-voice-embedding`` (default OFF); the
+    audio ``/voice/verify`` path is unchanged and remains the default + fallback.
+    """
+    try:
+        user_id = validate_user_id(request.user_id)
+
+        logger.info(
+            "verify-embedding (voice) request (no audio, liveness enforced "
+            f"upstream): user_id={user_id}"
+        )
+
+        probe_embedding = np.asarray(request.embedding, dtype=np.float32)
+        return await _match_probe_against_enrollment(user_id, probe_embedding)
+
+    except ValueError as e:
+        logger.warning(f"Voice embedding verification validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Voice embedding verification failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Voice verification failed. Please try again.",
+        )
+
+
+# -- POST /voice/enroll-embedding ---------------------------------------------
+
+
+@router.post("/voice/enroll-embedding", response_model=BiometricResponse)
+async def enroll_voice_embedding(
+    request: VoiceEnrollEmbeddingRequest,
+) -> BiometricResponse:
+    """Enroll a user from a PRECOMPUTED 256-d speaker embedding (client-side).
+
+    The client computed the Resemblyzer speaker embedding locally — the raw
+    audio never leaves the device — and submits only the 256-vector. This
+    endpoint stores it via the SAME centroid path the audio ``/voice/enroll``
+    uses AFTER ``embed_utterance`` (``PgVectorVoiceRepository.save`` →
+    INDIVIDUAL row + recomputed CENTROID, encrypt-at-rest), but SKIPS the audio
+    decode, VAD, quality scoring and the server-side Resemblyzer forward pass.
+    The schema validates the length to exactly 256 (HTTP 422 otherwise).
+
+    Because there is no decoded audio there is no signal-quality metric to
+    compute, so the stored ``quality_score`` is a neutral 0.5 (the client gated
+    capture quality before computing the embedding). ``optimize=True`` takes the
+    same re-enroll fusion path as the audio route.
+
+    SECURITY: like ``/voice/verify-embedding``, no audio means no liveness /
+    replay check here; the Identity Core layer MUST pair it with a liveness
+    factor. Gated by ``app.auth.client-side-voice-embedding`` (default OFF).
+    """
+    try:
+        user_id = validate_user_id(request.user_id)
+
+        logger.info(
+            "enroll-embedding (voice) request (no audio, liveness enforced "
+            f"upstream): user_id={user_id}, optimize={request.optimize}"
+        )
+
+        embedding = np.asarray(request.embedding, dtype=np.float32)
+
+        # Reuse the EXACT centroid storage tail of the audio enroll path. There
+        # is no decoded audio to score, so persist at a neutral 0.5 quality
+        # (DB column is 0..1; the audio path rescales its 0..100 metric to this).
+        repo = get_voice_repository()
+        await repo.save(
+            user_id=user_id,
+            embedding=embedding,
+            quality_score=0.5,
+            fuse_with_existing=request.optimize,
+        )
+
+        logger.info(
+            f"Voice enrolled (precomputed embedding): user_id={user_id}, "
+            f"dim={len(embedding)}, optimize={request.optimize}"
+        )
+
+        return BiometricResponse(
+            success=True,
+            message="Voice enrolled successfully (precomputed embedding)",
+            user_id=user_id,
+            embedding_dimension=len(embedding),
+            # 0..100 — identity-core-api rescales to 0..1 for user_enrollments.
+            quality_score=50.0,
+        )
+
+    except ValueError as e:
+        logger.warning(f"Voice embedding enrollment validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Voice embedding enrollment failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Voice enrollment failed. Please try again.",
         )
 
 

@@ -432,3 +432,174 @@ async def test_verify_genuine_user_not_false_rejected_for_subunit_centroid():
     assert res.confidence == pytest.approx(1.0, abs=1e-3)
     assert res.confidence >= 0.65
     assert res.verified is True
+
+
+# ---------------------------------------------------------------------------
+# GPU-less VOICE (audit H3) — precomputed client-side embedding endpoints.
+#
+# /voice/verify-embedding + /voice/enroll-embedding accept a client-computed
+# 256-d Resemblyzer speaker embedding and run the SAME pgvector cosine compare /
+# centroid storage the audio routes run AFTER embed_utterance — skipping the
+# server-side decode/VAD/forward-pass (the raw audio never leaves the device).
+# Flag-gated at the Identity Core layer (default OFF); these tests pin the bio
+# endpoints' contract.
+# ---------------------------------------------------------------------------
+
+
+async def _run_verify_embedding(
+    probe: np.ndarray, centroid, user_id: str = "u"
+) -> "voice_routes.BiometricResponse":
+    """Drive verify_voice_embedding with a probe vector + stored centroid."""
+    repo = Mock()
+    repo.find_by_user_id = AsyncMock(return_value=centroid)
+    with patch.object(voice_routes, "get_voice_repository", return_value=repo):
+        req = voice_routes.VoiceEmbeddingRequest(
+            user_id=user_id, embedding=probe.tolist()
+        )
+        return await voice_routes.verify_voice_embedding(req)
+
+
+@pytest.mark.asyncio
+async def test_verify_embedding_matches_audio_path_decision():
+    """The embedding path must reach the IDENTICAL verdict as the audio path.
+
+    Same probe + same stored centroid → same confidence + verified, whether the
+    probe came from the server (verify_voice) or the client (verify_voice_embedding).
+    This guarantees the GPU-less path is a true behavioural mirror, not a new
+    decision rule.
+    """
+    probe = _unit_embedding(7)
+    centroid = _avg_centroid(7, 8, 9)
+
+    audio_res = await _run_verify(probe, centroid)
+    emb_res = await _run_verify_embedding(probe, centroid)
+
+    assert emb_res.confidence == pytest.approx(audio_res.confidence, abs=1e-6)
+    assert emb_res.verified == audio_res.verified
+    assert emb_res.success is True
+
+
+@pytest.mark.asyncio
+async def test_verify_embedding_genuine_match_verifies():
+    """A perfect-direction probe verifies via the embedding path (cosine 1.0)."""
+    probe = _unit_embedding(11)
+    centroid = (probe * 0.60).astype(np.float32)  # same direction, sub-unit norm
+
+    res = await _run_verify_embedding(probe, centroid)
+
+    assert res.confidence == pytest.approx(1.0, abs=1e-3)
+    assert res.verified is True
+
+
+@pytest.mark.asyncio
+async def test_verify_embedding_no_enrollment_returns_unverified():
+    """No stored voiceprint → success but verified False (not a 500)."""
+    repo = Mock()
+    repo.find_by_user_id = AsyncMock(return_value=None)
+    with patch.object(voice_routes, "get_voice_repository", return_value=repo):
+        req = voice_routes.VoiceEmbeddingRequest(
+            user_id="u", embedding=_unit_embedding(1).tolist()
+        )
+        res = await voice_routes.verify_voice_embedding(req)
+
+    assert res.success is False
+    assert res.verified is False
+    assert res.confidence == 0.0
+
+
+@pytest.mark.asyncio
+async def test_verify_embedding_never_decodes_audio():
+    """The embedding path must NOT call the audio extractor — it skips embed."""
+    repo = Mock()
+    repo.find_by_user_id = AsyncMock(return_value=_unit_embedding(2))
+    with patch.object(voice_routes, "get_voice_repository", return_value=repo), \
+         patch.object(voice_routes, "_extract_voice_embedding",
+                      AsyncMock(side_effect=AssertionError("must not decode audio"))):
+        req = voice_routes.VoiceEmbeddingRequest(
+            user_id="u", embedding=_unit_embedding(2).tolist()
+        )
+        await voice_routes.verify_voice_embedding(req)
+
+
+@pytest.mark.parametrize("bad_len", [128, 255, 257, 512])
+def test_verify_embedding_rejects_wrong_length(bad_len):
+    """The schema validates the embedding to EXACTLY 256 elements (→ 422)."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        voice_routes.VoiceEmbeddingRequest(
+            user_id="u", embedding=[0.0] * bad_len
+        )
+
+
+@pytest.mark.asyncio
+async def test_verify_embedding_invalid_user_id_returns_400():
+    """A malformed user_id is a clean 400, not a 500."""
+    from fastapi import HTTPException
+
+    req = voice_routes.VoiceEmbeddingRequest(
+        user_id="not a uuid !!", embedding=_unit_embedding(0).tolist()
+    )
+    with pytest.raises(HTTPException) as exc:
+        await voice_routes.verify_voice_embedding(req)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_enroll_embedding_persists_via_repository_save():
+    """enroll-embedding stores the client vector via the SAME repo.save path.
+
+    It must skip the audio decode entirely and forward the 256-d vector +
+    optimize flag to the centroid storage the audio enroll uses.
+    """
+    repo = Mock()
+    repo.save = AsyncMock(return_value=None)
+
+    embedding = _unit_embedding(5)
+
+    with patch.object(voice_routes, "get_voice_repository", return_value=repo), \
+         patch.object(voice_routes, "_extract_voice_embedding",
+                      AsyncMock(side_effect=AssertionError("must not decode audio"))):
+        req = voice_routes.VoiceEnrollEmbeddingRequest(
+            user_id="55555555-5555-5555-5555-555555555555",
+            embedding=embedding.tolist(),
+            optimize=True,
+        )
+        res = await voice_routes.enroll_voice_embedding(req)
+
+    repo.save.assert_awaited_once()
+    _, kwargs = repo.save.await_args
+    assert kwargs.get("user_id") == "55555555-5555-5555-5555-555555555555"
+    # The 256-d client vector is forwarded verbatim to the centroid store.
+    np.testing.assert_allclose(np.asarray(kwargs.get("embedding")), embedding, rtol=1e-6)
+    assert kwargs.get("fuse_with_existing") is True
+    assert res.success is True
+    assert res.embedding_dimension == 256
+
+
+@pytest.mark.asyncio
+async def test_enroll_embedding_default_does_not_fuse():
+    """Default optimize=False → fuse_with_existing False (plain append/average)."""
+    repo = Mock()
+    repo.save = AsyncMock(return_value=None)
+
+    with patch.object(voice_routes, "get_voice_repository", return_value=repo):
+        req = voice_routes.VoiceEnrollEmbeddingRequest(
+            user_id="66666666-6666-6666-6666-666666666666",
+            embedding=_unit_embedding(6).tolist(),
+        )
+        await voice_routes.enroll_voice_embedding(req)
+
+    _, kwargs = repo.save.await_args
+    assert kwargs.get("fuse_with_existing") is False
+
+
+@pytest.mark.parametrize("bad_len", [128, 255, 257])
+def test_enroll_embedding_rejects_wrong_length(bad_len):
+    """The enroll schema also validates the embedding to EXACTLY 256 (→ 422)."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        voice_routes.VoiceEnrollEmbeddingRequest(
+            user_id="u", embedding=[0.0] * bad_len
+        )
