@@ -837,9 +837,13 @@ def get_speaker_embedder() -> SpeakerEmbedder:
     """Get speaker embedder instance (singleton).
 
     Returns:
-        SpeakerEmbedder using numba-free MFCC + torch projection (256-dim)
+        SpeakerEmbedder wrapping the pretrained Resemblyzer GE2E speaker encoder
+        — a ~17 MB pretrained 3-layer-LSTM + Linear torch model that emits 256-d
+        L2-normalized speaker embeddings (NOT a from-scratch MFCC projection;
+        the model is the real ``resemblyzer/pretrained.pt``). librosa supplies
+        the mel spectrogram input. See ``app/infrastructure/ml/voice/speaker_embedder.py``.
     """
-    logger.info("Creating speaker embedder (MFCC+torch, numba-free)")
+    logger.info("Creating speaker embedder (Resemblyzer GE2E LSTM, 256-dim)")
     return SpeakerEmbedder()
 
 

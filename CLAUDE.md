@@ -255,6 +255,41 @@ leaves the device. Two additive JSON routes accept it:
   a derived, non-invertible 512-d embedding, over TLS, stored encrypted (Fernet) —
   data minimization, NOT "biometric data never leaves the device".
 
+### Client-computed VOICE embedding (GPU-less, audit H3, flag-gated, default OFF — 2026-06-12):
+Mirror of the face embedding path for VOICE. The browser computes the 256-d
+Resemblyzer GE2E speaker embedding locally (onnxruntime-web) and submits ONLY the
+vector — the raw audio never leaves the device; the server skips decode/VAD/forward.
+Two additive JSON routes in `voice.py`:
+- **`POST /voice/verify-embedding`** — `{user_id, embedding[256]}`. Runs the SAME
+  pgvector cosine compare + 0.65 threshold as the audio `/voice/verify` (both share
+  the `_match_probe_against_enrollment` helper + module-level `VERIFY_THRESHOLD`),
+  but SKIPS the audio decode, VAD, quality scoring, replay check and the server-side
+  Resemblyzer forward pass. Length-validated to exactly 256 (HTTP 422 otherwise).
+- **`POST /voice/enroll-embedding`** — `{user_id, embedding[256], optimize?}`. Stores
+  the client vector via the SAME `PgVectorVoiceRepository.save` centroid path (INDIVIDUAL
+  row + recomputed CENTROID, encrypt-at-rest) as audio `/voice/enroll`; no decoded audio
+  to score, so `quality_score` is a neutral 0.5. `optimize=True` takes the re-enroll fusion path.
+- **SECURITY — NO REPLAY/LIVENESS HERE.** No audio ⇒ the spectral-fingerprint replay
+  detector (needs decoded samples) can't run, and there's no live-capture proof. REQUIRES
+  a paired liveness factor enforced at the Identity Core layer. Gated by Identity Core
+  `app.auth.client-side-voice-embedding` (default OFF); the audio `/voice/verify` +
+  `/voice/enroll` path is unchanged and remains the default + fallback.
+- **ONNX export (DONE + VERIFIED):** `scripts/export_resemblyzer_onnx.py` exports the
+  pinned `resemblyzer/pretrained.pt` (1.42M-param 3-layer LSTM + Linear) to ONNX
+  (opset 17, FP32, ~5.7 MB, dynamic n_frames). torch↔ONNX cosine parity = 1.0 (random mel
+  batches + end-to-end vs `embed_utterance`). The export FAILS if parity < 0.999.
+- **Client preprocessing port = SCAFFOLD (NOT verified).** The browser must reproduce
+  resemblyzer's `preprocess_wav` (dBFS norm + WebRTC VAD mode-3 silence trim) +
+  `wav_to_mel_spectrogram` (librosa power-mel, n_fft 400 / hop 160 / 40 mels) +
+  partial-slice/mean/L2-norm. The WebRTC VAD has no bit-exact JS port; skipping it
+  measured ≈0.89 same-clip cosine vs server (impostor ≈0.40) — risky near the 0.65
+  threshold. Full load-bearing contract + canary steps:
+  `docs/design/VOICE_CLIENT_EMBEDDING_SPEC.md`. Do not enable the web flag until the
+  client mel+VAD is validated to parity.
+- NOTE: the `get_speaker_embedder` container comment claiming "numba-free MFCC + torch
+  projection" was WRONG and is now corrected — it is the real ~17 MB pretrained
+  Resemblyzer GE2E LSTM (librosa supplies the mel input).
+
 ### Puzzle liveness session (flag-gated, default OFF — server-authoritative, anti-replay):
 `puzzle.py` exposes a server-issued, single-use liveness session that spans the 14
 face + 9 hand challenge types (canonical contract:
