@@ -27,6 +27,14 @@ session-based detectors use:
     nod / shake_head                            oscillation_count ≥ 2
     light                                       brightness_delta  ≥ 0.05
 
+  HEAD-POSE SIGN CONVENTION (cross-repo, agreed 2026-06-12 — Phase-1B):
+    yaw   < 0 = head turned to the USER's LEFT  (turn_left);  > 0 = RIGHT (turn_right)
+    pitch < 0 = looking UP / chin up            (look_up);    > 0 = looking DOWN (look_down)
+  The web-app client (``HeadPoseEstimator`` + ``LookUpDetector``/``LookDownDetector``)
+  uses the SAME sign and submits the RAW ``headPose.pitch`` / ``yaw`` under the
+  ``pitch`` / ``yaw`` metric keys (no flip), so the gates below apply unchanged.
+  Mirror doc: web ``src/features/biometric-puzzles/puzzleServerAction.ts``.
+
   Hand (mirrors ``ActiveGestureLivenessManager`` thresholds):
     finger_count / math                         finger_count    == target (in params)
     wave                                         reversals       ≥ 2
