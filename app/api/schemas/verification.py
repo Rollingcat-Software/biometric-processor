@@ -56,6 +56,21 @@ class EmbeddingVerifyRequest(BaseModel):
         return value
 
 
+class EnrollmentExistsResponse(BaseModel):
+    """Lightweight enrollment-existence probe response.
+
+    Returned by ``GET /face/{user_id}/exists``. Consumed by identity-core-api's
+    ``EnrollmentHealthService`` so it can learn whether a user REALLY has a face
+    template instead of FAKING FACE/VOICE as always-enrolled (which routed
+    un-enrolled users into a biometric step that could never pass — login triage
+    F2/F7/F9). The probe is a cheap ``SELECT EXISTS(...)`` — it never runs
+    inference or decrypts a vector.
+    """
+
+    user_id: str = Field(..., description="User identifier that was probed")
+    exists: bool = Field(..., description="Whether a live face enrollment exists")
+
+
 class VerificationResponse(BaseModel):
     """Face verification response."""
 

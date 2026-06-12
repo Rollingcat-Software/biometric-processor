@@ -340,6 +340,41 @@ class PgVectorVoiceRepository:
         )
         return np.array(row["embedding"], dtype=np.float32)
 
+    async def exists(self, user_id: str) -> bool:
+        """Return whether the user has a live (non-deleted) voiceprint.
+
+        This is the authoritative "is there really a voice enrollment?" probe
+        against the embedding store, used by identity-core-api's
+        ``EnrollmentHealthService`` so that VOICE is only offered/auto-picked
+        for users who actually enrolled (previously identity FAKED VOICE/FACE
+        as always-enrolled, routing un-enrolled users into a voice step that
+        could never pass — login triage F2/F7).
+
+        It is a CHEAP existence check (``SELECT EXISTS(...)``) — it never runs
+        inference or decrypts a vector. Matches the verify path's scoping (by
+        ``user_id`` only; voice verify is not tenant-scoped). Any
+        ``enrollment_type`` row (CENTROID or INDIVIDUAL) counts, so the probe
+        returns True between the first individual enrollment and the centroid
+        being written.
+        """
+        try:
+            pool = await self._ensure_pool()
+            async with pool.acquire() as conn:
+                result = await conn.fetchval(
+                    """
+                    SELECT EXISTS(
+                        SELECT 1 FROM voice_enrollments
+                        WHERE user_id = $1::varchar
+                          AND deleted_at IS NULL
+                    )
+                    """,
+                    user_id,
+                )
+            return bool(result)
+        except Exception as e:
+            logger.error(f"Failed to check voice enrollment existence: {e}", exc_info=True)
+            raise RepositoryError(operation="exists", reason=str(e))
+
     async def delete_by_user_id(self, user_id: str) -> bool:
         """Soft-delete all voice enrollments for a user.
 
