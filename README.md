@@ -14,9 +14,11 @@ Biometric Processor is the AI/ML microservice for the **FIVUCSAS** biometric ide
 **Scope:**
 
 - **Face** — enroll, verify, search, liveness, quality, demographics, landmarks, comparison (DeepFace / MediaPipe / YOLO)
+- **Client-computed face embedding (flag-gated)** — `POST /verify-embedding` and `POST /enroll-embedding` accept a precomputed, L2-normalized 512-d Facenet512 vector (computed in the browser; raw image never sent). The service runs ONLY the pgvector match / encrypt+persist — it skips detection, quality, liveness and the server-side Facenet512 forward pass. These paths have NO image and therefore NO liveness; a paired liveness factor (passive or the puzzle layer) is enforced upstream at the Identity Core. Default OFF (driven by Identity Core `app.auth.client-side-embedding`).
+- **Puzzle liveness session (flag-gated)** — server-issued, single-use, anti-replay liveness session: `POST /liveness/puzzle-session` (create, server-randomized challenges), `.../{session_id}/challenge` (score traces), `.../{session_id}/verdict` (consume + verdict). Owner-bound (user_id + tenant_id), TTL-bounded. The browser uploads landmark/gesture traces, never frames.
 - **Voice** — enroll, verify (Resemblyzer GE2E 256-dim speaker embeddings, centroid-based; librosa pinned to 0.9.2 to avoid the numba/Python 3.12 import-time crash)
 - **Verification pipeline** — YOLO-based document detection + TD1/TD3 MRZ parser + Tesseract TC Kimlik OCR + selfie-to-document cosine matching + server-authoritative liveness verdict
-- **Client-side ML observations** — `client_embedding_observations` table (log-only per D2 design lock; never trusted for auth)
+- **Client-side ML observations** — `client_embedding_observations` table (the legacy 128-d landmark-geometry signal, log-only per D2; never trusted for auth — distinct from the authoritative client-computed Facenet512 vector above)
 
 **Security:** internal Docker network only. No public Traefik route. `X-API-Key` middleware on all `/api/*` routes. Demo UI disabled in production.
 
