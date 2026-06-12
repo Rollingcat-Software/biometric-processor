@@ -3,6 +3,7 @@
 import logging
 from typing import Any, Optional
 
+import numpy as np
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 
 from app.api.schemas.verification import EmbeddingVerifyRequest, VerificationResponse
@@ -599,8 +600,6 @@ async def verify_embedding(
         "verify-embedding request (no image, liveness enforced upstream): "
         f"user_id={user_id}, tenant_id={tenant_id}"
     )
-
-    import numpy as np
 
     probe = np.asarray(request.embedding, dtype=np.float32)
 

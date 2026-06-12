@@ -149,10 +149,14 @@ class VerifyFaceUseCase:
         # Steps 6-7: retrieve stored template, compute distance, resolve the
         # (possibly adaptive aged) threshold, and decide. Shared with the
         # client-side embedding route (/verify-embedding) via match_embedding.
+        # Pass `stage_ms` so the template-fetch duration is recorded back into the
+        # same dict and the verify log line regains its `fetch=Xms` segment (the
+        # extraction into match_embedding had dropped it).
         result = await self.match_embedding(
             user_id=user_id,
             embedding=new_embedding,
             tenant_id=tenant_id,
+            stage_ms=stage_ms,
         )
 
         total_ms = (time.perf_counter() - t_start) * 1000
@@ -171,6 +175,7 @@ class VerifyFaceUseCase:
         user_id: str,
         embedding,
         tenant_id: Optional[str] = None,
+        stage_ms: Optional[dict[str, float]] = None,
     ) -> VerificationResult:
         """Match an ALREADY-EXTRACTED embedding against the user's template.
 
@@ -191,6 +196,11 @@ class VerifyFaceUseCase:
             user_id: User identifier to verify against.
             embedding: Probe embedding (numpy array or sequence of floats).
             tenant_id: Optional tenant identifier for multi-tenancy.
+            stage_ms: Optional per-stage timing dict. When supplied (by
+                :meth:`execute`), the template-fetch duration is recorded under
+                the ``"fetch"`` key so the verify log line keeps its
+                ``fetch=Xms`` segment. Observability only — no behaviour change;
+                the ``/verify-embedding`` route omits it (it has no log line).
 
         Returns:
             VerificationResult with the verdict, distance, threshold and the
@@ -199,8 +209,12 @@ class VerifyFaceUseCase:
         Raises:
             EmbeddingNotFoundError: When no stored embedding exists for the user.
         """
-        # Retrieve stored embedding
+        # Retrieve stored embedding (timed back into stage_ms when provided, so
+        # the verify log line regains its `fetch=Xms` per-stage segment).
+        _t_fetch = time.perf_counter()
         stored_embedding = await self._repository.find_by_user_id(user_id, tenant_id)
+        if stage_ms is not None:
+            stage_ms["fetch"] = (time.perf_counter() - _t_fetch) * 1000
 
         if stored_embedding is None:
             logger.warning(f"No embedding found for user_id={user_id}")

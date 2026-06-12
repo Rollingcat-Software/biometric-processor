@@ -3,6 +3,7 @@
 import logging
 from typing import List, Optional
 
+import numpy as np
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException, Request, UploadFile
 
 from app.api.routes import verification as verify_route
@@ -335,8 +336,6 @@ async def enroll_embedding(
         "enroll-embedding request (no image, liveness enforced upstream): "
         f"user_id={user_id}, tenant_id={tenant_id}"
     )
-
-    import numpy as np
 
     embedding = np.asarray(request.embedding, dtype=np.float32)
 
