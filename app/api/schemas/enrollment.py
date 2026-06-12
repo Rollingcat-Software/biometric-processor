@@ -20,7 +20,10 @@ class EmbeddingEnrollRequest(BaseModel):
     liveness factor before trusting the enrollment.
     """
 
-    tenant_id: str = Field(..., description="Tenant identifier for multi-tenancy")
+    tenant_id: Optional[str] = Field(
+        default=None,
+        description="Optional tenant identifier for multi-tenancy",
+    )
     user_id: str = Field(..., description="User identifier to enroll")
     embedding: List[float] = Field(
         ...,

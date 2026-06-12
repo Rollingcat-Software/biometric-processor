@@ -31,7 +31,10 @@ class EmbeddingVerifyRequest(BaseModel):
     as a login factor.
     """
 
-    tenant_id: str = Field(..., description="Tenant identifier for multi-tenancy")
+    tenant_id: Optional[str] = Field(
+        default=None,
+        description="Optional tenant identifier for multi-tenancy",
+    )
     user_id: str = Field(..., description="User identifier to verify against")
     embedding: List[float] = Field(
         ...,

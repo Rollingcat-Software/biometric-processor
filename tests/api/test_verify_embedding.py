@@ -255,3 +255,63 @@ def test_enroll_embedding_wrong_length_is_rejected():
             user_id="user-1",
             embedding=_unit_vector(seed=1, dim=256),
         )
+
+
+# ---------------------------------------------------------------------------
+# tenant_id parity tests — tenant_id must be Optional (mirror legacy /verify)
+# ---------------------------------------------------------------------------
+
+
+def test_verify_embedding_tenant_id_optional_none():
+    """tenant_id may be omitted entirely — defaults to None without 422."""
+    req = EmbeddingVerifyRequest(user_id="user-1", embedding=_unit_vector(seed=1))
+    assert req.tenant_id is None
+
+
+def test_verify_embedding_tenant_id_optional_explicit_none():
+    """tenant_id=None is accepted explicitly."""
+    req = EmbeddingVerifyRequest(
+        tenant_id=None, user_id="user-1", embedding=_unit_vector(seed=1)
+    )
+    assert req.tenant_id is None
+
+
+def test_enroll_embedding_tenant_id_optional_none():
+    """EmbeddingEnrollRequest tenant_id may be omitted — defaults to None."""
+    req = EmbeddingEnrollRequest(user_id="user-1", embedding=_unit_vector(seed=1))
+    assert req.tenant_id is None
+
+
+@pytest.mark.asyncio
+async def test_verify_embedding_null_tenant_id_accepted():
+    """A None tenant_id on the request is forwarded to the use case (same as legacy /verify)."""
+    repo = _FakeEmbeddingRepository()
+    vec = _unit_vector(seed=5)
+    repo._store["user-5"] = np.asarray(vec, dtype=np.float32)
+
+    request = EmbeddingVerifyRequest(user_id="user-5", embedding=vec)
+    assert request.tenant_id is None
+
+    response = await verification_route.verify_embedding(
+        request=request,
+        use_case=_make_verify_use_case(repo),
+    )
+    assert response.verified is True
+
+
+@pytest.mark.asyncio
+async def test_enroll_embedding_null_tenant_id_accepted():
+    """Null tenant_id on enroll is forwarded to repository.save correctly."""
+    repo = _FakeEmbeddingRepository()
+    vec = _unit_vector(seed=6)
+
+    request = EmbeddingEnrollRequest(user_id="user-6", embedding=vec)
+    assert request.tenant_id is None
+
+    response = await enrollment_route.enroll_embedding(
+        request=request,
+        use_case=_make_enroll_use_case(repo),
+    )
+
+    assert response.success is True
+    assert repo.save_calls[0]["tenant_id"] is None
