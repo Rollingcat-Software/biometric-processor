@@ -160,8 +160,14 @@ services:
       MULTI_IMAGE_MIN_IMAGES: ${MULTI_IMAGE_MIN_IMAGES:-2}
       MULTI_IMAGE_MAX_IMAGES: ${MULTI_IMAGE_MAX_IMAGES:-5}
 
-      # Proctoring
-      PROCTORING_ENABLED: ${PROCTORING_ENABLED:-true}
+      # Proctoring + live-analysis router kill-switch (GPU-less hardening).
+      # OFF by default — these routers have zero production callers and run the
+      # heaviest per-frame ML in the service on a CPU-only box. Flip to true to
+      # restore. NOTE: the old PROCTORING_ENABLED env var was a NO-OP (the code
+      # reads PROCTOR_ENABLED, which itself only fed a debug dict), so the
+      # operator's off-intent was silently dropped. PROCTORING_ROUTER_ENABLED is
+      # the real router-mount switch (see app/core/config.py + app/main.py).
+      PROCTORING_ROUTER_ENABLED: ${PROCTORING_ROUTER_ENABLED:-false}
       PROCTORING_MAX_SESSION_DURATION: ${PROCTORING_MAX_SESSION_DURATION:-7200}
       PROCTORING_FRAME_RATE_LIMIT: ${PROCTORING_FRAME_RATE_LIMIT:-5}
 

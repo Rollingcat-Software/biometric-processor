@@ -341,14 +341,33 @@ app.include_router(similarity_matrix.router, prefix=API_PREFIX)
 app.include_router(embeddings_io.router, prefix=API_PREFIX)
 app.include_router(webhooks.router, prefix=API_PREFIX)
 
-# Proctoring routes
-app.include_router(proctor.router, prefix=API_PREFIX)
-
-# WebSocket routes (proctoring real-time streaming)
-app.include_router(proctor_ws.router, prefix=API_PREFIX)
-
-# WebSocket routes (live camera analysis)
-app.include_router(live_analysis.router, prefix=API_PREFIX)
+# Proctoring + live-analysis routes (GPU-less hardening 2026-06-12).
+# These three routers run the heaviest per-frame ML in the service (YOLOv8 +
+# MediaPipe gaze + texture/FFT+optical-flow deepfake + MTCNN+Facenet512 +
+# UniFace MiniFASNet liveness, plus optional DeepFace demographics ~400 MB) and
+# have ZERO production callers (no /proctor, /live-analysis, or
+# /ws/live-analysis references in identity-core-api or web-app). They are gated
+# behind PROCTORING_ROUTER_ENABLED (default OFF) so this un-gated heavy ML is
+# not mounted on the CPU-only box. Flip the flag True to restore — mirrors the
+# DEMOGRAPHICS_ROUTER_ENABLED (above) and FLASH_CHALLENGE_ROUTE_ENABLED (below)
+# patterns. The /ws/live-analysis WebSocket additionally lacked any auth on
+# accept (the @app.middleware HTTP API-key guard never runs for WS scopes); an
+# API-key check on accept now lives in live_analysis.py as defence in depth.
+if settings.PROCTORING_ROUTER_ENABLED:
+    app.include_router(proctor.router, prefix=API_PREFIX)
+    app.include_router(proctor_ws.router, prefix=API_PREFIX)
+    app.include_router(live_analysis.router, prefix=API_PREFIX)
+    logger.info(
+        "Proctoring + live-analysis routers enabled "
+        "(PROCTORING_ROUTER_ENABLED=true)"
+    )
+else:
+    logger.info(
+        "Proctoring + live-analysis routers DISABLED "
+        "(PROCTORING_ROUTER_ENABLED=false). These have zero production callers "
+        "and run heavy per-frame ML; set PROCTORING_ROUTER_ENABLED=true to "
+        "mount /api/v1/proctoring/* and /api/v1/ws/live-analysis."
+    )
 
 # Admin routes
 app.include_router(admin.router, prefix=API_PREFIX)
