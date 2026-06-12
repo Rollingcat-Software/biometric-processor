@@ -3,10 +3,12 @@
 This module provides endpoints for the liveness puzzle challenge-response system:
 - POST /liveness/generate-puzzle: Generate a new liveness puzzle
 - POST /liveness/verify: Verify puzzle completion
+- POST /liveness/verify-challenge: Single-challenge structural validation (web training surface)
 """
 
 import logging
 import time
+from functools import lru_cache
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header
@@ -18,10 +20,21 @@ from app.api.schemas.puzzle import (
     VerifyPuzzleRequest,
     VerifyPuzzleResponse,
 )
+from app.api.schemas.active_liveness import ChallengeType
+from app.api.schemas.puzzle_session import (
+    IssuedChallenge,
+    PuzzleSessionChallengeRequest,
+    PuzzleSessionChallengeResponse,
+    PuzzleSessionCreateRequest,
+    PuzzleSessionCreateResponse,
+    PuzzleSessionVerdictRequest,
+    PuzzleSessionVerdictResponse,
+)
 from app.api.schemas.single_challenge import (
     VerifyChallengeRequest,
     VerifyChallengeResponse,
 )
+from app.application.services.puzzle_session_manager import PuzzleSessionManager
 from app.application.use_cases.generate_puzzle import GeneratePuzzleUseCase
 from app.application.use_cases.verify_puzzle import VerifyPuzzleUseCase
 from app.core.container import get_generate_puzzle_use_case, get_verify_puzzle_use_case
@@ -29,6 +42,22 @@ from app.core.container import get_generate_puzzle_use_case, get_verify_puzzle_u
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/liveness", tags=["Liveness Puzzle"])
+
+
+# ---------------------------------------------------------------------------
+# Process-wide puzzle session store (CV-1).
+#
+# The auth puzzle session is intentionally in-process + ephemeral (like the
+# other liveness sessions). A single ``PuzzleSessionManager`` is shared across
+# all three routes via this lru_cache singleton so a session created on the
+# CREATE route is visible to the SUBMIT + VERDICT routes in the same process.
+# ---------------------------------------------------------------------------
+
+
+@lru_cache(maxsize=1)
+def get_puzzle_session_manager() -> PuzzleSessionManager:
+    """Return the process-wide puzzle session manager (singleton)."""
+    return PuzzleSessionManager()
 
 
 @router.post(
@@ -308,6 +337,177 @@ _MAX_CHALLENGE_DURATION_S = 60.0
 # detected-pass threshold of 0.5).
 _MIN_CHALLENGE_CONFIDENCE = 0.5
 
+# ---------------------------------------------------------------------------
+# Per-action metric thresholds for the 8 new face challenges.
+#
+# The web client sends an optional ``metrics`` dict alongside each submission.
+# For face actions that report a primary metric, the server applies a
+# plausibility gate: if the metric is present AND its value is implausibly
+# weak (indicating the gesture was not actually performed), the submission is
+# rejected with an action-specific reason_code.
+#
+# The metric gate is OPTIONAL — absent metrics are not penalised (the client
+# may omit them for back-compat). The gate only fires when the client does
+# supply the metric.
+#
+# Thresholds and their derivation:
+#
+#   EAR-based (CLOSE_LEFT_EYE / CLOSE_RIGHT_EYE):
+#     Mirrors active_liveness_manager.py ``blink_threshold=0.21``.  A closed
+#     single eye has EAR ≤ 0.21; anything above that is "eye open".
+#     Metric key: ``ear``  (float, 0..1, lower = more closed).
+#
+#   Pitch-based (LOOK_UP / LOOK_DOWN):
+#     live_session_baseline_calibrator.py treats |pitch| > 10° as
+#     non-neutral. We require |pitch| ≥ 10° for a confirmed look gesture.
+#     LOOK_UP = negative pitch (face tilts up, landmark y decreases in
+#     image coords); LOOK_DOWN = positive pitch.
+#     Metric key: ``pitch``  (float, degrees; positive = down).
+#
+#   Brow-raise-based (RAISE_LEFT_BROW / RAISE_RIGHT_BROW):
+#     Mirrors active_liveness_manager.py ``eyebrow_threshold=0.08``
+#     (brow–eye vertical distance in normalised coords).
+#     Metric key: ``brow_raise``  (float, 0..1+, higher = more raised).
+#
+#   Oscillation-based (NOD / SHAKE_HEAD):
+#     A real nod/shake requires at least 2 direction reversals (1 full
+#     cycle = forward+back).  The client counts reversals and sends
+#     ``oscillation_count``.  Floor = 2 (conservative: matches the
+#     wave-gesture minimum in the gesture manager).
+#     Metric key: ``oscillation_count``  (int ≥ 0).
+# ---------------------------------------------------------------------------
+
+# EAR ≤ this → eye is closed enough to confirm the gesture.
+_EYE_CLOSE_EAR_MAX: float = 0.21
+
+# |pitch| ≥ this (degrees) → head is tilted enough to confirm look gesture.
+_HEAD_PITCH_MIN_DEG: float = 10.0
+
+# Brow-raise metric ≥ this → brow raise confirmed.
+# Mirrors eyebrow_threshold from ActiveLivenessManager (0.08 normalised units).
+_BROW_RAISE_MIN: float = 0.08
+
+# Minimum oscillation cycles for nod / shake.
+_OSCILLATION_MIN: int = 2
+
+
+def _check_action_metrics(
+    request: VerifyChallengeRequest,
+    duration_s: float,
+) -> Optional[VerifyChallengeResponse]:
+    """Return a rejection response if action-specific metrics fail plausibility.
+
+    Returns ``None`` when the submission passes (or metrics are absent).
+    The gate is only active for the 8 new face challenges; all other actions
+    fall through unchanged.
+    """
+    action = request.action
+    metrics = request.metrics
+
+    if action == ChallengeType.CLOSE_LEFT_EYE:
+        ear = metrics.get("ear")
+        if ear is not None and float(ear) > _EYE_CLOSE_EAR_MAX:
+            logger.info(
+                "verify-challenge rejected: eye_not_closed action=%s ear=%.3f threshold=%.2f",
+                action.value,
+                ear,
+                _EYE_CLOSE_EAR_MAX,
+            )
+            return VerifyChallengeResponse(
+                verified=False,
+                action=action,
+                duration_seconds=duration_s,
+                reason_code="EYE_NOT_CLOSED",
+                message="Left eye EAR above the closed-eye threshold.",
+            )
+
+    elif action == ChallengeType.CLOSE_RIGHT_EYE:
+        ear = metrics.get("ear")
+        if ear is not None and float(ear) > _EYE_CLOSE_EAR_MAX:
+            logger.info(
+                "verify-challenge rejected: eye_not_closed action=%s ear=%.3f threshold=%.2f",
+                action.value,
+                ear,
+                _EYE_CLOSE_EAR_MAX,
+            )
+            return VerifyChallengeResponse(
+                verified=False,
+                action=action,
+                duration_seconds=duration_s,
+                reason_code="EYE_NOT_CLOSED",
+                message="Right eye EAR above the closed-eye threshold.",
+            )
+
+    elif action == ChallengeType.LOOK_UP:
+        pitch = metrics.get("pitch")
+        if pitch is not None and float(pitch) > -_HEAD_PITCH_MIN_DEG:
+            logger.info(
+                "verify-challenge rejected: insufficient_pitch action=%s pitch=%.1f min=%.1f",
+                action.value,
+                pitch,
+                -_HEAD_PITCH_MIN_DEG,
+            )
+            return VerifyChallengeResponse(
+                verified=False,
+                action=action,
+                duration_seconds=duration_s,
+                reason_code="INSUFFICIENT_HEAD_PITCH",
+                message="Head pitch does not confirm a look-up gesture.",
+            )
+
+    elif action == ChallengeType.LOOK_DOWN:
+        pitch = metrics.get("pitch")
+        if pitch is not None and float(pitch) < _HEAD_PITCH_MIN_DEG:
+            logger.info(
+                "verify-challenge rejected: insufficient_pitch action=%s pitch=%.1f min=%.1f",
+                action.value,
+                pitch,
+                _HEAD_PITCH_MIN_DEG,
+            )
+            return VerifyChallengeResponse(
+                verified=False,
+                action=action,
+                duration_seconds=duration_s,
+                reason_code="INSUFFICIENT_HEAD_PITCH",
+                message="Head pitch does not confirm a look-down gesture.",
+            )
+
+    elif action in (ChallengeType.RAISE_LEFT_BROW, ChallengeType.RAISE_RIGHT_BROW):
+        brow_raise = metrics.get("brow_raise")
+        if brow_raise is not None and float(brow_raise) < _BROW_RAISE_MIN:
+            logger.info(
+                "verify-challenge rejected: brow_not_raised action=%s brow_raise=%.3f min=%.3f",
+                action.value,
+                brow_raise,
+                _BROW_RAISE_MIN,
+            )
+            return VerifyChallengeResponse(
+                verified=False,
+                action=action,
+                duration_seconds=duration_s,
+                reason_code="BROW_NOT_RAISED",
+                message="Brow-raise metric below the acceptance threshold.",
+            )
+
+    elif action in (ChallengeType.NOD, ChallengeType.SHAKE_HEAD):
+        osc = metrics.get("oscillation_count")
+        if osc is not None and int(osc) < _OSCILLATION_MIN:
+            logger.info(
+                "verify-challenge rejected: insufficient_oscillation action=%s osc=%d min=%d",
+                action.value,
+                int(osc),
+                _OSCILLATION_MIN,
+            )
+            return VerifyChallengeResponse(
+                verified=False,
+                action=action,
+                duration_seconds=duration_s,
+                reason_code="INSUFFICIENT_OSCILLATION",
+                message="Head oscillation count below the minimum for this gesture.",
+            )
+
+    return None
+
 
 @router.post(
     "/verify-challenge",
@@ -390,6 +590,11 @@ async def verify_challenge(
             message="Detection confidence is below the acceptance floor.",
         )
 
+    # 4. Action-specific metric plausibility gate (new face challenges).
+    metric_rejection = _check_action_metrics(request, duration_s)
+    if metric_rejection is not None:
+        return metric_rejection
+
     logger.info(
         "verify-challenge accepted: action=%s tenant=%s user=%s "
         "duration=%.2fs confidence=%.2f",
@@ -406,3 +611,139 @@ async def verify_challenge(
         reason_code=None,
         message="Challenge verified.",
     )
+
+
+# ---------------------------------------------------------------------------
+# CV-1 (2026-06-12) — server-issued, single-use, anti-replay puzzle SESSION.
+#
+# Replaces the stateless ``/verify-challenge`` trust model for the AUTH path.
+# Additive: ``/verify-challenge`` stays as the (stateless) training surface.
+#
+# bio has no public route — identity-core-api proxies these with X-API-Key.
+# Contract: docs/superpowers/plans/2026-06-12-puzzle-session-convergence.md.
+# Session semantics live in PuzzleSessionManager (server-randomized challenges,
+# unguessable token_urlsafe id, 5-minute TTL, single-use consume on verdict,
+# owner-bound to user_id+tenant_id). The session spans BOTH the 14 face and
+# 9 hand challenge types; per-challenge scoring is the shared metric scorer.
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/puzzle-session",
+    response_model=PuzzleSessionCreateResponse,
+    summary="Create a server-issued puzzle session (auth path)",
+    description=(
+        "Randomly selects `count` challenges from `allowed_challenge_types` "
+        "(server-randomized per attempt), creates a single-use, short-TTL "
+        "session bound to user_id+tenant_id, and returns an opaque session_id "
+        "plus the issued challenges. The session spans both face and hand "
+        "challenge types."
+    ),
+    responses={
+        200: {"description": "Session created."},
+        400: {"description": "Invalid request (empty allowed types / bad count)."},
+    },
+)
+async def create_puzzle_session(
+    request: PuzzleSessionCreateRequest,
+    manager: PuzzleSessionManager = Depends(get_puzzle_session_manager),
+) -> PuzzleSessionCreateResponse:
+    """Create a server-randomized, single-use puzzle session."""
+    try:
+        session = manager.create_session(
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
+            allowed_challenge_types=list(request.allowed_challenge_types),
+            count=request.count,
+            difficulty=request.difficulty,
+        )
+    except ValueError as exc:
+        logger.warning("create_puzzle_session rejected: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return PuzzleSessionCreateResponse(
+        session_id=session.session_id,
+        challenges=[
+            IssuedChallenge(
+                action=c.action,
+                params=(c.params or None),
+            )
+            for c in session.challenges
+        ],
+    )
+
+
+@router.post(
+    "/puzzle-session/{session_id}/challenge",
+    response_model=PuzzleSessionChallengeResponse,
+    summary="Submit one challenge's traces to a puzzle session (per-challenge UX)",
+    description=(
+        "Scores the submitted traces against an ISSUED, not-yet-completed "
+        "challenge in the session. Metric is REQUIRED on this path "
+        "(absent/empty metrics → verified=false, METRIC_REQUIRED). On success "
+        "the challenge is marked complete. This is per-challenge UX feedback, "
+        "NOT the auth gate (that is /verdict)."
+    ),
+    responses={
+        200: {"description": "Per-challenge verdict returned."},
+        404: {"description": "Unknown or expired session."},
+    },
+)
+async def submit_puzzle_challenge(
+    session_id: str,
+    request: PuzzleSessionChallengeRequest,
+    manager: PuzzleSessionManager = Depends(get_puzzle_session_manager),
+) -> PuzzleSessionChallengeResponse:
+    """Score one challenge against the issued session."""
+    verified, reason_code = manager.submit_challenge(
+        session_id,
+        action=request.action,
+        metrics=request.metrics,
+        start_timestamp_ms=request.start_timestamp_ms,
+        end_timestamp_ms=request.end_timestamp_ms,
+        confidence=request.confidence,
+    )
+
+    # Unknown / expired session → 404 (the session id is opaque + ephemeral).
+    if reason_code in ("SESSION_NOT_FOUND", "SESSION_EXPIRED", "SESSION_CONSUMED"):
+        raise HTTPException(status_code=404, detail=reason_code)
+
+    return PuzzleSessionChallengeResponse(
+        verified=verified,
+        action=request.action,
+        reason_code=reason_code,
+    )
+
+
+@router.post(
+    "/puzzle-session/{session_id}/verdict",
+    response_model=PuzzleSessionVerdictResponse,
+    summary="Consume a puzzle session and return the authoritative verdict",
+    description=(
+        "The AUTH GATE. Returns verified=true iff ALL issued challenges were "
+        "validated AND the session owner matches user_id+tenant_id AND the "
+        "session is not expired AND not already consumed. CONSUMES the session "
+        "(single-use). Anything else → verified=false; unknown/expired → 404."
+    ),
+    responses={
+        200: {"description": "Verdict returned; session consumed."},
+        404: {"description": "Unknown or expired session."},
+    },
+)
+async def puzzle_session_verdict(
+    session_id: str,
+    request: PuzzleSessionVerdictRequest,
+    manager: PuzzleSessionManager = Depends(get_puzzle_session_manager),
+) -> PuzzleSessionVerdictResponse:
+    """Return the authoritative verdict and consume the session (single-use)."""
+    verified, reason_code = manager.verdict(
+        session_id,
+        user_id=request.user_id,
+        tenant_id=request.tenant_id,
+    )
+
+    # Unknown / expired session → 404 (an already-consumed id is also gone).
+    if reason_code in ("SESSION_NOT_FOUND", "SESSION_EXPIRED"):
+        raise HTTPException(status_code=404, detail=reason_code)
+
+    return PuzzleSessionVerdictResponse(verified=verified)
