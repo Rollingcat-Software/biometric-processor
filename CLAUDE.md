@@ -222,6 +222,47 @@ the gated files run.
   pgvector `<=>` cosine distance (norm-invariant) — both unaffected.
 - **Fingerprint**: removed (P1.4) — server-side fingerprint biometric processing was a SHA-256 hash placeholder, never a real biometric. Platform fingerprint authentication is delivered via WebAuthn (FIDO2) in identity-core-api, not through this service.
 
+### Client-computed face embedding (flag-gated, default OFF — 2026-06-12):
+The browser can compute the authoritative Facenet512 embedding locally
+(onnxruntime-web) and submit ONLY the 512-d vector — the raw face image never
+leaves the device. Two additive JSON routes accept it:
+- **`POST /verify-embedding`** (`verification.py`) — `{tenant_id, user_id,
+  embedding[512]}`. Runs the SAME `match_embedding` / pgvector cosine + threshold
+  + aged-adaptation as the image `/verify`, but SKIPS detect, quality, liveness and
+  the server-side Facenet512 forward pass (the client already produced the vector).
+  The schema validates the length to exactly 512 (HTTP 422 otherwise). Anti-spoof
+  response fields are always `None` (no image).
+- **`POST /enroll-embedding`** (`enrollment.py`) — stores the client vector as the
+  template (encrypt-at-rest + dual-column persist), skipping the server embed.
+- **SECURITY — NO LIVENESS HERE.** These paths receive no image, so no liveness /
+  anti-spoof check is (or can be) performed. They therefore REQUIRE a paired
+  liveness factor (passive or the puzzle layer) enforced at the Identity Core layer
+  before the result is trusted as a login factor. On its own a matched embedding
+  only proves "this vector matches the template", not "a live person produced it now".
+- Gated by Identity Core `app.auth.client-side-embedding` (default OFF); the legacy
+  image `/verify` + `/enroll` path is unchanged and remains the default + fallback.
+- Privacy framing: the raw image is not transmitted; the only biometric data sent is
+  a derived, non-invertible 512-d embedding, over TLS, stored encrypted (Fernet) —
+  data minimization, NOT "biometric data never leaves the device".
+
+### Puzzle liveness session (flag-gated, default OFF — server-authoritative, anti-replay):
+`puzzle.py` exposes a server-issued, single-use liveness session that spans the 14
+face + 9 hand challenge types (canonical contract:
+`docs/superpowers/plans/2026-06-12-puzzle-session-convergence.md`):
+- **`POST /liveness/puzzle-session`** — `{tenant_id, user_id, allowed_challenge_types,
+  count, difficulty}`. `PuzzleSessionManager` randomly selects `count` challenges,
+  stores session state (session_id, issued challenges, status, TTL 300s, single-use,
+  owner = user_id + tenant_id), returns `{session_id, challenges}`.
+- **`POST /liveness/puzzle-session/{session_id}/challenge`** — scores the uploaded
+  landmark/gesture traces against the issued challenge (metric REQUIRED — absent/empty
+  fails), marks the challenge complete. Used by the client for per-challenge UX only.
+- **`POST /liveness/puzzle-session/{session_id}/verdict`** — `verified` =
+  (all issued challenges validated) AND (owner matches) AND (not expired) AND
+  (not already consumed); CONSUMES the session (single-use). This is the auth gate.
+- Reachable only via the Identity Core MFA-flow proxy (`/auth/mfa/puzzle/session*`,
+  X-API-Key); bio is the sole scoring authority — the client never sends a trusted
+  "passed" boolean. Random per-attempt challenges + single-use session defeat replay.
+
 ### Verification Pipeline (Phase 8B/8C, 2026-03-28):
 - **Document scan** — YOLO-based document detection and classification
 - **MRZ parser** — TD1/TD3 machine-readable zone extraction
@@ -257,7 +298,11 @@ the gated files run.
 ### Client Embedding Observations (Alembic 0004, log-only per D2, 2026-04-14):
 - `client_embedding_observations` table — vector(128), no HNSW (log, not search surface)
 - Populated via `BackgroundTasks` in `enrollment.py` / `verification.py` with fire-and-forget `record()`
-- NEVER used for auth decisions — offline divergence analysis only (128-dim client-side model, identity opaque to server, vs ArcFace 512-dim)
+- NEVER used for auth decisions — offline divergence analysis only (the legacy 128-dim landmark-geometry client signal, identity opaque to server, vs the 512-dim Facenet512 template)
+- NOTE: this is the OLD log-only client signal. It is distinct from the new
+  authoritative **client-computed Facenet512 512-d vector** (`/verify-embedding`,
+  `/enroll-embedding`, flag-gated) documented in the Face section above — that vector
+  IS the template / match input when the flag is ON; this 128-d observation never is.
 
 ## Known Issues (March 2026)
 
