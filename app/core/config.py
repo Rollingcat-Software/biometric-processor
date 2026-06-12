@@ -622,6 +622,31 @@ class Settings(BaseSettings):
     # Proctoring Service Configuration
     # ============================================================================
 
+    # Router mount kill-switch (GPU-less hardening 2026-06-12).
+    # NOTE: the proctoring + live-analysis routers run the HEAVIEST per-frame ML
+    # in the service (YOLOv8 object detection + MediaPipe gaze + texture/FFT +
+    # optical-flow deepfake + full MTCNN+Facenet512 face-verify + UniFace
+    # MiniFASNet liveness, plus optional DeepFace demographics ~400 MB). They have
+    # ZERO production callers (verified: no /proctor, /live-analysis, or
+    # /ws/live-analysis references in identity-core-api or web-app), yet were
+    # mounted UNCONDITIONALLY — un-gated per-frame heavy ML reachable on a
+    # CPU-only box (Hetzner CX43, bio container capped 4 CPU/4 GiB).
+    # OFF by default so prod no longer carries this surface. Flip to True to
+    # restore (mirrors DEMOGRAPHICS_ROUTER_ENABLED / FLASH_CHALLENGE_ROUTE_ENABLED).
+    # The dead PROCTOR_ENABLED flag below only feeds a debug summary dict
+    # (dependencies/proctor.py:get_proctor_config_summary) — it gates nothing and
+    # is retained for back-compat; the operator off-intent is now enforced here.
+    PROCTORING_ROUTER_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enable the /api/v1/proctoring/* (HTTP + WebSocket) and "
+            "/api/v1/ws/live-analysis routers. OFF by default — these have zero "
+            "production callers and run heavy per-frame ML (YOLO/MediaPipe/"
+            "deepfake/Facenet512/MiniFASNet) unsuited to the CPU-only box. Set "
+            "PROCTORING_ROUTER_ENABLED=true to restore."
+        ),
+    )
+
     # Feature Flags
     PROCTOR_ENABLED: bool = Field(default=True)
     PROCTOR_GAZE_ENABLED: bool = Field(default=True)

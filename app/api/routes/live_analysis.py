@@ -11,6 +11,7 @@ Clients send camera frames via WebSocket and receive instant feedback.
 """
 
 import base64
+import hmac
 import io
 import json
 import logging
@@ -19,8 +20,10 @@ from typing import Optional
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, status
 from PIL import Image
+
+from app.core.config import settings
 
 from app.api.schemas.live_analysis import (
     AnalysisMode,
@@ -53,6 +56,45 @@ from app.infrastructure.ml.liveness.temporal_consistency_analyzer import Tempora
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Live Analysis"])
+
+
+def _is_ws_authenticated(websocket: WebSocket) -> bool:
+    """Authenticate a live-analysis WebSocket against the service API key.
+
+    SECURITY (GPU-less hardening 2026-06-12): the HTTP API-key guard registered
+    via ``@app.middleware("http")`` in ``app.main`` ONLY runs for HTTP scopes —
+    WebSocket scopes bypass it entirely, so ``/ws/live-analysis`` was reachable
+    with no key on the Docker network and ran the full per-frame ML stack
+    (incl. optional DeepFace demographics ~400 MB). This mirrors the same
+    API-key mechanism the rest of the service uses (``X-API-Key`` header), with
+    a query-param fallback (``api_key=``) because browser ``WebSocket`` clients
+    cannot set custom headers.
+
+    Fail-closed: when API-key auth is active (the same condition that arms the
+    HTTP middleware) a missing/invalid key returns False so the caller closes
+    the socket with a policy-violation code. When API-key auth is NOT configured
+    (dev/test, ``API_KEY_ENABLED``/``API_KEY_REQUIRE_AUTH`` false) this returns
+    True, matching the HTTP path which also skips the check in that mode.
+    """
+    if not (settings.API_KEY_ENABLED and settings.API_KEY_REQUIRE_AUTH):
+        return True
+
+    expected = settings.API_KEY_SECRET
+    if not expected:
+        # Misconfiguration: auth is required but no secret is set. Fail closed.
+        logger.error("WS auth misconfigured: API_KEY_REQUIRE_AUTH but no API_KEY_SECRET")
+        return False
+
+    header_name = settings.API_KEY_HEADER
+    provided = websocket.headers.get(header_name)
+    if provided is None:
+        # Browser WebSocket clients cannot set custom headers — accept the key
+        # via query param as the documented fallback.
+        provided = websocket.query_params.get("api_key")
+
+    if not provided or not hmac.compare_digest(provided, expected):
+        return False
+    return True
 
 
 class LiveAnalysisSession:
@@ -269,6 +311,18 @@ async def live_analysis_websocket(
         };
         ```
     """
+    # SECURITY (GPU-less hardening 2026-06-12): authenticate BEFORE accept().
+    # The HTTP API-key middleware does not run for WebSocket scopes, so without
+    # this check the full per-frame ML stack was reachable with no key on the
+    # Docker network. Fail-closed: reject with a policy-violation close code.
+    if not _is_ws_authenticated(websocket):
+        logger.warning(
+            f"Live analysis WebSocket rejected: missing/invalid API key "
+            f"(client={websocket.client})"
+        )
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
     await websocket.accept()
     logger.info(f"Live analysis WebSocket connected: {websocket.client}")
 
