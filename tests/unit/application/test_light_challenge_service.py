@@ -99,5 +99,17 @@ def test_active_liveness_manager_generates_verification_token_on_pass(monkeypatc
     assert response.verification_token_expires_at is not None
 
 
-def test_active_liveness_challenge_type_does_not_expose_nod():
-    assert not hasattr(ChallengeType, "NOD")
+def test_active_liveness_manager_default_pool_does_not_include_nod():
+    """NOD is a puzzle-surface-only action (web puzzle session).
+    The ActiveLivenessManager session pool must not include it so
+    standard active-liveness flows are unaffected.
+    """
+    from app.application.services.active_liveness_manager import ActiveLivenessManager
+
+    manager = ActiveLivenessManager()
+    # Request max challenges with randomize off so the full pool is exposed.
+    session = manager.create_session(
+        ActiveLivenessConfig(num_challenges=5, randomize=False)
+    )
+    challenge_types = {c.type for c in session.challenges}
+    assert ChallengeType.NOD not in challenge_types
