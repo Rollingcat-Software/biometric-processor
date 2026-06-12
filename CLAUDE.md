@@ -209,8 +209,18 @@ the gated files run.
   and anti-spoof (`SpoofDetectedError`) failures, ML timeouts, MultipleFaces,
   and any unexpected error stay **FATAL** (abort fail-closed) — only
   quality-class failures are skippable (see `_SKIPPABLE_FRAME_ERRORS`).
-- **Voice**: enroll, verify, search, delete — Resemblyzer 256-dim speaker embeddings, centroid-based
+- **Voice**: enroll, verify, search, delete, **exists** — Resemblyzer 256-dim speaker embeddings, centroid-based
 - Routes: `voice.py`, repo: `pgvector_voice_repository.py`, embedder: `speaker_embedder.py`
+- **Enrollment-existence probes (login triage F2/F7/F9, 2026-06-12):**
+  `GET /voice/{user_id}/exists` and `GET /face/{user_id}/exists` return
+  `{user_id, exists}` via a cheap `SELECT EXISTS(...)` against
+  `voice_enrollments` / `face_embeddings` (`repo.exists`) — NO inference, NO
+  vector decrypt. Face accepts an optional `?tenant_id=` (verify-path parity);
+  voice is user-scoped only (matches `/voice/verify`). identity-core-api's
+  `EnrollmentHealthService` calls these so FACE/VOICE are only reported enrolled
+  for users who genuinely have a template, instead of the prior "trust if the
+  service is reachable" fake that routed un-enrolled users into a voice step that
+  could never pass. Same `X-API-Key` auth as every other `/api/*` route.
 - **Voice verify centroid normalization (P1-10, 2026-06-02)**: the default enroll
   path stores the centroid as `AVG(embedding)::vector` (the mean of unit-norm
   embeddings has norm < 1 and shrinks as enrollments accumulate). `/voice/verify`

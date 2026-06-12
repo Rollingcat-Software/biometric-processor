@@ -359,6 +359,51 @@ async def search_voice(request: VoiceSearchRequest):
         raise HTTPException(status_code=500, detail="Voice search failed. Please try again.")
 
 
+# -- GET /voice/{user_id}/exists ----------------------------------------------
+
+
+class ExistsResponse(BaseModel):
+    """Lightweight enrollment-existence probe response.
+
+    Returned by ``GET /voice/{user_id}/exists`` (and the symmetric face route).
+    Used by identity-core-api's ``EnrollmentHealthService`` to learn whether a
+    user REALLY has a voiceprint, instead of FAKING VOICE/FACE as always-enrolled
+    (which routed un-enrolled users into a voice step that could never pass —
+    login triage F2/F7).
+    """
+
+    user_id: str
+    exists: bool
+
+
+@router.get("/voice/{user_id}/exists", response_model=ExistsResponse)
+async def voice_exists(user_id: str) -> ExistsResponse:
+    """Return whether the user has a live (non-deleted) voice enrollment.
+
+    CHEAP existence probe — it never runs inference or decrypts a vector; it
+    issues a single ``SELECT EXISTS(...)`` against ``voice_enrollments``. Scoped
+    by ``user_id`` only, matching the ``/voice/verify`` path (voice verify is not
+    tenant-scoped). Any enrollment row (CENTROID or INDIVIDUAL) counts.
+    """
+    try:
+        user_id = validate_user_id(user_id)
+        repo = get_voice_repository()
+        present = await repo.exists(user_id)
+        logger.info(f"Voice enrollment existence probe: user_id={user_id}, exists={present}")
+        return ExistsResponse(user_id=user_id, exists=present)
+    except ValueError as e:
+        logger.warning(f"Voice existence validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Voice existence check failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Voice enrollment existence check failed. Please try again.",
+        )
+
+
 # -- DELETE /voice/{user_id} ---------------------------------------------------
 
 

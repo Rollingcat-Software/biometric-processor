@@ -4,9 +4,13 @@ import logging
 from typing import Any, Optional
 
 import numpy as np
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile
 
-from app.api.schemas.verification import EmbeddingVerifyRequest, VerificationResponse
+from app.api.schemas.verification import (
+    EmbeddingVerifyRequest,
+    EnrollmentExistsResponse,
+    VerificationResponse,
+)
 from app.application.services.device_spoof_risk_evaluator import (
     DeviceSpoofRiskEvaluator,
 )
@@ -15,6 +19,7 @@ from app.application.use_cases.verify_face import VerifyFaceUseCase
 from app.core.container import (
     get_check_liveness_use_case,
     get_client_embedding_observation_repository,
+    get_embedding_repository,
     get_file_storage,
     get_verify_face_use_case,
 )
@@ -621,6 +626,51 @@ async def verify_embedding(
         threshold=result.threshold,
         message=message,
     )
+
+
+@router.get("/face/{user_id}/exists", response_model=EnrollmentExistsResponse)
+async def face_exists(
+    user_id: str,
+    tenant_id: Optional[str] = Query(
+        default=None,
+        description="Optional tenant scope (mirrors the face verify path).",
+    ),
+) -> EnrollmentExistsResponse:
+    """Return whether the user has a live face enrollment.
+
+    CHEAP existence probe — a single ``SELECT EXISTS(...)`` against
+    ``face_embeddings``. It NEVER runs detection/quality/liveness/embedding
+    inference and never decrypts a stored vector. ``tenant_id`` is optional and
+    mirrors the verify-path scoping; when omitted the probe is by ``user_id``
+    only.
+
+    Consumed by identity-core-api's ``EnrollmentHealthService`` so FACE is only
+    reported enrolled for users who genuinely have a template — replacing the
+    prior "trust if the service is reachable" fake (login triage F2/F7/F9).
+    """
+    try:
+        user_id = validate_user_id(user_id)
+        scoped_tenant = validate_tenant_id(tenant_id) if tenant_id else None
+    except ValidationError as e:
+        logger.warning(f"Input validation failed: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Invalid input: {str(e)}")
+
+    try:
+        repo = get_embedding_repository()
+        present = await repo.exists(user_id, scoped_tenant)
+        logger.info(
+            f"Face enrollment existence probe: user_id={user_id}, "
+            f"tenant_id={scoped_tenant}, exists={present}"
+        )
+        return EnrollmentExistsResponse(user_id=user_id, exists=present)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Face existence check failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Face enrollment existence check failed. Please try again.",
+        )
 
 
 def _pick_single_client_embedding(

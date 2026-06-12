@@ -345,6 +345,72 @@ async def test_verify_confidence_invariant_to_centroid_magnitude():
     assert _direct_dot(probe, centroid_small) < _direct_dot(probe, centroid_big)
 
 
+# ---------------------------------------------------------------------------
+# Login triage F2/F7 — real voice-enrollment existence probe.
+#
+# identity-core-api's EnrollmentHealthService previously FAKED VOICE as
+# always-enrolled (it could not query biometric_db), routing un-enrolled users
+# into a voice step that could never pass. GET /voice/{user_id}/exists is the
+# cheap, authoritative probe it now calls. These tests pin its contract.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_voice_exists_true_when_enrollment_present():
+    """exists=True for a user with a stored voiceprint; repo.exists is consulted."""
+    repo = Mock()
+    repo.exists = AsyncMock(return_value=True)
+
+    with patch.object(voice_routes, "get_voice_repository", return_value=repo):
+        res = await voice_routes.voice_exists("11111111-1111-1111-1111-111111111111")
+
+    repo.exists.assert_awaited_once_with("11111111-1111-1111-1111-111111111111")
+    assert res.exists is True
+    assert res.user_id == "11111111-1111-1111-1111-111111111111"
+
+
+@pytest.mark.asyncio
+async def test_voice_exists_false_when_not_enrolled():
+    """A definitive exists=False MUST be returned for an un-enrolled user.
+
+    This is the value identity relies on to STOP offering VOICE to users who
+    never enrolled — the core of the F2/F7 fix.
+    """
+    repo = Mock()
+    repo.exists = AsyncMock(return_value=False)
+
+    with patch.object(voice_routes, "get_voice_repository", return_value=repo):
+        res = await voice_routes.voice_exists("22222222-2222-2222-2222-222222222222")
+
+    assert res.exists is False
+    assert res.user_id == "22222222-2222-2222-2222-222222222222"
+
+
+@pytest.mark.asyncio
+async def test_voice_exists_never_runs_inference():
+    """The probe must NOT call verify/extract — it is a pure store lookup."""
+    repo = Mock()
+    repo.exists = AsyncMock(return_value=True)
+    repo.find_by_user_id = AsyncMock()
+
+    with patch.object(voice_routes, "get_voice_repository", return_value=repo), \
+         patch.object(voice_routes, "_extract_voice_embedding",
+                      AsyncMock(side_effect=AssertionError("must not extract"))):
+        await voice_routes.voice_exists("33333333-3333-3333-3333-333333333333")
+
+    repo.find_by_user_id.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_voice_exists_invalid_user_id_returns_400():
+    """A malformed user_id is a clean 400, not a 500."""
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await voice_routes.voice_exists("not a uuid !!")
+    assert exc.value.status_code == 400
+
+
 @pytest.mark.asyncio
 async def test_verify_genuine_user_not_false_rejected_for_subunit_centroid():
     """A perfect-direction match with a sub-0.65 norm must still verify.
