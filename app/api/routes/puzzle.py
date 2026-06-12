@@ -8,6 +8,7 @@ This module provides endpoints for the liveness puzzle challenge-response system
 
 import logging
 import time
+from functools import lru_cache
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header
@@ -20,10 +21,20 @@ from app.api.schemas.puzzle import (
     VerifyPuzzleResponse,
 )
 from app.api.schemas.active_liveness import ChallengeType
+from app.api.schemas.puzzle_session import (
+    IssuedChallenge,
+    PuzzleSessionChallengeRequest,
+    PuzzleSessionChallengeResponse,
+    PuzzleSessionCreateRequest,
+    PuzzleSessionCreateResponse,
+    PuzzleSessionVerdictRequest,
+    PuzzleSessionVerdictResponse,
+)
 from app.api.schemas.single_challenge import (
     VerifyChallengeRequest,
     VerifyChallengeResponse,
 )
+from app.application.services.puzzle_session_manager import PuzzleSessionManager
 from app.application.use_cases.generate_puzzle import GeneratePuzzleUseCase
 from app.application.use_cases.verify_puzzle import VerifyPuzzleUseCase
 from app.core.container import get_generate_puzzle_use_case, get_verify_puzzle_use_case
@@ -31,6 +42,22 @@ from app.core.container import get_generate_puzzle_use_case, get_verify_puzzle_u
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/liveness", tags=["Liveness Puzzle"])
+
+
+# ---------------------------------------------------------------------------
+# Process-wide puzzle session store (CV-1).
+#
+# The auth puzzle session is intentionally in-process + ephemeral (like the
+# other liveness sessions). A single ``PuzzleSessionManager`` is shared across
+# all three routes via this lru_cache singleton so a session created on the
+# CREATE route is visible to the SUBMIT + VERDICT routes in the same process.
+# ---------------------------------------------------------------------------
+
+
+@lru_cache(maxsize=1)
+def get_puzzle_session_manager() -> PuzzleSessionManager:
+    """Return the process-wide puzzle session manager (singleton)."""
+    return PuzzleSessionManager()
 
 
 @router.post(
@@ -584,3 +611,139 @@ async def verify_challenge(
         reason_code=None,
         message="Challenge verified.",
     )
+
+
+# ---------------------------------------------------------------------------
+# CV-1 (2026-06-12) — server-issued, single-use, anti-replay puzzle SESSION.
+#
+# Replaces the stateless ``/verify-challenge`` trust model for the AUTH path.
+# Additive: ``/verify-challenge`` stays as the (stateless) training surface.
+#
+# bio has no public route — identity-core-api proxies these with X-API-Key.
+# Contract: docs/superpowers/plans/2026-06-12-puzzle-session-convergence.md.
+# Session semantics live in PuzzleSessionManager (server-randomized challenges,
+# unguessable token_urlsafe id, 5-minute TTL, single-use consume on verdict,
+# owner-bound to user_id+tenant_id). The session spans BOTH the 14 face and
+# 9 hand challenge types; per-challenge scoring is the shared metric scorer.
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/puzzle-session",
+    response_model=PuzzleSessionCreateResponse,
+    summary="Create a server-issued puzzle session (auth path)",
+    description=(
+        "Randomly selects `count` challenges from `allowed_challenge_types` "
+        "(server-randomized per attempt), creates a single-use, short-TTL "
+        "session bound to user_id+tenant_id, and returns an opaque session_id "
+        "plus the issued challenges. The session spans both face and hand "
+        "challenge types."
+    ),
+    responses={
+        200: {"description": "Session created."},
+        400: {"description": "Invalid request (empty allowed types / bad count)."},
+    },
+)
+async def create_puzzle_session(
+    request: PuzzleSessionCreateRequest,
+    manager: PuzzleSessionManager = Depends(get_puzzle_session_manager),
+) -> PuzzleSessionCreateResponse:
+    """Create a server-randomized, single-use puzzle session."""
+    try:
+        session = manager.create_session(
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
+            allowed_challenge_types=list(request.allowed_challenge_types),
+            count=request.count,
+            difficulty=request.difficulty,
+        )
+    except ValueError as exc:
+        logger.warning("create_puzzle_session rejected: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return PuzzleSessionCreateResponse(
+        session_id=session.session_id,
+        challenges=[
+            IssuedChallenge(
+                action=c.action,
+                params=(c.params or None),
+            )
+            for c in session.challenges
+        ],
+    )
+
+
+@router.post(
+    "/puzzle-session/{session_id}/challenge",
+    response_model=PuzzleSessionChallengeResponse,
+    summary="Submit one challenge's traces to a puzzle session (per-challenge UX)",
+    description=(
+        "Scores the submitted traces against an ISSUED, not-yet-completed "
+        "challenge in the session. Metric is REQUIRED on this path "
+        "(absent/empty metrics → verified=false, METRIC_REQUIRED). On success "
+        "the challenge is marked complete. This is per-challenge UX feedback, "
+        "NOT the auth gate (that is /verdict)."
+    ),
+    responses={
+        200: {"description": "Per-challenge verdict returned."},
+        404: {"description": "Unknown or expired session."},
+    },
+)
+async def submit_puzzle_challenge(
+    session_id: str,
+    request: PuzzleSessionChallengeRequest,
+    manager: PuzzleSessionManager = Depends(get_puzzle_session_manager),
+) -> PuzzleSessionChallengeResponse:
+    """Score one challenge against the issued session."""
+    verified, reason_code = manager.submit_challenge(
+        session_id,
+        action=request.action,
+        metrics=request.metrics,
+        start_timestamp_ms=request.start_timestamp_ms,
+        end_timestamp_ms=request.end_timestamp_ms,
+        confidence=request.confidence,
+    )
+
+    # Unknown / expired session → 404 (the session id is opaque + ephemeral).
+    if reason_code in ("SESSION_NOT_FOUND", "SESSION_EXPIRED", "SESSION_CONSUMED"):
+        raise HTTPException(status_code=404, detail=reason_code)
+
+    return PuzzleSessionChallengeResponse(
+        verified=verified,
+        action=request.action,
+        reason_code=reason_code,
+    )
+
+
+@router.post(
+    "/puzzle-session/{session_id}/verdict",
+    response_model=PuzzleSessionVerdictResponse,
+    summary="Consume a puzzle session and return the authoritative verdict",
+    description=(
+        "The AUTH GATE. Returns verified=true iff ALL issued challenges were "
+        "validated AND the session owner matches user_id+tenant_id AND the "
+        "session is not expired AND not already consumed. CONSUMES the session "
+        "(single-use). Anything else → verified=false; unknown/expired → 404."
+    ),
+    responses={
+        200: {"description": "Verdict returned; session consumed."},
+        404: {"description": "Unknown or expired session."},
+    },
+)
+async def puzzle_session_verdict(
+    session_id: str,
+    request: PuzzleSessionVerdictRequest,
+    manager: PuzzleSessionManager = Depends(get_puzzle_session_manager),
+) -> PuzzleSessionVerdictResponse:
+    """Return the authoritative verdict and consume the session (single-use)."""
+    verified, reason_code = manager.verdict(
+        session_id,
+        user_id=request.user_id,
+        tenant_id=request.tenant_id,
+    )
+
+    # Unknown / expired session → 404 (an already-consumed id is also gone).
+    if reason_code in ("SESSION_NOT_FOUND", "SESSION_EXPIRED"):
+        raise HTTPException(status_code=404, detail=reason_code)
+
+    return PuzzleSessionVerdictResponse(verified=verified)
