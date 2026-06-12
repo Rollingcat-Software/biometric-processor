@@ -9,8 +9,10 @@ from pydantic import BaseModel, Field
 class ChallengeType(str, Enum):
     """Types of liveness challenges.
 
-    Face-modality values (``BLINK`` … ``RAISE_EYEBROWS``) are scored by
-    ``ActiveLivenessManager`` against MediaPipe face landmarks.
+    Face-modality values (``BLINK`` … ``SHAKE_HEAD``) are scored by
+    ``ActiveLivenessManager`` against MediaPipe face landmarks (session-based)
+    or validated structurally by the ``/liveness/verify-challenge`` endpoint
+    (web puzzle surface, single-shot).
     Gesture-modality values (``FINGER_COUNT`` … ``HOLD_POSITION``) are scored
     by ``ActiveGestureLivenessManager`` against client-supplied hand landmarks.
     Mirror of ``GestureChallengeType`` in ``app.api.schemas.gesture_liveness``;
@@ -25,6 +27,15 @@ class ChallengeType(str, Enum):
     TURN_RIGHT = "turn_right"
     OPEN_MOUTH = "open_mouth"
     RAISE_EYEBROWS = "raise_eyebrows"
+    # Face modality — single-eye and head-motion challenges (web puzzle surface).
+    CLOSE_LEFT_EYE = "close_left_eye"
+    CLOSE_RIGHT_EYE = "close_right_eye"
+    LOOK_UP = "look_up"
+    LOOK_DOWN = "look_down"
+    RAISE_LEFT_BROW = "raise_left_brow"
+    RAISE_RIGHT_BROW = "raise_right_brow"
+    NOD = "nod"
+    SHAKE_HEAD = "shake_head"
     # Gesture modality (server-side verifies landmarks-only; no ML inference).
     FINGER_COUNT = "finger_count"
     SHAPE_TRACE = "shape_trace"
