@@ -1,0 +1,102 @@
+# Repo structure-lock policy — Rollingcat-Software/biometric-processor
+#
+# An ArchUnit-style FREEZE of this repo's ROOT layout, mirroring the FIVUCSAS
+# umbrella pilot (Rollingcat-Software/FIVUCSAS#209). The allowlists below were
+# frozen from the current origin/main root; the gate (tools/check_repo_structure.py
+# in the org .github repo, run via the reusable workflow
+# .github/workflows/repo-structure.yml) FAILS CI when:
+#   * a root entry not listed here appears, OR
+#   * any root entry matches a forbidden pattern, OR
+#   * a required file is missing.
+#
+# Dated tracking docs (audits / reviews / sessions / TODOs) belong in GitHub
+# issues, NOT the repo root — that is what forbidden_root_patterns encodes.
+# To intentionally add a NEW root entry, add it here in the SAME PR (the
+# explicit, reviewed "unfreeze"). Parsed by a stdlib-only YAML subset, so keep
+# to simple `- "string"` block lists.
+
+allowed_root_files:
+  - ".dockerignore"
+  - ".env.example"
+  - ".gitignore"
+  - ".pre-commit-config.yaml"
+  - ".repo-structure.yml"
+  - "ARCHITECTURE.md"
+  - "CHANGELOG.md"
+  - "CLAUDE.md"
+  - "DOCKER_SETUP.md"
+  - "Dockerfile"
+  - "Dockerfile.dev"
+  - "Dockerfile.gpu"
+  - "Dockerfile.init"
+  - "Dockerfile.laptop-gpu"
+  - "Dockerfile.liveness-overlay"
+  - "Dockerfile.optimized"
+  - "LICENSE"
+  - "NOTICE"
+  - "Procfile"
+  - "README.md"
+  - "SECURITY.md"
+  - "alembic.ini"
+  - "build.sh"
+  - "cloudbuild.yaml"
+  - "constraints.txt"
+  - "demo_local_fast.py"
+  - "demo_local_optimized.py"
+  - "docker-compose.prod.yml"
+  - "docker-compose.yml"
+  - "fix_database_schema.sql"
+  - "install.ps1"
+  - "list_endpoints.py"
+  - "openapi.json"
+  - "project.toml"
+  - "pyproject.toml"
+  - "pytest.ini"
+  - "railway.json"
+  - "render.yaml"
+  - "requirements-gcp.txt"
+  - "requirements-gpu.txt"
+  - "requirements-known-good-2026-05-29.lock"
+  - "requirements-laptop-gpu.txt"
+  - "requirements-lock.txt"
+  - "requirements-original.txt"
+  - "requirements-railway.txt"
+  - "requirements-render.txt"
+  - "requirements.txt"
+  - "runtime.txt"
+  - "test_api.ps1"
+  - "test_batch_endpoints.sh"
+  - "test_biometric_api.sh"
+  - "test_database_integration.sh"
+  - "test_deployed_from_browser.sh"
+  - "test_proctoring_workflow.sh"
+  - "verify_ports.sh"
+
+allowed_root_dirs:
+  - ".github"
+  - "alembic"
+  - "app"
+  - "demo-ui"
+  - "demo"
+  - "deploy"
+  - "desktop-demo"
+  - "docs"
+  - "infra"
+  - "k8s"
+  - "migrations"
+  - "scripts"
+  - "tests"
+
+# Dated / tracking-doc names that must NEVER reappear at the root.
+# These are Python `re` patterns, matched with re.search against each root entry
+# name. Tracking content goes in GitHub issues instead. Use SINGLE quotes so
+# backslashes stay literal (write \d and \. — not \\d) for the regex engine.
+forbidden_root_patterns:
+  - '.*_(AUDIT|REVIEW|FINDINGS|REGISTER|TRIAGE|SWEEP|STATUS|SESSION|RECONCILIATION)_.*\.md$'
+  - '.*_\d{4}-\d{2}-\d{2}.*\.md$'
+  - '^(TODO|ROADMAP|BACKLOG|OPERATOR_TODO|PERSONAL_TODO).*\.md$'
+
+required_files:
+  - "README.md"
+  - "LICENSE"
+  - ".gitignore"
