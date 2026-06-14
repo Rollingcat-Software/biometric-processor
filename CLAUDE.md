@@ -249,8 +249,13 @@ leaves the device. Two additive JSON routes accept it:
   liveness factor (passive or the puzzle layer) enforced at the Identity Core layer
   before the result is trusted as a login factor. On its own a matched embedding
   only proves "this vector matches the template", not "a live person produced it now".
-- Gated by Identity Core `app.auth.client-side-embedding` (default OFF); the legacy
-  image `/verify` + `/enroll` path is unchanged and remains the default + fallback.
+- Gated by Identity Core `app.auth.client-side-embedding`. The CODE default is OFF, but
+  **production `.env.prod` sets `APP_AUTH_CLIENT_SIDE_EMBEDDING=true` (global, tenants list
+  empty) → client-side embedding IS the PRODUCTION DEFAULT for face enroll AND verify**
+  (verified live 2026-06-14: `FaceEnrollmentDialog.tsx:59` + `BiometricService.ts:220`
+  `/enroll-embedding`; verify → `/verify-embedding`). Don't be misled by the code default —
+  prod runs client-side. The legacy image `/verify` + `/enroll` path remains in code as the
+  disabled fallback. (The thesis was corrected to match this: FIVUCSAS #213/#214.)
 - Privacy framing: the raw image is not transmitted; the only biometric data sent is
   a derived, non-invertible 512-d embedding, over TLS, stored encrypted (Fernet) —
   data minimization, NOT "biometric data never leaves the device".
