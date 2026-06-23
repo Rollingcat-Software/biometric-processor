@@ -59,7 +59,7 @@ def _verify_model_integrity(model_name: str) -> None:
           and the file exists, the digest MUST match or startup is aborted.
         * If no pinned hash is configured, the check logs a WARNING and returns
           without raising — we do not want to break deploys before the hash
-          has been recorded. TODO: pin the hash.
+          has been recorded. TODO(#167): pin the hash.
         * If the weight file cannot be located (e.g. custom DEEPFACE_HOME), we
           log a warning but do not raise.
     """

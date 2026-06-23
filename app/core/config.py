@@ -930,7 +930,7 @@ class Settings(BaseSettings):
     # Audit 2026-04-19 remediation (ML-M1, ML-M5, ML-H4)
     # ---------------------------------------------------------------
     # ML-M1: SHA256 integrity check for DeepFace Facenet512 weights.
-    # TODO: populate with known-good hash once the model file is available.
+    # TODO(#166): populate with known-good hash once the model file is available.
     #   sha256sum ~/.deepface/weights/facenet512_weights.h5
     # When empty string, startup logs a WARNING and skips the check (does not raise).
     DEEPFACE_FACENET512_SHA256: str = Field(
