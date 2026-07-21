@@ -21,7 +21,7 @@ structlog>=25.4.0
 # ===========================================
 # Image Processing
 # ===========================================
-pillow>=11.2.1
+pillow>=12.3.0
 numpy==2.4.4  # PINNED 2026-05-29: native-ABI stability (see requirements-known-good lock)
 scikit-image>=0.25.2
 
