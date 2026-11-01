@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### 2026-11-01 — Early paper drafts moved out of this repository
+
+- The three early manuscript drafts `docs/FIVUCSAS_Biometric_Processor_Paper{,_v2,_v3}.docx`
+  were moved to the team's private publication repository and withdrawn from use. Their
+  evaluation sections reported results (e.g. OULU-NPU and internal-corpus figures) that are not
+  backed by any experiment, dataset or result file in the FIVUCSAS repositories. The verified
+  evaluation lives in `spoof-detector/paper/` and the publication program. No code change.
+
 ### 2026-05-30 — Multi-image enroll liveness + eMRTD NFC passive authentication
 
 - **P0: liveness on `/enroll/multi` (fail-closed).** `/enroll/multi` previously ran
