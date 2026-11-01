@@ -363,7 +363,8 @@ face + 9 hand challenge types (canonical contract:
   the flag-OFF response stays `{verified}`). identity-core-api fails a binding-required
   step closed without it (unless it recorded at CREATE that bio advertised v1).
 - **Store hygiene:** expired sessions purged on create + submit (full sweep at most every
-  30 s); ≤5 open sessions per (tenant,user), the oldest evicted on the 6th create; face
+  30 s, both contracts; not observable, an expired id was already a 404); v2 only: ≤5 open
+  sessions per (tenant,user), the oldest evicted on the 6th create; face
   windows kept as float32 landmarks and only when CREATE did not say
   `require_identity_binding: false` (identity-core-api sends it from `alsoMatchFaceIdentity`).
 - **Unsatisfiable types (v2):** `light`, `shape_trace` (no template issued) and

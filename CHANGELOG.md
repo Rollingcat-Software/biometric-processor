@@ -5,8 +5,8 @@
 ### 2026-11-01 — Puzzle contract v2: security-review fixes (flag OFF, `PUZZLE_TRACE_V2_ENABLED`)
 
 - **S1 store hygiene:** `purge_expired` now runs (amortised, ≤ every 30 s) on create and
-  submit; expired sessions are dropped on submit; ≤5 open sessions per (tenant,user)
-  (oldest evicted); per-challenge face windows stored as float32 landmarks and only when
+  submit (both contracts; not observable, still 404); v2 only: ≤5 open sessions per
+  (tenant,user) (oldest evicted); per-challenge face windows stored as float32 landmarks and only when
   CREATE did not send `require_identity_binding: false` (new optional CREATE field).
 - **S5 version handshake:** verdict response adds `binding_checked: true` only when a
   required binding check ran and passed on a v2 session; omitted otherwise

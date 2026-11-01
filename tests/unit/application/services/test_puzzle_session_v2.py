@@ -393,6 +393,13 @@ def test_s1_open_session_cap_evicts_oldest_per_owner() -> None:
     assert len(open_for_owner) == cap
 
 
+def test_s1_owner_cap_not_applied_when_flag_off() -> None:
+    clock = FakeClock()
+    mgr = _mgr(clock, v2=False)
+    ids = [_session(mgr, [C.BLINK]).session_id for _ in range(mgr.MAX_OPEN_SESSIONS_PER_OWNER + 2)]
+    assert all(mgr.get_session(i) is not None for i in ids)  # v1 unchanged
+
+
 def test_s1_face_window_stored_float32_only_when_binding_possible() -> None:
     clock = FakeClock()
     mgr = _mgr(clock)

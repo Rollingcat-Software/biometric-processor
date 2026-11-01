@@ -51,10 +51,11 @@ landmark TRACE (:mod:`app.application.services.puzzle_trace_verifier`) and adds:
     FILTERED OUT of the allow-list at create; if nothing remains the create is
     rejected (``ValueError`` → HTTP 400).
 
-Store hygiene (both contracts): expired sessions are purged on create and
-submit (amortised: a full sweep at most every ``PURGE_INTERVAL_SECONDS``), and
-each (tenant, user) may hold at most ``MAX_OPEN_SESSIONS_PER_OWNER`` open
-sessions — creating one more evicts that owner's OLDEST open session. The
+Store hygiene: expired sessions are purged on create and submit (amortised: a
+full sweep at most every ``PURGE_INTERVAL_SECONDS``; both contracts, not
+observable since an expired id already yields 404). Under v2 each (tenant,
+user) may hold at most ``MAX_OPEN_SESSIONS_PER_OWNER`` open sessions; creating
+one more evicts that owner's OLDEST open session. The
 per-challenge face window kept for the binding check is stored as float32 and
 only when the session was created with binding possibly required.
 """
@@ -298,7 +299,9 @@ class PuzzleSessionManager:
             last_event_at=created_at,
             keep_binding_windows=require_identity_binding is not False,
         )
-        self._enforce_owner_cap(tenant_id, user_id, created_at)
+        if self._trace_v2:
+            # Owner cap applies to v2 only, so flag-OFF behaviour is unchanged.
+            self._enforce_owner_cap(tenant_id, user_id, created_at)
         self._sessions[session.session_id] = session
         self._by_owner.setdefault((tenant_id, user_id), []).append(session.session_id)
         logger.info(
