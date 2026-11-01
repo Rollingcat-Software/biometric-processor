@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### 2026-11-01 — Puzzle session contract v2: server-side landmark-trace re-scoring (flag OFF)
+
+- **Gap closed (behind `PUZZLE_TRACE_V2_ENABLED`, default false):** the auth-path puzzle
+  SUBMIT accepted one client-computed scalar per challenge and only thresholded it, so a
+  modified client could forge a pass; order, duration and difficulty were not enforced.
+- New `app/application/services/puzzle_trace_verifier.py`: recomputes EAR/MAR/brow/head
+  pose (face) and finger count/wave/flip/hold/tap/pinch/peek (hand) from a submitted
+  landmark trace, enforces per-action temporal shape, duration floors/ceiling, timestamp
+  sanity and anti-synthesis plausibility, then applies the unchanged
+  `score_action_metrics` thresholds. Hand detectors reused via the new
+  `ActiveGestureLivenessManager.evaluate_trace`.
+- `PuzzleSessionManager` v2: scalar-only submissions rejected, issued order enforced,
+  3 attempts per challenge then the session is burned, trace span bounded by the
+  server-observed elapsed time, difficulty enforced (count floor + hold frames),
+  optional split-capture `binding_frame` check at the verdict. Clock injectable for tests.
+- Schemas/routes: `trace` on SUBMIT, `require_identity_binding` + `binding_frame` on
+  VERDICT, `trace_contract` + `trace_face_indices` on CREATE. v1 unchanged when OFF.
+- Tests: 82 new (`tests/unit/application/services/test_puzzle_trace_verifier.py`,
+  `test_puzzle_session_v2.py`) using realistic traces generated from the MediaPipe
+  canonical face model (`puzzle_trace_factory.py`).
+
 ### 2026-11-01 — Early paper drafts moved out of this repository
 
 - The three early manuscript drafts `docs/FIVUCSAS_Biometric_Processor_Paper{,_v2,_v3}.docx`

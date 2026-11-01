@@ -312,6 +312,54 @@ face + 9 hand challenge types (canonical contract:
 - Reachable only via the Identity Core MFA-flow proxy (`/auth/mfa/puzzle/session*`,
   X-API-Key); bio is the sole scoring authority — the client never sends a trusted
   "passed" boolean. Random per-attempt challenges + single-use session defeat replay.
+- **v1 caveat (flag OFF, the default):** SUBMIT carries ONE client-computed scalar
+  per challenge (`ear`, `mar`, `yaw`…) that `score_action_metrics` only thresholds —
+  a modified client can forge it. Order, duration and difficulty are not enforced and
+  split-capture identity binding is enforced only in the web client.
+
+#### Contract v2 — server-side landmark-trace re-scoring (`PUZZLE_TRACE_V2_ENABLED`, default OFF, 2026-11-01)
+- **Flag:** env `PUZZLE_TRACE_V2_ENABLED=true` (config.py; `.env.example`). OFF = v1
+  byte-identical. Rollout: deploy bio + identity + web, then flip the bio flag (the web
+  reads the CREATE advertisement, so no web flag/rebuild is needed to switch).
+- **Advertisement:** CREATE returns `trace_contract: "v2"` + `trace_face_indices`.
+- **SUBMIT `trace`** (`schemas/puzzle_session.py` `PuzzleTrace`): `{version:2,
+  frame_width, frame_height, frames:[{t, f|h}]}`; `f` = the 32 mesh landmarks in
+  `FACE_TRACE_INDICES` order, `h` = 21 hand landmarks (or null = no hand), flat x,y,z
+  ints in 1e-4 units; ≤200 frames. ≈0.5 KB/face frame, ≈0.3 KB/hand frame → a typical
+  challenge is 10–25 KB at ≤25 fps.
+- **Re-scoring** (`app/application/services/puzzle_trace_verifier.py`): web-identical
+  EAR/MAR/brow formulas, head yaw/pitch by Kabsch fit to the MediaPipe canonical face
+  (rigid subset), hand detectors replayed via
+  `ActiveGestureLivenessManager.evaluate_trace` (finger count/math, wave, flip, hold,
+  shape-trace) + web-port tap/pinch/peek. Then per-action temporal shape (blink
+  open→closed→open; wink + other eye open; mouth/brow rest→sustained gesture; turn/look
+  rest→sustained excursion→**return**; nod/shake ≥2 reversals; tap open→touch→release;
+  pinch rest→held ≥0.8×700 ms; peek covered ≥600 ms → no hand ≥350 ms), duration floors
+  (`MIN_SPAN_MS`) + 10 s ceiling, monotonic timestamps with 15–700 ms frame intervals,
+  anti-synthesis plausibility (median |Δ²| jitter ≥5e-5, ≤10% identical frame pairs,
+  landmark speed ≤15 face-scales/s (60 hand-scales/s), per-frame scale change bounded).
+  The trace-derived aggregate then goes through `score_action_metrics` — thresholds stay
+  single-sourced. Under v2 `brow_raise` = fractional increase over the in-trace baseline
+  (the v1 ratio≈1.0 made `≥0.08` trivially true). `light` and template-less
+  `shape_trace` fail closed (`TRACE_UNSUPPORTED_ACTION`).
+- **Session rules** (`puzzle_session_manager._submit_v2`): scalar-only → `TRACE_REQUIRED`;
+  issued order → `OUT_OF_ORDER`; 3 failed attempts on a challenge burn the session
+  (`SESSION_FAILED`, verdict false); trace span ≤ server-observed time since the previous
+  accepted event + 1.5 s (`TRACE_LONGER_THAN_ELAPSED`); difficulty enforced (easy/standard/
+  hard → ≥1/2/3 challenges and 1/2/3 consecutive frames held).
+- **Split-capture binding (verdict):** identity-core-api sends `require_identity_binding`
+  + the client-declared `binding_frame {t, f}` when `alsoMatchFaceIdentity` is on; bio
+  requires the frame to lie inside a verified face-challenge window of the SAME session and
+  to match the trace there (position RMS ≤0.12 IOD, scale-normalised ratios within 10%).
+  This raises the bar for an unmodified/lightly-modified client; it does NOT prove frame
+  provenance against an attacker who synthesises a consistent trace + embedding
+  (camera/injection class, out of scope). Traces are still client data: v2 makes forging
+  require a coherent, jittered, physically plausible landmark time-series, not one number.
+- **Calibrate before flipping:** thresholds/estimator were validated on programmatic traces
+  from the canonical face model, not on recorded device traces. Known v1-inherited gaps:
+  scorer MAR gates (smile ≥0.40, open-mouth ≥0.50) and tap/pinch (≤0.08/≤0.12) are stricter
+  than the web client's own gates, and EAR uses normalised (aspect-dependent) coords like the web.
+  Write-up: fivucsas-papers `paper-B-puzzle-pad/review/server_verification_v2.md`.
 
 ### Verification Pipeline (Phase 8B/8C, 2026-03-28):
 - **Document scan** — YOLO-based document detection and classification
