@@ -48,13 +48,16 @@ import numpy as np
 
 from app.api.schemas.active_liveness import ChallengeType
 from app.application.services.challenge_metric_scorer import (
-    _BROW_RAISE_MIN,
+    _BROW_RAISE_V2_BOTH_MIN,
+    _BROW_RAISE_V2_SINGLE_MIN,
     _EYE_CLOSE_EAR_MAX,
     _HEAD_PITCH_MIN_DEG,
     _HEAD_YAW_MIN_DEG,
     _OPEN_MOUTH_MAR_MIN,
     _OSCILLATION_MIN,
-    _SMILE_MAR_MIN,
+    _SMILE_CORNER_ABS_MIN,
+    _SMILE_CORNER_RAISE_MIN,
+    _SMILE_WIDTH_RATIO_MIN,
     score_action_metrics,
 )
 
@@ -88,8 +91,14 @@ _POS = {idx: pos for pos, idx in enumerate(FACE_TRACE_INDICES)}
 _LEFT_EYE = (362, 385, 387, 263, 373, 380)
 _RIGHT_EYE = (33, 160, 158, 133, 153, 144)
 _UPPER_LIP, _LOWER_LIP, _MOUTH_LEFT, _MOUTH_RIGHT = 13, 14, 61, 291
-_LEFT_EYEBROW = (70, 63, 105, 66, 107)
-_RIGHT_EYEBROW = (300, 293, 334, 296, 336)
+# MediaPipe LEFT/RIGHT are the SUBJECT's own (anatomical) sides: LEFT_EYE 362..
+# and the 300.. brow sit on the IMAGE RIGHT of the raw (unmirrored) camera frame,
+# i.e. on the left of the mirrored selfie preview. Verified on real footage
+# 2026-11-01 (a subject closing their own right eye drives the 33.. EAR to ~0).
+# The brow sets were previously cross-paired with the eyes (70.. is the RIGHT
+# brow); each brow is now paired with the eye below it.
+_LEFT_EYEBROW = (300, 293, 334, 296, 336)
+_RIGHT_EYEBROW = (70, 63, 105, 66, 107)
 _EYE_OUTER_R, _EYE_OUTER_L = 33, 263  # inter-ocular scale reference
 
 # Rigid (expression-insensitive) points for head-pose estimation and their
@@ -169,9 +178,19 @@ MIN_SPAN_MS: Dict[ChallengeType, float] = {
 }
 
 # Anti-synthesis plausibility bounds.
-#: Median per-frame mean |second difference| of the normalised coordinates.
-#: Real MediaPipe output on a live face carries ≳1e-4 of frame-to-frame noise;
-#: a smooth (interpolated / spline) synthetic trace quantises to ~0.
+#: FACE: median per-frame mean |second difference| of the isotropic landmark
+#: coordinates (x·W, y·H, z·W pixels), divided by the median inter-ocular
+#: distance (pixels), so the floor does not depend on how large the face is in
+#: the frame. Calibrated 2026-11-01 on real clips (paper-B calibration,
+#: plausibility.txt): genuine windows p1 ≈ 4.3e-4, p5 ≈ 5.3e-4 in these units; a
+#: static photo with sensor noise σ=2 sits ≈ 1.5e-4. This is an ANTI-SMOOTHING
+#: check only (rejects interpolated / spline-synthesised traces that quantise to
+#: ~0 second difference). It is NOT a liveness signal: a re-encoded or noisy
+#: photo clears it easily, and it was not verified against MediaPipe's own
+#: temporal smoothing on every device (see bio CLAUDE.md, known limitation N5).
+MIN_NATURAL_JITTER_IOD = 2e-4
+#: HAND: the same statistic on the normalised coordinates (no scale
+#: normalisation; no hand data was calibrated).
 MIN_NATURAL_JITTER = 5e-5
 #: Max fraction of consecutive frame pairs that are bit-identical.
 MAX_IDENTICAL_PAIR_FRACTION = 0.10
@@ -186,10 +205,19 @@ MAX_HAND_LOG_SCALE_STEP = 0.50
 # Shape constants.
 #: Head pose must come back within this fraction of the threshold ("return").
 POSE_RETURN_FRACTION = 0.5
-#: Eye must re-open at least this much above the closed threshold.
-EYE_REOPEN_MARGIN = 0.03
-#: Frames at the start of a trace used as the neutral baseline.
+#: Eye must re-open at least this much above the closed threshold. 0.21 + 0.02
+#: = 0.23 = the web BlinkTransitionTracker re-open threshold
+#: (``BLINK_EAR_REOPEN``), so the frame on which the web completes a blink is an
+#: "open" frame for the server too (the old 0.03 margin rejected genuine blinks
+#: whose completing frame read 0.230-0.239). SHARED CONSTANT with the web; pinned
+#: by the cross-repo contract test.
+EYE_REOPEN_MARGIN = 0.02
+#: Frames at the start of a trace used as the neutral baseline (pose, MAR).
 BASELINE_FRAMES = 3
+#: Frames at the start of a trace used as the expression baseline (brow, smile):
+#: more frames because these ratios are noisier than head pose. SHARED with the
+#: web engine (``EXPRESSION_BASELINE_FRAMES``).
+EXPRESSION_BASELINE_FRAMES = 5
 #: Web OscillationCounter.OSCILLATION_MIN_SWING_DEG.
 OSCILLATION_MIN_SWING_DEG = 8.0
 
@@ -362,6 +390,12 @@ def _iso(points_norm: np.ndarray, width: int, height: int) -> np.ndarray:
     return points_norm * scale
 
 
+def _jitter(flat: np.ndarray) -> float:
+    """Median per-frame mean |second difference| of a (n, d) coordinate sequence."""
+    d2 = np.abs(flat[2:] - 2.0 * flat[1:-1] + flat[:-2])
+    return float(np.median(d2.mean(axis=1)))
+
+
 def _plausibility(
     norm: np.ndarray,
     times: np.ndarray,
@@ -369,27 +403,41 @@ def _plausibility(
     scale: np.ndarray,
     max_speed: float,
     max_log_step: float,
+    *,
+    jump_scale: Optional[np.ndarray] = None,
+    jitter_per_scale: bool = False,
 ) -> Optional[str]:
-    """Generic anti-synthesis checks over a (n, k, 3) landmark sequence."""
+    """Generic anti-synthesis checks over a (n, k, 3) landmark sequence.
+
+    ``jitter_per_scale`` (face): the jitter statistic is computed on the
+    isotropic coordinates and divided by the median ``scale`` (inter-ocular
+    distance), floor :data:`MIN_NATURAL_JITTER_IOD`; otherwise (hand) on the
+    normalised coordinates, floor :data:`MIN_NATURAL_JITTER`. ``jump_scale``
+    (default ``scale``) is the size reference for the scale-jump check.
+    """
     n = norm.shape[0]
     flat = norm.reshape(n, -1)
     identical = np.all(np.diff(flat, axis=0) == 0, axis=1)
     if identical.size and float(identical.mean()) > MAX_IDENTICAL_PAIR_FRACTION:
         return "STATIC_FRAMES"
-    if n >= 3:
-        d2 = np.abs(flat[2:] - 2.0 * flat[1:-1] + flat[:-2])
-        jitter = float(np.median(d2.mean(axis=1)))
-        if jitter < MIN_NATURAL_JITTER:
-            return "NO_NATURAL_JITTER"
     if np.any(scale <= 1e-6):
         return "DEGENERATE_GEOMETRY"
+    if n >= 3:
+        if jitter_per_scale:
+            if _jitter(iso.reshape(n, -1)) / float(np.median(scale)) < MIN_NATURAL_JITTER_IOD:
+                return "NO_NATURAL_JITTER"
+        elif _jitter(flat) < MIN_NATURAL_JITTER:
+            return "NO_NATURAL_JITTER"
     dt_s = np.diff(times) / 1000.0
     disp = np.linalg.norm(np.diff(iso[:, :, :2], axis=0), axis=2).max(axis=1)
     mean_scale = 0.5 * (scale[1:] + scale[:-1])
     speed = disp / mean_scale / dt_s
     if np.any(speed > max_speed):
         return "VELOCITY_IMPLAUSIBLE"
-    if np.any(np.abs(np.diff(np.log(scale))) > max_log_step):
+    js = scale if jump_scale is None else jump_scale
+    if np.any(js <= 1e-6):
+        return "DEGENERATE_GEOMETRY"
+    if np.any(np.abs(np.diff(np.log(js))) > max_log_step):
         return "SCALE_JUMP_IMPLAUSIBLE"
     return None
 
@@ -454,13 +502,55 @@ def _head_pose(iso: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def _face_scale(iso: np.ndarray) -> np.ndarray:
+    """Image-plane (2D) inter-ocular distance in pixels."""
     return np.linalg.norm(
         iso[:, _POS[_EYE_OUTER_L], :2] - iso[:, _POS[_EYE_OUTER_R], :2], axis=1
     )
 
 
-def _baseline(series: np.ndarray) -> float:
-    return float(np.median(series[: min(BASELINE_FRAMES, series.size)]))
+def _face_scale_3d(iso: np.ndarray) -> np.ndarray:
+    """3D inter-ocular distance (z scaled by the frame width, as in :func:`_iso`).
+
+    Used for the scale-jump check: the 2D distance shrinks by cos(yaw) during a
+    fast head turn (a genuine 45° turn in 2-3 frames moved ln(IOD_2D) by up to
+    1.0 on real clips), while the 3D distance stays nearly constant under pure
+    rotation and still changes when the face really moves toward the camera.
+    """
+    return np.linalg.norm(iso[:, _POS[_EYE_OUTER_L], :] - iso[:, _POS[_EYE_OUTER_R], :], axis=1)
+
+
+def _smile_features(norm: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Web ``FaceMetricsCalculator`` smile features on normalised (x, y).
+
+    ``corner`` = mean height of the mouth corners (61, 291) above the lip
+    midpoint (13/14), over face height (nose tip 1 → chin 152); ``width`` = mouth
+    width (61↔291) over the same face height. 1:1 port of the web computation.
+    """
+    p = norm[:, :, :2]
+    face_h = np.linalg.norm(p[:, _POS[152]] - p[:, _POS[1]], axis=1)
+    safe = np.where(face_h == 0, 1.0, face_h)
+    mcy = (p[:, _POS[_UPPER_LIP], 1] + p[:, _POS[_LOWER_LIP], 1]) / 2.0
+    corner = ((mcy - p[:, _POS[_MOUTH_LEFT], 1]) + (mcy - p[:, _POS[_MOUTH_RIGHT], 1])) / 2.0 / safe
+    width = np.linalg.norm(p[:, _POS[_MOUTH_RIGHT]] - p[:, _POS[_MOUTH_LEFT]], axis=1) / safe
+    zero = face_h == 0
+    return np.where(zero, 0.0, corner), np.where(zero, 0.0, width)
+
+
+def _baseline(series: np.ndarray, frames: int = BASELINE_FRAMES) -> float:
+    return float(np.median(series[: min(frames, series.size)]))
+
+
+def _runs(mask: np.ndarray) -> List[Tuple[int, int]]:
+    """(start, end_inclusive) of every run of True, in order."""
+    out: List[Tuple[int, int]] = []
+    start = -1
+    for i, v in enumerate(mask):
+        if v and start < 0:
+            start = i
+        if start >= 0 and (not v or i == mask.size - 1):
+            out.append((start, i if v else i - 1))
+            start = -1
+    return out
 
 
 def _longest_run(mask: np.ndarray) -> Tuple[int, int, int]:
@@ -515,7 +605,14 @@ def _verify_face(
     if float(np.median(scale)) < 20.0:
         return TraceVerdict(False, "FACE_TOO_SMALL")
     reason = _plausibility(
-        norm, times, iso, scale, MAX_FACE_SPEED_SCALES_PER_S, MAX_FACE_LOG_SCALE_STEP
+        norm,
+        times,
+        iso,
+        scale,
+        MAX_FACE_SPEED_SCALES_PER_S,
+        MAX_FACE_LOG_SCALE_STEP,
+        jump_scale=_face_scale_3d(iso),
+        jitter_per_scale=True,
     )
     if reason:
         return TraceVerdict(False, reason)
@@ -530,38 +627,66 @@ def _verify_face(
         if action == ChallengeType.BLINK:
             target, other = (ear_l + ear_r) / 2.0, None
         elif action == ChallengeType.CLOSE_LEFT_EYE:
-            # Web mirror mapping: userLeftEAR = MediaPipe RIGHT_EYE EAR.
-            target, other = ear_r, ear_l
-        else:
+            # The user's own left eye = MediaPipe LEFT_EYE (362..). The web used to
+            # map it to RIGHT_EYE ("mirror"), which made CLOSE_LEFT fire on the
+            # user's RIGHT eye; both sides were corrected together (2026-11-01).
             target, other = ear_l, ear_r
+        else:
+            target, other = ear_r, ear_l
         closed = target <= _EYE_CLOSE_EAR_MAX
         if not closed.any():
             return TraceVerdict(False, "EYE_NOT_CLOSED")
-        first, last = int(np.argmax(closed)), int(closed.size - 1 - np.argmax(closed[::-1]))
         open_level = _EYE_CLOSE_EAR_MAX + EYE_REOPEN_MARGIN
-        if first == 0 or not np.any(target[:first] >= open_level):
-            return TraceVerdict(False, "NO_OPEN_TO_CLOSED_TRANSITION")
-        if last == closed.size - 1 or not np.any(target[last + 1 :] >= open_level):
-            return TraceVerdict(False, "EYE_NOT_REOPENED")
-        if action != ChallengeType.BLINK:
-            run_len, rs, re_ = _longest_run(closed)
-            if run_len < hold:
-                return TraceVerdict(False, "GESTURE_NOT_SUSTAINED")
-            if other is not None and float(np.median(other[rs : re_ + 1])) <= _EYE_CLOSE_EAR_MAX:
-                return TraceVerdict(False, "WRONG_EYE_OR_BOTH_CLOSED")
-        metrics["ear"] = float(target.min())
+        is_open = target >= open_level
+        # Any closed run framed by an open frame before AND after it counts (a
+        # rolling client window may start in the middle of an earlier blink, so
+        # "the first closed frame of the trace" is not the right anchor).
+        reason = None
+        chosen: Optional[Tuple[int, int]] = None
+        for rs, re_ in _runs(closed):
+            if not is_open[:rs].any():
+                reason = reason or "NO_OPEN_TO_CLOSED_TRANSITION"
+                continue
+            if not is_open[re_ + 1 :].any():
+                reason = "EYE_NOT_REOPENED" if reason in (None, "NO_OPEN_TO_CLOSED_TRANSITION") else reason
+                continue
+            if action != ChallengeType.BLINK:
+                if re_ - rs + 1 < hold:
+                    reason = "GESTURE_NOT_SUSTAINED"
+                    continue
+                if other is not None and float(np.median(other[rs : re_ + 1])) <= _EYE_CLOSE_EAR_MAX:
+                    reason = "WRONG_EYE_OR_BOTH_CLOSED"
+                    continue
+            chosen = (rs, re_)
+            break
+        if chosen is None:
+            return TraceVerdict(False, reason or "EYE_NOT_CLOSED")
+        metrics["ear"] = float(target[chosen[0] : chosen[1] + 1].min())
 
-    elif action in (ChallengeType.SMILE, ChallengeType.OPEN_MOUTH):
+    elif action == ChallengeType.SMILE:
+        # Smile = the mouth corners rise (web SmileDetector feature), measured as
+        # an INCREASE over the in-trace neutral baseline, AND the web's absolute
+        # gate holds on the same frames. (MAR measures an opening, not a smile.)
+        corner, width = _smile_features(norm)
+        inc = corner - _baseline(corner, EXPRESSION_BASELINE_FRAMES)
+        smiling = (
+            (inc >= _SMILE_CORNER_RAISE_MIN)
+            & (corner > _SMILE_CORNER_ABS_MIN)
+            & (width > _SMILE_WIDTH_RATIO_MIN)
+        )
+        run_len, rs, re_ = _longest_run(smiling)
+        if run_len < hold:
+            return TraceVerdict(False, "GESTURE_NOT_SUSTAINED" if run_len else "SMILE_NOT_DETECTED")
+        metrics["smile_corner_raise"] = float(inc[rs : re_ + 1].max())
+
+    elif action == ChallengeType.OPEN_MOUTH:
         mar = _mar(norm)
-        thr = _SMILE_MAR_MIN if action == ChallengeType.SMILE else _OPEN_MOUTH_MAR_MIN
+        thr = _OPEN_MOUTH_MAR_MIN
         if _baseline(mar) >= thr:
             return TraceVerdict(False, "NO_REST_TO_GESTURE_TRANSITION")
         run_len, rs, re_ = _longest_run(mar >= thr)
         if run_len < hold:
-            return TraceVerdict(
-                False, "GESTURE_NOT_SUSTAINED" if run_len else
-                ("SMILE_NOT_DETECTED" if action == ChallengeType.SMILE else "MOUTH_NOT_OPEN"),
-            )
+            return TraceVerdict(False, "GESTURE_NOT_SUSTAINED" if run_len else "MOUTH_NOT_OPEN")
         metrics["mar"] = float(mar[rs : re_ + 1].max())
 
     elif action in (
@@ -575,17 +700,23 @@ def _verify_face(
             ChallengeType.RAISE_LEFT_BROW: left,
             ChallengeType.RAISE_RIGHT_BROW: right,
         }[action]
-        base = _baseline(series)
+        base = _baseline(series, EXPRESSION_BASELINE_FRAMES)
         if base <= 0:
             return TraceVerdict(False, "DEGENERATE_GEOMETRY")
         # v2 brow metric = fractional increase of the brow→eye distance over the
-        # in-trace neutral baseline (the v1 web ratio ≈ 1.0 at rest made the
-        # scorer's ≥ 0.08 gate trivially satisfiable).
+        # in-trace neutral baseline (median of the first 5 frames). The v1 web
+        # ratio ≈ 1.0 at rest made the v1 ≥ 0.08 gate trivially satisfiable, and
+        # 0.08 over a baseline was still within photo noise (calibration).
         increase = series / base - 1.0
-        run_len, rs, re_ = _longest_run(increase >= _BROW_RAISE_MIN)
+        floor = (
+            _BROW_RAISE_V2_BOTH_MIN
+            if action == ChallengeType.RAISE_EYEBROWS
+            else _BROW_RAISE_V2_SINGLE_MIN
+        )
+        run_len, rs, re_ = _longest_run(increase >= floor)
         if run_len < hold:
             return TraceVerdict(False, "BROW_NOT_RAISED" if run_len == 0 else "GESTURE_NOT_SUSTAINED")
-        metrics["brow_raise"] = float(increase[rs : re_ + 1].max())
+        metrics["brow_raise_increase"] = float(increase[rs : re_ + 1].max())
 
     elif action in (
         ChallengeType.TURN_LEFT,

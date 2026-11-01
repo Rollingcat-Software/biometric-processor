@@ -24,15 +24,16 @@ from tests.unit.application.services import puzzle_trace_factory as F
 
 GENUINE_FACE = [
     (C.BLINK, F.blink_trace, "ear"),
-    (C.CLOSE_LEFT_EYE, lambda: F.wink_trace("right"), "ear"),
-    (C.CLOSE_RIGHT_EYE, lambda: F.wink_trace("left"), "ear"),
+    (C.CLOSE_LEFT_EYE, lambda: F.wink_trace("left"), "ear"),
+    (C.CLOSE_RIGHT_EYE, lambda: F.wink_trace("right"), "ear"),
     (C.TURN_LEFT, lambda: F.turn_trace(-25), "yaw"),
     (C.TURN_RIGHT, lambda: F.turn_trace(25), "yaw"),
     (C.LOOK_UP, lambda: F.look_trace(-18), "pitch"),
     (C.LOOK_DOWN, lambda: F.look_trace(18), "pitch"),
     (C.OPEN_MOUTH, lambda: F.mouth_trace(1.0), "mar"),
-    (C.SMILE, lambda: F.mouth_trace(0.8), "mar"),
-    (C.RAISE_EYEBROWS, F.brow_trace, "brow_raise"),
+    (C.SMILE, F.smile_trace, "smile_corner_raise"),
+    (C.RAISE_EYEBROWS, F.brow_trace, "brow_raise_increase"),
+    (C.RAISE_LEFT_BROW, lambda: F.face_trace([(0, {}), (400, {}), (700, {"brow_l": 1}), (1200, {"brow_l": 1})]), "brow_raise_increase"),
     (C.SHAKE_HEAD, F.shake_trace, "oscillation_count"),
     (C.NOD, F.nod_trace, "oscillation_count"),
 ]
@@ -105,6 +106,17 @@ def test_blink_without_reopen_rejected() -> None:
 def test_blink_starting_closed_rejected() -> None:
     t = F.face_trace([(0, {"close_left": 1, "close_right": 1}), (300, {"close_left": 1, "close_right": 1}), (400, {}), (900, {})])
     assert V.verify_trace(C.BLINK, t).reason == "NO_OPEN_TO_CLOSED_TRANSITION"
+
+
+def test_blink_after_trace_starting_mid_earlier_blink_accepted() -> None:
+    # The 4 s rolling window can begin inside an earlier blink; a later full
+    # open -> closed -> open blink must still count (any closed run with an
+    # open frame before and after it, not the trace's first closed frame).
+    closed = {"close_left": 1, "close_right": 1}
+    t = F.face_trace([(0, closed), (120, closed), (200, {}), (900, {}), (980, closed),
+                      (1100, closed), (1180, {}), (1500, {})])
+    v = V.verify_trace(C.BLINK, t)
+    assert v.ok, v.reason
 
 
 def test_wink_with_both_eyes_closed_rejected() -> None:
@@ -224,15 +236,6 @@ def test_identical_frames_rejected() -> None:
         if k % 3:
             t["frames"][k]["f"] = list(t["frames"][k - 1]["f"])
     assert V.verify_trace(C.BLINK, t).reason == "STATIC_FRAMES"
-
-
-def test_smooth_synthetic_trace_without_jitter_rejected() -> None:
-    # A perfectly smooth, interpolated head turn (what a naive synthesiser
-    # emits) has no frame-to-frame landmark noise.
-    t = F.face_trace(
-        [(0, {"yaw": 0}), (700, {"yaw": -25}), (1400, {"yaw": 0})], jitter_px=0.0
-    )
-    assert V.verify_trace(C.TURN_LEFT, t).reason == "NO_NATURAL_JITTER"
 
 
 def test_teleporting_face_rejected() -> None:
@@ -375,3 +378,92 @@ def test_verify_does_not_mutate_input() -> None:
     snapshot = copy.deepcopy(t)
     V.verify_trace(C.BLINK, t)
     assert t == snapshot
+
+
+# ---------------------------------------------------------------------------
+# Real-face calibration fixes (2026-11-01, paper-B calibration on 46 clips)
+# ---------------------------------------------------------------------------
+
+
+def test_smile_is_a_corner_raise_not_a_mouth_opening() -> None:
+    # Opening the mouth (high MAR) is not a smile; raising the corners is.
+    assert V.verify_trace(C.SMILE, F.mouth_trace(1.0)).reason == "SMILE_NOT_DETECTED"
+    r = V.verify_trace(C.SMILE, F.smile_trace(1.0))
+    assert r.ok, r.reason
+    assert r.metrics["smile_corner_raise"] >= 0.03
+
+
+def test_smile_too_small_rejected() -> None:
+    # ~0.2 cm corner lift ≈ 0.024 face heights: below the 0.03 increase gate.
+    assert V.verify_trace(C.SMILE, F.smile_trace(0.2)).reason == "SMILE_NOT_DETECTED"
+
+
+def test_smile_already_held_at_trace_start_rejected() -> None:
+    # The increase is measured over the in-trace baseline (first 5 frames).
+    t = F.face_trace([(0, {"smile": 1.0}), (1200, {"smile": 1.0})])
+    assert V.verify_trace(C.SMILE, t).reason == "SMILE_NOT_DETECTED"
+
+
+def test_brow_noise_level_increase_rejected() -> None:
+    # A ~10% brow-distance increase is within static-photo noise (calibration
+    # p95 0.11 for both brows) and must not pass any more (old gate 0.08).
+    small = F.face_trace([(0, {}), (400, {}), (700, {"brow": 0.37}), (1200, {"brow": 0.37})])
+    r = V.verify_trace(C.RAISE_EYEBROWS, small)
+    assert r.reason == "BROW_NOT_RAISED"
+
+
+def test_single_brow_needs_twenty_percent() -> None:
+    def single(level: float) -> dict:
+        return F.face_trace([(0, {}), (400, {}), (700, {"brow_l": level}), (1200, {"brow_l": level})])
+
+    # ≈ 0.17 increase: enough for both brows, not for a single brow.
+    assert V.verify_trace(C.RAISE_LEFT_BROW, single(0.62)).reason == "BROW_NOT_RAISED"
+    assert V.verify_trace(C.RAISE_LEFT_BROW, single(1.0)).ok
+
+
+def test_left_right_follow_the_users_own_sides() -> None:
+    # MediaPipe LEFT_EYE (362..) / brow 300.. = the user's own left side.
+    left_wink = F.wink_trace("left")
+    assert V.verify_trace(C.CLOSE_LEFT_EYE, left_wink).ok
+    assert V.verify_trace(C.CLOSE_RIGHT_EYE, left_wink).reason == "EYE_NOT_CLOSED"
+    left_brow = F.face_trace([(0, {}), (400, {}), (700, {"brow_l": 1}), (1200, {"brow_l": 1})])
+    assert V.verify_trace(C.RAISE_LEFT_BROW, left_brow).ok
+    assert V.verify_trace(C.RAISE_RIGHT_BROW, left_brow).reason == "BROW_NOT_RAISED"
+
+
+def test_blink_reopen_level_matches_web_reopen_threshold() -> None:
+    # Shared constant: the web completes a blink on the first frame with
+    # EAR >= 0.23 (BLINK_EAR_REOPEN); that frame must count as "open" here.
+    assert V._EYE_CLOSE_EAR_MAX + V.EYE_REOPEN_MARGIN == pytest.approx(0.23)
+
+
+def test_jitter_floor_is_face_size_invariant() -> None:
+    # The same physical noise (0.5 px on a 640 px frame) passes for a small and
+    # a large face alike once normalised by the inter-ocular distance.
+    for ppc in (7.0, 14.0, 22.0):
+        t = F.face_trace([(0, {"px_per_cm": ppc}), (400, {"px_per_cm": ppc}), (580, {"close_left": 1, "close_right": 1, "px_per_cm": ppc}),
+                          (700, {"close_left": 1, "close_right": 1, "px_per_cm": ppc}), (780, {"px_per_cm": ppc}), (1100, {"px_per_cm": ppc})])
+        assert V.verify_trace(C.BLINK, t).ok, ppc
+
+
+def test_smooth_synthetic_trace_large_face_rejected() -> None:
+    # Anti-smoothing only: an interpolated trace whose only noise is the 1e-4
+    # wire quantisation is rejected when the face is large enough for the
+    # quantisation to sit below the floor (IOD ≳ 150 px at 640 px width).
+    t = F.face_trace(
+        [(0, {"yaw": 0, "px_per_cm": 22.0}), (700, {"yaw": -25, "px_per_cm": 22.0}), (1400, {"yaw": 0, "px_per_cm": 22.0})],
+        jitter_px=0.0,
+    )
+    assert V.verify_trace(C.TURN_LEFT, t).reason == "NO_NATURAL_JITTER"
+
+
+def test_fast_genuine_head_turn_is_not_a_scale_jump() -> None:
+    # 0 → 45° yaw between two frames (66 ms): the 2D inter-ocular distance
+    # shrinks by cos 45° (|Δln| ≈ 0.35 > 0.30), the 3D one does not.
+    t = F.face_trace([(0, {}), (250, {}), (251, {"yaw": 45}), (900, {"yaw": 45}), (1300, {}), (1600, {})], fps=15)
+    fr = t["frames"]
+    norm = np.asarray([f["f"] for f in fr], dtype=float).reshape(len(fr), 32, 3) * V.TRACE_COORD_SCALE
+    iso = V._iso(norm, t["frame_width"], t["frame_height"])
+    assert np.max(np.abs(np.diff(np.log(V._face_scale(iso))))) > V.MAX_FACE_LOG_SCALE_STEP
+    assert np.max(np.abs(np.diff(np.log(V._face_scale_3d(iso))))) < 0.05
+    assert V.verify_trace(C.TURN_RIGHT, t).reason != "SCALE_JUMP_IMPLAUSIBLE"

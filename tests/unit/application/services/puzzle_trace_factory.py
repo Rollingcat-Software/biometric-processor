@@ -65,8 +65,9 @@ _P = {idx: k for k, idx in enumerate(FACE_TRACE_INDICES)}
 _LIDS_LEFT = ((385, 380), (387, 373))
 _LIDS_RIGHT = ((160, 144), (158, 153))
 _BROWS = (70, 63, 105, 66, 107, 300, 293, 334, 296, 336)
-_BROWS_L = (70, 63, 105, 66, 107)
-_BROWS_R = (300, 293, 334, 296, 336)
+# Subject's own left brow (above LEFT_EYE 362..) / right brow (above 33..).
+_BROWS_L = (300, 293, 334, 296, 336)
+_BROWS_R = (70, 63, 105, 66, 107)
 
 
 def face_points(
@@ -79,6 +80,7 @@ def face_points(
     brow: float = 0.0,
     brow_l: float = 0.0,
     brow_r: float = 0.0,
+    smile: float = 0.0,
     cx: float = 320.0,
     cy: float = 240.0,
     px_per_cm: float = 14.0,
@@ -96,6 +98,11 @@ def face_points(
         for up, lo in lids:
             p[_P[up], 1] = p[_P[up], 1] + amount * 0.95 * (p[_P[lo], 1] - p[_P[up], 1])
     p[_P[14], 1] -= mouth * 3.0
+    # Smile: mouth corners rise (~1 cm at full smile) and move outward.
+    p[_P[61], 1] += smile * 1.0
+    p[_P[291], 1] += smile * 1.0
+    p[_P[61], 0] -= smile * 0.3
+    p[_P[291], 0] += smile * 0.3
     for i in _BROWS:
         p[_P[i], 1] += brow * 0.6
     for i in _BROWS_L:
@@ -180,6 +187,10 @@ def look_trace(pitch: float = -18.0, **kw: Any) -> Dict[str, Any]:
 
 def mouth_trace(level: float = 1.0, **kw: Any) -> Dict[str, Any]:
     return face_trace([(0, {}), (400, {}), (700, {"mouth": level}), (1200, {"mouth": level})], **kw)
+
+
+def smile_trace(level: float = 1.0, **kw: Any) -> Dict[str, Any]:
+    return face_trace([(0, {}), (400, {}), (700, {"smile": level}), (1200, {"smile": level})], **kw)
 
 
 def brow_trace(**kw: Any) -> Dict[str, Any]:
