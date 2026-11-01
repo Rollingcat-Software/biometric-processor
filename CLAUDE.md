@@ -315,7 +315,7 @@ face + 9 hand challenge types (canonical contract:
 - **v1 caveat (flag OFF, the default):** SUBMIT carries ONE client-computed scalar
   per challenge (`ear`, `mar`, `yaw`…) that `score_action_metrics` only thresholds —
   a modified client can forge it. Order, duration and difficulty are not enforced and
-  split-capture identity binding is enforced only in the web client.
+  the binding-frame consistency check runs only in the web client.
 
 #### Contract v2 — server-side landmark-trace re-scoring (`PUZZLE_TRACE_V2_ENABLED`, default OFF, 2026-11-01)
 - **Flag:** env `PUZZLE_TRACE_V2_ENABLED=true` (config.py; `.env.example`). OFF = v1
@@ -347,14 +347,35 @@ face + 9 hand challenge types (canonical contract:
   (`SESSION_FAILED`, verdict false); trace span ≤ server-observed time since the previous
   accepted event + 1.5 s (`TRACE_LONGER_THAN_ELAPSED`); difficulty enforced (easy/standard/
   hard → ≥1/2/3 challenges and 1/2/3 consecutive frames held).
-- **Split-capture binding (verdict):** identity-core-api sends `require_identity_binding`
-  + the client-declared `binding_frame {t, f}` when `alsoMatchFaceIdentity` is on; bio
-  requires the frame to lie inside a verified face-challenge window of the SAME session and
-  to match the trace there (position RMS ≤0.12 IOD, scale-normalised ratios within 10%).
-  This raises the bar for an unmodified/lightly-modified client; it does NOT prove frame
-  provenance against an attacker who synthesises a consistent trace + embedding
-  (camera/injection class, out of scope). Traces are still client data: v2 makes forging
-  require a coherent, jittered, physically plausible landmark time-series, not one number.
+- **Binding-frame consistency check (verdict)** (wire fields unchanged:
+  `require_identity_binding`, `binding_frame`): identity-core-api sends
+  `require_identity_binding` + the client-declared `binding_frame {t, f}` when
+  `alsoMatchFaceIdentity` is on; bio requires the frame to lie inside a verified
+  face-challenge window of the SAME session and to match the trace there (position RMS
+  ≤0.12 IOD, scale-normalised ratios within 10%). **What it is NOT:** it only checks the
+  client's declared frame against the client's OWN trace; it does NOT tie the matched
+  512-d embedding to the live capture. A modified client can pass it (declare an in-window
+  frame, submit an embedding from elsewhere). Real binding needs server-observed image
+  data or attested capture. Traces are still client data: v2 makes forging require a
+  coherent, jittered, physically plausible landmark time-series, not one number.
+- **Version handshake:** the verdict response carries `binding_checked: true` ONLY when a
+  required binding check actually ran and passed on a v2 session (omitted otherwise, so
+  the flag-OFF response stays `{verified}`). identity-core-api fails a binding-required
+  step closed without it (unless it recorded at CREATE that bio advertised v1).
+- **Store hygiene:** expired sessions purged on create + submit (full sweep at most every
+  30 s); ≤5 open sessions per (tenant,user), the oldest evicted on the 6th create; face
+  windows kept as float32 landmarks and only when CREATE did not say
+  `require_identity_binding: false` (identity-core-api sends it from `alsoMatchFaceIdentity`).
+- **Unsatisfiable types (v2):** `light`, `shape_trace` (no template issued) and
+  `hold_position` (not rendered by the web client) are FILTERED out of the allow-list at
+  create (logged); if none remain, CREATE returns 400.
+- **Sync scoring (S3):** `verify_trace` runs synchronously on the event loop by design
+  (bounded ≤200 frames; makes each session's check-and-mutate atomic). Moving it to a
+  thread pool requires a per-session lock first.
+- **Known limitations (documented, not fixed):** the session store is process-local
+  (multi-worker uvicorn needs sticky routing or a shared store); traces remain client
+  data (no attestation); thresholds are uncalibrated on real device video (calibration
+  running separately — do not retune here).
 - **Calibrate before flipping:** thresholds/estimator were validated on programmatic traces
   from the canonical face model, not on recorded device traces. Known v1-inherited gaps:
   scorer MAR gates (smile ≥0.40, open-mouth ≥0.50) and tap/pinch (≤0.08/≤0.12) are stricter

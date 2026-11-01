@@ -2,7 +2,7 @@
 
 Covers the session-level rules layered on top of the trace verifier:
 scalar-only rejection, issued order, attempt cap / burn, trace-span vs the
-server-observed elapsed time, difficulty floor, split-capture binding at the
+server-observed elapsed time, difficulty floor, binding-frame consistency check at the
 verdict, flag-OFF legacy behaviour, and a full HTTP round trip
 (create → submit realistic traces → verdict with binding).
 """
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Dict, List
 
+import numpy as np
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -273,7 +274,8 @@ def test_http_round_trip_v2_with_binding(v2_client) -> None:
               "binding_frame": _binding_from(traces["blink"])},
     )
     assert verdict.status_code == 200
-    assert verdict.json() == {"verified": True}
+    # S5 handshake: the binding check ran and passed -> binding_checked true.
+    assert verdict.json() == {"verified": True, "binding_checked": True}
 
 
 def test_http_v2_scalar_submit_rejected(v2_client) -> None:
@@ -328,3 +330,184 @@ def test_http_flag_off_create_has_no_trace_contract() -> None:
         ).json()
     assert body["trace_contract"] is None
     assert body["trace_face_indices"] is None
+
+
+# ---------------------------------------------------------------------------
+# Security-review fixes: S1 store hygiene, S5 handshake, N4 filtering, B3 interval
+# ---------------------------------------------------------------------------
+
+from app.application.services import puzzle_trace_verifier as V  # noqa: E402
+
+
+def _two_step_verified(mgr, clock, actions=(C.BLINK, C.WAVE), **create_kw):
+    s = mgr.create_session(
+        user_id=USER, tenant_id=TENANT, allowed_challenge_types=list(actions),
+        count=len(actions), **create_kw,
+    )
+    for c, a in zip(s.challenges, actions):
+        c.action = a
+        c.params = {}
+    traces = {a: TRACES[a]() for a in actions}
+    for a in actions:
+        clock.advance(3)
+        assert _submit(mgr, s.session_id, a, trace=traces[a]) == (True, None)
+    return s, traces
+
+
+def test_s1_expired_sessions_purged_on_create() -> None:
+    clock = FakeClock()
+    mgr = _mgr(clock)
+    old = _session(mgr, [C.BLINK, C.WAVE])
+    clock.advance(mgr.DEFAULT_TTL_SECONDS + mgr.PURGE_INTERVAL_SECONDS + 1)
+    _session(mgr, [C.BLINK, C.WAVE])
+    assert mgr.get_session(old.session_id) is None
+
+
+def test_s1_expired_session_dropped_on_submit() -> None:
+    clock = FakeClock()
+    mgr = _mgr(clock)
+    s = _session(mgr, [C.BLINK, C.WAVE])
+    clock.advance(mgr.DEFAULT_TTL_SECONDS + 1)
+    assert _submit(mgr, s.session_id, C.BLINK, trace=TRACES[C.BLINK]())[1] in (
+        "SESSION_EXPIRED", "SESSION_NOT_FOUND",
+    )
+    assert mgr.get_session(s.session_id) is None
+
+
+def test_s1_open_session_cap_evicts_oldest_per_owner() -> None:
+    clock = FakeClock()
+    mgr = _mgr(clock)
+    cap = mgr.MAX_OPEN_SESSIONS_PER_OWNER
+    ids = [_session(mgr, [C.BLINK, C.WAVE]).session_id for _ in range(cap)]
+    other = mgr.create_session(
+        user_id="someone-else", tenant_id=TENANT, allowed_challenge_types=[C.BLINK, C.WAVE], count=2,
+    )
+    newest = _session(mgr, [C.BLINK, C.WAVE]).session_id
+    assert mgr.get_session(ids[0]) is None  # oldest evicted
+    assert all(mgr.get_session(i) is not None for i in ids[1:])
+    assert mgr.get_session(newest) is not None
+    assert mgr.get_session(other.session_id) is not None  # other owner untouched
+    open_for_owner = [
+        sid for sid, sess in mgr._sessions.items() if (sess.tenant_id, sess.user_id) == (TENANT, USER)
+    ]
+    assert len(open_for_owner) == cap
+
+
+def test_s1_face_window_stored_float32_only_when_binding_possible() -> None:
+    clock = FakeClock()
+    mgr = _mgr(clock)
+    s, _ = _two_step_verified(mgr, clock)
+    win = s.challenges[0].face_window
+    assert win is not None and win.norm.dtype == np.float32 and win.times.dtype == np.float64
+    clock2 = FakeClock()
+    mgr2 = _mgr(clock2)
+    s2, traces2 = _two_step_verified(mgr2, clock2, require_identity_binding=False)
+    assert all(c.face_window is None for c in s2.challenges)
+    # A binding-required verdict on such a session fails CLOSED.
+    res = mgr2.verdict_with_details(
+        s2.session_id, user_id=USER, tenant_id=TENANT,
+        require_identity_binding=True, binding_frame=_binding_from(traces2[C.BLINK]),
+    )
+    assert res == (False, "BINDING_OUTSIDE_WINDOW", False)
+
+
+def test_s5_binding_checked_only_when_binding_evaluated() -> None:
+    clock = FakeClock()
+    mgr = _mgr(clock)
+    s, traces = _two_step_verified(mgr, clock)
+    res = mgr.verdict_with_details(
+        s.session_id, user_id=USER, tenant_id=TENANT,
+        require_identity_binding=True, binding_frame=_binding_from(traces[C.BLINK]),
+    )
+    assert res == (True, None, True)
+    s, _ = _two_step_verified(mgr, clock)
+    assert mgr.verdict_with_details(s.session_id, user_id=USER, tenant_id=TENANT) == (True, None, False)
+
+
+def test_s5_v1_never_reports_binding_checked() -> None:
+    clock = FakeClock()
+    mgr = _mgr(clock, v2=False)
+    s = _session(mgr, [C.BLINK])
+    assert _submit(mgr, s.session_id, C.BLINK, metrics={"ear": 0.1}) == (True, None)
+    res = mgr.verdict_with_details(
+        s.session_id, user_id=USER, tenant_id=TENANT, require_identity_binding=True, binding_frame=None,
+    )
+    assert res == (True, None, False)
+
+
+def test_s5_http_v1_verdict_body_unchanged() -> None:
+    mgr = PuzzleSessionManager(trace_v2_enabled=False)
+    app = FastAPI()
+    app.include_router(puzzle_router, prefix="/api/v1")
+    app.dependency_overrides[get_puzzle_session_manager] = lambda: mgr
+    with TestClient(app) as c:
+        sid = c.post(
+            "/api/v1/liveness/puzzle-session",
+            json={"tenant_id": TENANT, "user_id": USER, "allowed_challenge_types": ["blink"], "count": 1},
+        ).json()["session_id"]
+        c.post(
+            f"/api/v1/liveness/puzzle-session/{sid}/challenge",
+            json={"action": "blink", "metrics": {"ear": 0.1}, "start_timestamp_ms": 1.0,
+                  "end_timestamp_ms": 2.0, "confidence": 0.9},
+        )
+        body = c.post(
+            f"/api/v1/liveness/puzzle-session/{sid}/verdict",
+            json={"user_id": USER, "tenant_id": TENANT, "require_identity_binding": True},
+        ).json()
+    assert body == {"verified": True}
+
+
+def test_n4_v2_create_filters_unsatisfiable_types() -> None:
+    clock = FakeClock()
+    mgr = _mgr(clock)
+    bad = [C.LIGHT, C.SHAPE_TRACE, C.HOLD_POSITION]
+    for _ in range(20):
+        s = mgr.create_session(
+            user_id=USER, tenant_id=TENANT, allowed_challenge_types=bad + [C.BLINK], count=4,
+        )
+        assert {c.action for c in s.challenges} == {C.BLINK}
+    with pytest.raises(ValueError, match="satisfiable"):
+        mgr.create_session(user_id=USER, tenant_id=TENANT, allowed_challenge_types=bad, count=1)
+    # v1 (flag OFF) unchanged: LIGHT is still issued.
+    legacy = _mgr(clock, v2=False).create_session(
+        user_id=USER, tenant_id=TENANT, allowed_challenge_types=[C.LIGHT], count=1,
+    )
+    assert legacy.challenges[0].action == C.LIGHT
+
+
+def test_n4_http_v2_all_unsatisfiable_is_400(v2_client) -> None:
+    client, _ = v2_client
+    res = client.post(
+        "/api/v1/liveness/puzzle-session",
+        json={"tenant_id": TENANT, "user_id": USER, "allowed_challenge_types": ["light"], "count": 1},
+    )
+    assert res.status_code == 400
+
+
+# B3 cross-repo contract. SHARED CONSTANT: bio MIN_FRAME_INTERVAL_MS (15 ms) ==
+# web-app src/features/biometric-puzzles/puzzleTrace.ts TRACE_MIN_FRAME_INTERVAL_MS.
+# The web recorder must never emit two frames closer than this, including the
+# forced "completing frame" (it REPLACES the last frame instead). The mirror test
+# lives in web-app puzzleTrace.test.ts ("forced frame at +8 ms ...").
+WEB_TRACE_MIN_FRAME_INTERVAL_MS = 15.0
+
+
+def test_b3_shared_min_frame_interval_constant() -> None:
+    assert V.MIN_FRAME_INTERVAL_MS == WEB_TRACE_MIN_FRAME_INTERVAL_MS
+
+
+def test_b3_web_style_forced_completion_frame_passes_interval_rule() -> None:
+    # A web-recorded blink at ~30 fps whose completing frame was forced 8 ms
+    # after the previous one: the web recorder REPLACES the last frame, so the
+    # submitted trace keeps the previous frame's spacing.
+    trace = F.blink_trace()
+    frames = trace["frames"]
+    forced_t = frames[-1]["t"] + 8
+    replaced = dict(frames[-1], t=forced_t)
+    web_trace = dict(trace, frames=frames[:-1] + [replaced])
+    ts = [f["t"] for f in web_trace["frames"]]
+    assert min(b - a for a, b in zip(ts, ts[1:])) >= V.MIN_FRAME_INTERVAL_MS
+    assert V.verify_trace(C.BLINK, web_trace, {}, hold_frames=2).reason != "FRAME_INTERVAL_IMPLAUSIBLE"
+    # The OLD web behaviour (append at +8 ms) is exactly what bio rejects.
+    appended = dict(trace, frames=frames + [dict(frames[-1], t=forced_t)])
+    assert V.verify_trace(C.BLINK, appended, {}, hold_frames=2).reason == "FRAME_INTERVAL_IMPLAUSIBLE"

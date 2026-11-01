@@ -111,7 +111,7 @@ _POSE_CANONICAL: Dict[int, Tuple[float, float, float]] = {
 _POSE_IDX = tuple(_POSE_CANONICAL.keys())
 _POSE_CANON = np.asarray([_POSE_CANONICAL[i] for i in _POSE_IDX], dtype=np.float64)
 
-# Scale-normalised ratios used for split-capture binding geometry checks
+# Scale-normalised ratios used for the binding-frame consistency check
 # (numerator pairs, all divided by the inter-ocular distance 33↔263).
 _GEOMETRY_PAIRS: Tuple[Tuple[int, int], ...] = (
     (1, 152),    # nose tip → chin
@@ -250,7 +250,7 @@ HOLD_FRAMES_BY_DIFFICULTY: Dict[str, int] = {"easy": 1, "standard": 2, "hard": 3
 
 @dataclass
 class FaceWindow:
-    """A verified face challenge window, kept for split-capture binding."""
+    """A verified face challenge window, kept for the binding-frame consistency check."""
 
     times: np.ndarray  # (n,) ms, strictly increasing
     norm: np.ndarray  # (n, 32, 3) normalised coords
@@ -835,7 +835,7 @@ def _geometry_ratios(iso_pts: np.ndarray) -> np.ndarray:
 def verify_binding_frame(
     windows: Sequence[FaceWindow], binding: Optional[Mapping[str, Any]]
 ) -> Optional[str]:
-    """Check a split-capture binding frame against the session's face windows.
+    """Binding-frame consistency check against the session's face windows.
 
     The client declares the timestamp + landmarks of the frame its identity
     embedding was computed from. Passes (returns ``None``) only when that
@@ -844,9 +844,12 @@ def verify_binding_frame(
     (position RMS ≤ :data:`BINDING_MAX_POSITION_RMS` inter-ocular distances,
     every scale-normalised ratio within :data:`BINDING_MAX_RATIO_DEVIATION`).
 
-    This raises the bar against split capture by an unmodified or lightly
-    modified client; it cannot prove frame provenance against an attacker who
-    synthesises a consistent trace + embedding.
+    Scope (honest): this only checks the client-DECLARED frame against the
+    client's OWN trace. It does NOT tie the matched 512-d embedding to the live
+    capture: a modified client can pass it (declare any in-window frame, then
+    submit an embedding from elsewhere). Real binding needs server-observed
+    image data or attested capture. It raises the bar only for an unmodified
+    or lightly modified client.
     """
     if not binding:
         return "BINDING_FRAME_REQUIRED"

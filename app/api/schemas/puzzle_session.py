@@ -46,6 +46,15 @@ class PuzzleSessionCreateRequest(BaseModel):
     difficulty: Optional[str] = Field(
         default=None, description="Optional difficulty hint (easy|standard|hard)."
     )
+    require_identity_binding: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether the verdict may require the v2 binding-frame consistency "
+            "check. false = the per-challenge face windows are not retained (a "
+            "later binding-required verdict fails closed). Omitted = retained "
+            "(backward compatible)."
+        ),
+    )
 
 
 class IssuedChallenge(BaseModel):
@@ -138,7 +147,9 @@ class PuzzleTrace(BaseModel):
 
 
 class PuzzleBindingFrame(BaseModel):
-    """v2 split-capture binding: the frame the identity embedding came from."""
+    """v2 binding-frame consistency check: the client-DECLARED frame the identity
+    embedding came from. Only checked against the client's own trace; it does
+    not tie the embedding to the live capture (a modified client can pass it)."""
 
     t: int = Field(..., ge=0, le=2**53, description="Client clock (same timebase as traces), ms.")
     f: List[int] = Field(..., description="32 face landmarks, same encoding as a trace frame.")
@@ -227,6 +238,15 @@ class PuzzleSessionVerdictResponse(BaseModel):
             "True iff all issued challenges validated AND owner matches AND not "
             "expired AND not already consumed. The session is single-use: a "
             "second verdict call returns false."
+        ),
+    )
+    binding_checked: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Version handshake. true only when require_identity_binding was set, "
+            "the session is contract v2 and the binding-frame consistency check "
+            "was evaluated and passed. Omitted otherwise (always omitted on v1), so "
+            "a caller that requires binding can fail closed when it is absent."
         ),
     )
 

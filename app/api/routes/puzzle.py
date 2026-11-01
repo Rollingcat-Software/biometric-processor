@@ -668,6 +668,7 @@ async def create_puzzle_session(
             allowed_challenge_types=list(request.allowed_challenge_types),
             count=request.count,
             difficulty=request.difficulty,
+            require_identity_binding=request.require_identity_binding,
         )
     except ValueError as exc:
         logger.warning("create_puzzle_session rejected: %s", exc)
@@ -711,6 +712,13 @@ async def submit_puzzle_challenge(
     manager: PuzzleSessionManager = Depends(get_puzzle_session_manager),
 ) -> PuzzleSessionChallengeResponse:
     """Score one challenge against the issued session."""
+    # S3: under contract v2 submit_challenge runs verify_trace SYNCHRONOUSLY on
+    # the event loop, intentionally. The trace is bounded (<=200 frames, numpy)
+    # and the synchronous call makes each session's read-check-mutate (order,
+    # attempt cap, elapsed-time check, completion) atomic without a lock. Moving
+    # it off the loop (run_in_threadpool / an executor) REQUIRES adding a
+    # per-session lock first, or concurrent submits for one session could race
+    # past the attempt / order / elapsed checks.
     verified, reason_code = manager.submit_challenge(
         session_id,
         action=request.action,
@@ -746,6 +754,9 @@ async def submit_puzzle_challenge(
         200: {"description": "Verdict returned; session consumed."},
         404: {"description": "Unknown or expired session."},
     },
+    # binding_checked is omitted unless it is true, so the flag-OFF (v1) and
+    # no-binding responses stay byte-identical: {"verified": ...}.
+    response_model_exclude_none=True,
 )
 async def puzzle_session_verdict(
     session_id: str,
@@ -753,7 +764,7 @@ async def puzzle_session_verdict(
     manager: PuzzleSessionManager = Depends(get_puzzle_session_manager),
 ) -> PuzzleSessionVerdictResponse:
     """Return the authoritative verdict and consume the session (single-use)."""
-    verified, reason_code = manager.verdict(
+    result = manager.verdict_with_details(
         session_id,
         user_id=request.user_id,
         tenant_id=request.tenant_id,
@@ -764,7 +775,10 @@ async def puzzle_session_verdict(
     )
 
     # Unknown / expired session → 404 (an already-consumed id is also gone).
-    if reason_code in ("SESSION_NOT_FOUND", "SESSION_EXPIRED"):
-        raise HTTPException(status_code=404, detail=reason_code)
+    if result.reason_code in ("SESSION_NOT_FOUND", "SESSION_EXPIRED"):
+        raise HTTPException(status_code=404, detail=result.reason_code)
 
-    return PuzzleSessionVerdictResponse(verified=verified)
+    return PuzzleSessionVerdictResponse(
+        verified=result.verified,
+        binding_checked=True if result.binding_checked else None,
+    )

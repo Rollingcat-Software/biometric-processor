@@ -858,7 +858,9 @@ class Settings(BaseSettings):
     # client). ON = every SUBMIT must carry a timestamped landmark trace; the
     # server recomputes the metric, enforces the temporal shape, duration,
     # issued order, difficulty and anti-synthesis plausibility, and (when
-    # identity-core-api asks) checks the split-capture binding frame. Deploy
+    # identity-core-api asks) runs the binding-frame consistency check (client-
+    # declared frame vs the client's own trace; NOT proof that the embedding came
+    # from the live capture — a modified client can pass it). Deploy
     # web + bio first, then flip. See CLAUDE.md "Puzzle liveness session".
     # ------------------------------------------------------------------
     PUZZLE_TRACE_V2_ENABLED: bool = Field(
