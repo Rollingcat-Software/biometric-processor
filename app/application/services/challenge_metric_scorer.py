@@ -45,6 +45,15 @@ session-based detectors use:
     shape_trace                                  dtw_cost        ≤ 0.25
     peek_a_boo                                   covered_then_revealed == True
 
+Contract v2 (``PUZZLE_TRACE_V2_ENABLED``): on the puzzle-session path the
+scalar is no longer taken from the client. ``puzzle_trace_verifier`` recomputes
+it from a submitted landmark trace (after temporal-shape, duration and
+plausibility checks) and passes the trace-derived aggregate through THIS
+function, so the thresholds below stay the single source of truth. Under v2
+``brow_raise`` is the fractional increase of the brow→eye distance over the
+in-trace neutral baseline (the v1 web ratio is ≈1.0 at rest, so ``≥ 0.08`` was
+trivially satisfiable).
+
 The gate returns ``None`` on pass, or a ``(reason_code, message)`` tuple on
 failure. The puzzle path additionally treats an absent metric as a failure
 (``METRIC_REQUIRED``); the verify-challenge path passes through absent metrics.

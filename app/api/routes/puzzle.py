@@ -34,7 +34,10 @@ from app.api.schemas.single_challenge import (
     VerifyChallengeRequest,
     VerifyChallengeResponse,
 )
-from app.application.services.puzzle_session_manager import PuzzleSessionManager
+from app.application.services.puzzle_session_manager import (
+    FACE_TRACE_INDICES,
+    PuzzleSessionManager,
+)
 from app.application.use_cases.generate_puzzle import GeneratePuzzleUseCase
 from app.application.use_cases.verify_puzzle import VerifyPuzzleUseCase
 from app.core.container import get_generate_puzzle_use_case, get_verify_puzzle_use_case
@@ -56,8 +59,17 @@ router = APIRouter(prefix="/liveness", tags=["Liveness Puzzle"])
 
 @lru_cache(maxsize=1)
 def get_puzzle_session_manager() -> PuzzleSessionManager:
-    """Return the process-wide puzzle session manager (singleton)."""
-    return PuzzleSessionManager()
+    """Return the process-wide puzzle session manager (singleton).
+
+    ``PUZZLE_TRACE_V2_ENABLED`` (default OFF) switches the session to contract
+    v2: per-challenge landmark traces re-scored server-side instead of one
+    client-computed scalar.
+    """
+    from app.core.config import settings
+
+    return PuzzleSessionManager(
+        trace_v2_enabled=bool(getattr(settings, "PUZZLE_TRACE_V2_ENABLED", False))
+    )
 
 
 @router.post(
@@ -670,6 +682,10 @@ async def create_puzzle_session(
             )
             for c in session.challenges
         ],
+        trace_contract=session.trace_contract,
+        trace_face_indices=(
+            list(FACE_TRACE_INDICES) if session.trace_contract == "v2" else None
+        ),
     )
 
 
@@ -702,6 +718,7 @@ async def submit_puzzle_challenge(
         start_timestamp_ms=request.start_timestamp_ms,
         end_timestamp_ms=request.end_timestamp_ms,
         confidence=request.confidence,
+        trace=request.trace.model_dump() if request.trace is not None else None,
     )
 
     # Unknown / expired session → 404 (the session id is opaque + ephemeral).
@@ -740,6 +757,10 @@ async def puzzle_session_verdict(
         session_id,
         user_id=request.user_id,
         tenant_id=request.tenant_id,
+        require_identity_binding=request.require_identity_binding,
+        binding_frame=(
+            request.binding_frame.model_dump() if request.binding_frame is not None else None
+        ),
     )
 
     # Unknown / expired session → 404 (an already-consumed id is also gone).

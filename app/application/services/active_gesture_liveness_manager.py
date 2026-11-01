@@ -932,6 +932,88 @@ class ActiveGestureLivenessManager:
         )
 
     # ------------------------------------------------------------------
+    # Trace replay (puzzle-session contract v2)
+    # ------------------------------------------------------------------
+
+    # Gesture types whose per-frame detector can be replayed over a recorded
+    # landmark trace without any client-supplied flag. PEEK_A_BOO (needs the
+    # client face_covered flag) and the tap/pinch variants (the web gesture is a
+    # thumb↔index contact, not this manager's index↔middle tip proximity) are
+    # scored by ``puzzle_trace_verifier`` directly instead.
+    REPLAYABLE_TRACE_TYPES: Tuple[ChallengeType, ...] = (
+        ChallengeType.FINGER_COUNT,
+        ChallengeType.MATH,
+        ChallengeType.WAVE,
+        ChallengeType.HAND_FLIP,
+        ChallengeType.HOLD_POSITION,
+        ChallengeType.SHAPE_TRACE,
+    )
+
+    def evaluate_trace(
+        self,
+        challenge_type: ChallengeType,
+        frames: Sequence[Tuple[int, Optional[Sequence[HandLandmark]]]],
+        params: Optional[Dict[str, Any]] = None,
+    ) -> ChallengeResult:
+        """Replay this manager's per-frame detectors over a recorded hand trace.
+
+        Used by the server-authoritative puzzle-session path (contract v2): the
+        client submits the raw 21-point landmarks per frame and the server
+        re-derives the verdict with the SAME detectors the frame-streaming
+        gesture session uses (single source of truth for the hand geometry).
+
+        Args:
+            challenge_type: One of :attr:`REPLAYABLE_TRACE_TYPES`.
+            frames: ``(frame_time_ms, landmarks_or_None)`` in capture order.
+                Frames with no hand are skipped (they reset nothing).
+            params: Server-issued challenge params (``target`` for
+                finger_count / math, ``template_key`` for shape_trace).
+
+        Returns:
+            The first ``detected=True`` result, or the last result seen (or a
+            ``detected=False`` result when no frame carried a hand).
+        """
+        params = params or {}
+        per: Dict[str, Any] = {}
+        if challenge_type in (ChallengeType.FINGER_COUNT, ChallengeType.MATH):
+            per["target"] = params.get("target", -1)
+        if challenge_type == ChallengeType.SHAPE_TRACE:
+            per["template_key"] = params.get("template_key")
+
+        last: Optional[ChallengeResult] = None
+        for frame_time_ms, landmarks in frames:
+            if landmarks is None or len(landmarks) < 21:
+                continue
+            if challenge_type in (ChallengeType.FINGER_COUNT, ChallengeType.MATH):
+                result = self._detect_finger_count(landmarks, per)
+            elif challenge_type == ChallengeType.WAVE:
+                result = self._detect_wave(landmarks, per, int(frame_time_ms))
+            elif challenge_type == ChallengeType.HAND_FLIP:
+                result = self._detect_hand_flip(landmarks, per)
+            elif challenge_type == ChallengeType.HOLD_POSITION:
+                result = self._detect_hold_position(landmarks, per)
+            elif challenge_type == ChallengeType.SHAPE_TRACE:
+                result = self._detect_shape_trace(landmarks, per)
+            else:
+                return ChallengeResult(
+                    challenge_type=challenge_type,
+                    detected=False,
+                    confidence=0.0,
+                    details={"error": f"Not replayable: {challenge_type}"},
+                )
+            last = result
+            if result.detected:
+                return result
+        if last is None:
+            return ChallengeResult(
+                challenge_type=challenge_type,
+                detected=False,
+                confidence=0.0,
+                details={"error": "No hand landmarks in trace"},
+            )
+        return last
+
+    # ------------------------------------------------------------------
     # Guidance + response building (mirrors ActiveLivenessManager)
     # ------------------------------------------------------------------
 

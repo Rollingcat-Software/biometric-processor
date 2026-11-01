@@ -852,6 +852,24 @@ class Settings(BaseSettings):
         ),
     )
     # ------------------------------------------------------------------
+    # Puzzle-session contract v2 (server-side landmark-trace re-scoring).
+    # OFF (default) = legacy v1: the client submits ONE computed scalar per
+    # challenge and the server only thresholds it (forgeable by a modified
+    # client). ON = every SUBMIT must carry a timestamped landmark trace; the
+    # server recomputes the metric, enforces the temporal shape, duration,
+    # issued order, difficulty and anti-synthesis plausibility, and (when
+    # identity-core-api asks) checks the split-capture binding frame. Deploy
+    # web + bio first, then flip. See CLAUDE.md "Puzzle liveness session".
+    # ------------------------------------------------------------------
+    PUZZLE_TRACE_V2_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Puzzle-session contract v2: require landmark traces per challenge "
+            "and re-score them server-side (scalar-only submissions rejected). "
+            "Default OFF (legacy v1 scalar path)."
+        ),
+    )
+    # ------------------------------------------------------------------
     # eMRTD NFC passive authentication (ICAO 9303 Part 11) — CPU-only.
     # The CSCA trust store holds the Country Signing CA root certificates that
     # Document Signer certs must chain to. The certificates themselves are an

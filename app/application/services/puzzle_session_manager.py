@@ -24,6 +24,23 @@ auth puzzle session is intentionally process-local + ephemeral, like the other
 liveness sessions). Scoring of a submitted challenge is delegated to the shared
 :mod:`app.application.services.challenge_metric_scorer`, which covers BOTH the 14
 face and 9 hand challenge types — so a single session spans both modalities.
+
+Contract v2 (``trace_v2_enabled``, env ``PUZZLE_TRACE_V2_ENABLED``, default OFF)
+replaces the client-computed scalar with a server-recomputed verdict over a
+landmark TRACE (:mod:`app.application.services.puzzle_trace_verifier`) and adds:
+  * scalar-only submissions rejected (``TRACE_REQUIRED``);
+  * issued ORDER enforced (``OUT_OF_ORDER``);
+  * a bounded number of attempts per challenge (``MAX_ATTEMPTS_PER_CHALLENGE``);
+    exceeding it burns the session (``SESSION_FAILED``, verdict false);
+  * the trace span may not exceed the real server-observed time since the
+    previous accepted event (``TRACE_LONGER_THAN_ELAPSED``) — a pre-recorded or
+    synthesised trace cannot be submitted faster than it could be performed;
+  * ``difficulty`` is enforced: it sets a floor on the number of issued
+    challenges and the number of consecutive frames a gesture must be held;
+  * optional split-capture binding at the verdict (``require_identity_binding``
+    + ``binding_frame``): the frame the identity embedding came from must lie
+    inside a verified face-challenge window of the SAME session and match the
+    trace geometry there.
 """
 
 from __future__ import annotations
@@ -33,12 +50,19 @@ import random
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.api.schemas.active_liveness import ChallengeType
 from app.application.services.challenge_metric_scorer import (
     metric_is_present,
     score_action_metrics,
+)
+from app.application.services.puzzle_trace_verifier import (
+    FACE_TRACE_INDICES,
+    HOLD_FRAMES_BY_DIFFICULTY,
+    FaceWindow,
+    verify_binding_frame,
+    verify_trace,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,6 +76,9 @@ class PuzzleChallengeState:
     params: Dict[str, Any] = field(default_factory=dict)
     completed: bool = False
     verified: bool = False
+    attempts: int = 0
+    # v2: the verified face trace window (kept for split-capture binding).
+    face_window: Optional[FaceWindow] = None
 
 
 @dataclass
@@ -65,6 +92,11 @@ class PuzzleSession:
     created_at: float
     expires_at: float
     consumed: bool = False
+    # Contract v2 state.
+    trace_contract: Optional[str] = None
+    difficulty: str = "standard"
+    failed: bool = False
+    last_event_at: float = 0.0
 
     def is_expired(self, now: Optional[float] = None) -> bool:
         return (now if now is not None else time.time()) >= self.expires_at
@@ -78,6 +110,13 @@ class PuzzleSession:
         """First issued, not-yet-completed challenge matching ``action``."""
         for c in self.challenges:
             if c.action == action and not c.completed:
+                return c
+        return None
+
+    def next_pending(self) -> Optional[PuzzleChallengeState]:
+        """First not-yet-completed challenge in ISSUED order (v2 ordering)."""
+        for c in self.challenges:
+            if not c.completed:
                 return c
         return None
 
@@ -95,10 +134,41 @@ class PuzzleSessionManager:
     # Challenge actions that carry a server-issued numeric ``target`` param.
     _TARGETED_ACTIONS = (ChallengeType.FINGER_COUNT, ChallengeType.MATH)
 
-    def __init__(self, ttl_seconds: Optional[int] = None) -> None:
+    # v2: failed submissions allowed per challenge before the session is burned.
+    MAX_ATTEMPTS_PER_CHALLENGE: int = 3
+    # v2: slack (ms) allowed between a trace span and the server-observed time
+    # since the previous accepted event (clock granularity + capture latency).
+    ELAPSED_SLACK_MS: float = 1500.0
+    # v2: difficulty → minimum number of issued challenges.
+    MIN_COUNT_BY_DIFFICULTY: Dict[str, int] = {"easy": 1, "standard": 2, "hard": 3}
+
+    def __init__(
+        self,
+        ttl_seconds: Optional[int] = None,
+        *,
+        trace_v2_enabled: bool = False,
+        gesture_manager: Any = None,
+        clock: Optional[Callable[[], float]] = None,
+    ) -> None:
         self._ttl = int(ttl_seconds) if ttl_seconds is not None else self.DEFAULT_TTL_SECONDS
         self._sessions: Dict[str, PuzzleSession] = {}
-        logger.info("PuzzleSessionManager initialised (ttl=%ss)", self._ttl)
+        self._trace_v2 = bool(trace_v2_enabled)
+        self._gesture_manager = gesture_manager
+        self._clock: Callable[[], float] = clock or (lambda: time.time())
+        logger.info(
+            "PuzzleSessionManager initialised (ttl=%ss, trace_contract=%s)",
+            self._ttl,
+            "v2" if self._trace_v2 else "v1",
+        )
+
+    @property
+    def trace_v2_enabled(self) -> bool:
+        return self._trace_v2
+
+    @staticmethod
+    def _normalise_difficulty(difficulty: Optional[str]) -> str:
+        d = (difficulty or "standard").strip().lower()
+        return d if d in HOLD_FRAMES_BY_DIFFICULTY else "standard"
 
     # ------------------------------------------------------------------
     # CREATE
@@ -124,7 +194,11 @@ class PuzzleSessionManager:
         if count < 1:
             raise ValueError("count must be >= 1")
 
-        created_at = now if now is not None else time.time()
+        created_at = now if now is not None else self._clock()
+        level = self._normalise_difficulty(difficulty)
+        if self._trace_v2:
+            # v2: difficulty is ENFORCED as a floor on the issued step count.
+            count = max(count, self.MIN_COUNT_BY_DIFFICULTY[level])
 
         # Server-randomized selection. Sample WITHOUT replacement when enough
         # distinct types are allowed; otherwise sample WITH replacement so a
@@ -150,6 +224,9 @@ class PuzzleSessionManager:
             challenges=challenges,
             created_at=created_at,
             expires_at=created_at + self._ttl,
+            trace_contract="v2" if self._trace_v2 else None,
+            difficulty=level,
+            last_event_at=created_at,
         )
         self._sessions[session.session_id] = session
         logger.info(
@@ -182,6 +259,7 @@ class PuzzleSessionManager:
         start_timestamp_ms: float,
         end_timestamp_ms: float,
         confidence: float,
+        trace: Optional[Dict[str, Any]] = None,
         now: Optional[float] = None,
     ) -> Tuple[bool, Optional[str]]:
         """Score one submitted challenge against the issued session.
@@ -194,6 +272,7 @@ class PuzzleSessionManager:
         A consumed / expired / unknown session yields ``(False, reason_code)``;
         the route maps ``SESSION_NOT_FOUND`` / ``SESSION_EXPIRED`` to HTTP 404.
         """
+        now = now if now is not None else self._clock()
         session = self._sessions.get(session_id)
         if session is None:
             return (False, "SESSION_NOT_FOUND")
@@ -201,6 +280,16 @@ class PuzzleSessionManager:
             return (False, "SESSION_CONSUMED")
         if session.is_expired(now):
             return (False, "SESSION_EXPIRED")
+
+        if session.trace_contract == "v2":
+            return self._submit_v2(
+                session,
+                action=action,
+                trace=trace,
+                start_timestamp_ms=start_timestamp_ms,
+                end_timestamp_ms=end_timestamp_ms,
+                now=now,
+            )
 
         challenge = session.find_pending(action)
         if challenge is None:
@@ -237,6 +326,87 @@ class PuzzleSessionManager:
         )
         return (True, None)
 
+    def _submit_v2(
+        self,
+        session: PuzzleSession,
+        *,
+        action: ChallengeType,
+        trace: Optional[Dict[str, Any]],
+        start_timestamp_ms: float,
+        end_timestamp_ms: float,
+        now: float,
+    ) -> Tuple[bool, Optional[str]]:
+        """Contract v2: server recomputes the verdict from the landmark trace."""
+        if session.failed:
+            return (False, "SESSION_FAILED")
+
+        challenge = session.next_pending()
+        if challenge is None:
+            return (False, "ALREADY_COMPLETED")
+        if challenge.action != action:
+            issued = any(c.action == action for c in session.challenges)
+            if not issued:
+                return (False, "ACTION_NOT_ISSUED")
+            return (False, "OUT_OF_ORDER")
+
+        # Every check below counts as an attempt on the CURRENT challenge.
+        challenge.attempts += 1
+
+        def _fail(code: str) -> Tuple[bool, Optional[str]]:
+            if challenge.attempts >= self.MAX_ATTEMPTS_PER_CHALLENGE:
+                session.failed = True
+                logger.warning(
+                    "Puzzle session %s burned after %d failed attempts on %s (last=%s)",
+                    session.session_id,
+                    challenge.attempts,
+                    action.value,
+                    code,
+                )
+            return (False, code)
+
+        if not trace:
+            # Scalars-only submissions are rejected under v2.
+            return _fail("TRACE_REQUIRED")
+        if end_timestamp_ms < start_timestamp_ms:
+            return _fail("TIMESTAMPS_OUT_OF_ORDER")
+
+        hold = HOLD_FRAMES_BY_DIFFICULTY.get(session.difficulty, 2)
+        result = verify_trace(
+            action,
+            trace,
+            challenge.params,
+            hold_frames=hold,
+            gesture_manager=self._gesture_manager,
+        )
+        if not result.ok:
+            logger.info(
+                "Puzzle session %s v2 %s rejected: %s",
+                session.session_id,
+                action.value,
+                result.reason,
+            )
+            return _fail(result.reason or "TRACE_REJECTED")
+
+        # The trace cannot be longer than the real time the server has seen
+        # pass since the previous accepted event (anti pre-recorded/synthetic).
+        elapsed_ms = (now - session.last_event_at) * 1000.0
+        if result.span_ms > elapsed_ms + self.ELAPSED_SLACK_MS:
+            return _fail("TRACE_LONGER_THAN_ELAPSED")
+
+        challenge.completed = True
+        challenge.verified = True
+        challenge.face_window = result.face_window
+        session.last_event_at = now
+        logger.info(
+            "Puzzle session %s v2 challenge %s verified from trace (user=%s tenant=%s, metrics=%s)",
+            session.session_id,
+            action.value,
+            session.user_id,
+            session.tenant_id,
+            result.metrics,
+        )
+        return (True, None)
+
     # ------------------------------------------------------------------
     # VERDICT (consume, single-use)
     # ------------------------------------------------------------------
@@ -247,6 +417,8 @@ class PuzzleSessionManager:
         *,
         user_id: str,
         tenant_id: str,
+        require_identity_binding: bool = False,
+        binding_frame: Optional[Dict[str, Any]] = None,
         now: Optional[float] = None,
     ) -> Tuple[bool, Optional[str]]:
         """Return the authoritative verdict and CONSUME the session (single-use).
@@ -262,6 +434,7 @@ class PuzzleSessionManager:
         replayed against the same id. Unknown / expired sessions return
         ``(False, "SESSION_NOT_FOUND" | "SESSION_EXPIRED")`` (route → HTTP 404).
         """
+        now = now if now is not None else self._clock()
         session = self._sessions.get(session_id)
         if session is None:
             return (False, "SESSION_NOT_FOUND")
@@ -289,8 +462,22 @@ class PuzzleSessionManager:
             )
             return (False, "OWNER_MISMATCH")
 
+        if session.failed:
+            return (False, "SESSION_FAILED")
+
         if not session.all_verified():
             return (False, "CHALLENGES_INCOMPLETE")
+
+        if session.trace_contract == "v2" and require_identity_binding:
+            windows = [c.face_window for c in session.challenges if c.face_window is not None]
+            binding_reason = verify_binding_frame(windows, binding_frame)
+            if binding_reason is not None:
+                logger.warning(
+                    "Puzzle verdict binding rejected session=%s reason=%s",
+                    session_id,
+                    binding_reason,
+                )
+                return (False, binding_reason)
 
         logger.info(
             "Puzzle session %s verdict=PASS (user=%s tenant=%s, consumed)",
@@ -309,7 +496,7 @@ class PuzzleSessionManager:
 
     def purge_expired(self, now: Optional[float] = None) -> int:
         """Drop expired sessions; return the number removed."""
-        ts = now if now is not None else time.time()
+        ts = now if now is not None else self._clock()
         stale = [sid for sid, s in self._sessions.items() if s.is_expired(ts)]
         for sid in stale:
             self._sessions.pop(sid, None)
@@ -317,6 +504,7 @@ class PuzzleSessionManager:
 
 
 __all__ = [
+    "FACE_TRACE_INDICES",
     "PuzzleSessionManager",
     "PuzzleSession",
     "PuzzleChallengeState",
