@@ -80,7 +80,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          grep -viE '^(tensorflow==|deepface==|spoof-detector @)' requirements-known-good-2026-05-29.lock > /tmp/constraints.txt
+          printf 'opencv-python==4.13.0.92\nopencv-contrib-python==4.13.0.92\n' >> /tmp/constraints.txt
+          pip install -r requirements.txt -c /tmp/constraints.txt
           pip install pytest pytest-asyncio pytest-cov
 
       - name: Run tests with coverage
@@ -140,8 +142,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install opencv-python-headless deepface --no-deps || true
+          grep -viE '^(tensorflow==|deepface==|spoof-detector @)' requirements-known-good-2026-05-29.lock > /tmp/constraints.txt
+          printf 'opencv-python==4.13.0.92\nopencv-contrib-python==4.13.0.92\n' >> /tmp/constraints.txt
+          pip install -r requirements.txt -c /tmp/constraints.txt
+          pip install opencv-python-headless deepface --no-deps -c /tmp/constraints.txt || true
           # deepface 0.0.98+ imports lightphe + lightdsa at module-load time.
           # We install deepface with --no-deps to dodge tensorflow size, which
           # strips both out of the dep set; install them explicitly so collection
