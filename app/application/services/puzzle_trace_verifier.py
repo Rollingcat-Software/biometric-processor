@@ -453,7 +453,9 @@ def _pts(norm: np.ndarray, idxs: Sequence[int]) -> np.ndarray:
 
 def _ear(norm: np.ndarray, eye: Sequence[int]) -> np.ndarray:
     p = _pts(norm, eye)[:, :, :2]
-    d = lambda a, b: np.linalg.norm(p[:, a] - p[:, b], axis=1)
+    def d(a: int, b: int) -> np.ndarray:
+        return np.linalg.norm(p[:, a] - p[:, b], axis=1)
+
     horizontal = d(0, 3)
     out = (d(1, 5) + d(2, 4)) / np.where(horizontal == 0, 1.0, 2.0 * horizontal)
     return np.where(horizontal == 0, 0.3, out)
@@ -468,7 +470,9 @@ def _mar(norm: np.ndarray) -> np.ndarray:
 
 def _brow_dists(norm: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     y = norm[:, :, 1]
-    avg = lambda idxs: y[:, [_POS[i] for i in idxs]].mean(axis=1)
+    def avg(idxs: Sequence[int]) -> np.ndarray:
+        return y[:, [_POS[i] for i in idxs]].mean(axis=1)
+
     left = avg(_LEFT_EYE) - avg(_LEFT_EYEBROW)
     right = avg(_RIGHT_EYE) - avg(_RIGHT_EYEBROW)
     return left, right, (left + right) / 2.0
