@@ -68,6 +68,17 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d biometric-a
 Two earlier rebuild blockers remain fixed in `docker-compose.prod.yml` (cap_add
 CHOWN/SETUID/SETGID for the gosu drop; DeepFace SHA pin forwarded from .env.prod).
 
+**Auto-deploy is gated on CI (2026-11-02).** `.github/workflows/deploy-hetzner.yml` runs via
+`workflow_run` only after the `CI Pipeline` workflow succeeds for a push to `main`, and deploys
+exactly that commit (`git merge --ff-only <head_sha>` on the box); a red build never deploys.
+Its `changes` job re-applies the old deploy path filter (files changed since the last
+successful deploy). Keep `ci.yml` push `paths:` a superset of the deploy paths, or a
+deploy-relevant change never runs CI and never deploys. `workflow_dispatch` = manual
+operator deploy of the tip of `main` (no CI gate).
+
+`PUZZLE_TRACE_V2_ENABLED` is forwarded from `.env.prod` in the compose `environment:` block
+(the compose has no `env_file:`), default `false` = v1 behaviour unchanged.
+
 ### Overlay (still available as fallback)
 `Dockerfile.liveness-overlay` (code-only layer `FROM` the proven `75347c98` image)
 remains in-repo as the zero-risk fallback path if a future base/lock refresh

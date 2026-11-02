@@ -103,3 +103,9 @@ addopts = [
     "--cov-fail-under=80",
 ]
 asyncio_mode = "auto"
+
+[tool.ruff.lint]
+# Explicit rule set = ruff's pre-0.16 default. ruff 0.16 widened the default
+# selection (UP, B, BLE, TRY, PL, ...), which turned an unpinned CI install red
+# with ~2.7k findings overnight. Widen this deliberately, not via a ruff upgrade.
+select = ["E4", "E7", "E9", "F"]
