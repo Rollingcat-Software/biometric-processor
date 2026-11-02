@@ -227,6 +227,15 @@ class PuzzleSessionVerdictRequest(BaseModel):
             "computed from (client-declared, forwarded by identity-core-api)."
         ),
     )
+    include_trace_digest: bool = Field(
+        default=False,
+        description=(
+            "Attested puzzle binding: when true and the session is contract v2 "
+            "and passes, the response carries `trace_digest` (hex SHA-256 over "
+            "the canonical encoding of the accepted traces in issued order). "
+            "Default false keeps the response unchanged."
+        ),
+    )
 
 
 class PuzzleSessionVerdictResponse(BaseModel):
@@ -247,6 +256,14 @@ class PuzzleSessionVerdictResponse(BaseModel):
             "the session is contract v2 and the binding-frame consistency check "
             "was evaluated and passed. Omitted otherwise (always omitted on v1), so "
             "a caller that requires binding can fail closed when it is absent."
+        ),
+    )
+    trace_digest: Optional[str] = Field(
+        default=None,
+        description=(
+            "Only when include_trace_digest was requested on a passing v2 session: "
+            "the canonical digest of the traces bio scored (identity-core-api "
+            "verifies the attested client signed exactly this value)."
         ),
     )
 

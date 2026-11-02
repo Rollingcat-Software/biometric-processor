@@ -395,6 +395,12 @@ face + 9 hand challenge types (canonical contract:
   now follow the USER's own eye (MediaPipe 362.. = user's left; the raw frame is not
   mirrored). The web client got the matching fixes (head-pose sign, baseline-relative
   gates, ≥2 reversals for nod/shake, tap ≤0.08 / pinch ≤0.12 with an open hand first).
+- **Attested binding trace digest (2026-11-02, opt-in per request):** a v2 verdict request
+  with `include_trace_digest: true` returns `trace_digest` (hex SHA-256 over the canonical
+  encoding of the ACCEPTED traces in issued order, `puzzle_trace_digest.py`) on a pass.
+  identity-core-api asks for it only when its `app.auth.attested-binding` policy requires an
+  Android Key Attestation over (session, nonce, embedding, trace digest, binding frame);
+  see identity-core-api `docs/ATTESTED_PUZZLE_BINDING.md`. Omitted otherwise (wire unchanged).
 - **Cross-repo contract test:** `tests/unit/application/services/test_puzzle_contract.py`
   asserts the real verifier ACCEPTS every trace the real web engine produced on real
   landmark segments (`tests/fixtures/puzzle_contract/puzzle_contract_golden_traces.json.gz`,

@@ -754,8 +754,9 @@ async def submit_puzzle_challenge(
         200: {"description": "Verdict returned; session consumed."},
         404: {"description": "Unknown or expired session."},
     },
-    # binding_checked is omitted unless it is true, so the flag-OFF (v1) and
-    # no-binding responses stay byte-identical: {"verified": ...}.
+    # binding_checked is omitted unless it is true, and trace_digest unless it
+    # was requested, so the flag-OFF (v1) and no-binding responses stay
+    # byte-identical: {"verified": ...}.
     response_model_exclude_none=True,
 )
 async def puzzle_session_verdict(
@@ -764,7 +765,7 @@ async def puzzle_session_verdict(
     manager: PuzzleSessionManager = Depends(get_puzzle_session_manager),
 ) -> PuzzleSessionVerdictResponse:
     """Return the authoritative verdict and consume the session (single-use)."""
-    result = manager.verdict_with_details(
+    result, trace_digest = manager.verdict_with_trace_digest(
         session_id,
         user_id=request.user_id,
         tenant_id=request.tenant_id,
@@ -781,4 +782,6 @@ async def puzzle_session_verdict(
     return PuzzleSessionVerdictResponse(
         verified=result.verified,
         binding_checked=True if result.binding_checked else None,
+        # Attested binding: only on explicit request (flag-OFF / web wire unchanged).
+        trace_digest=trace_digest if (request.include_trace_digest and result.verified) else None,
     )

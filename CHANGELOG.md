@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### 2026-11-02 — Puzzle verdict `trace_digest` for the attested puzzle binding (opt-in field)
+
+- New `app/application/services/puzzle_trace_digest.py`: canonical SHA-256 digest of each
+  ACCEPTED v2 trace (`FPT1` encoding) and of the session (`FPS1`, accepted challenges in
+  issued order). Stored per challenge on a successful v2 SUBMIT.
+- Verdict request gains `include_trace_digest` (default false); on a passing v2 session the
+  response then carries `trace_digest`. Without the field the response is byte-identical.
+  identity-core-api requests it only for attested bindings
+  (identity-core-api `docs/ATTESTED_PUZZLE_BINDING.md`).
+- `PuzzleSessionManager.verdict_with_trace_digest` (the existing `verdict_with_details` /
+  `verdict` keep their return shapes). Golden vector shared with client-apps.
+
 ### 2026-11-01 — Puzzle contract v2: security-review fixes (flag OFF, `PUZZLE_TRACE_V2_ENABLED`)
 
 - **S1 store hygiene:** `purge_expired` now runs (amortised, ≤ every 30 s) on create and

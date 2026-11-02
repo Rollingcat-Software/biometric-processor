@@ -76,6 +76,10 @@ from app.application.services.challenge_metric_scorer import (
     metric_is_present,
     score_action_metrics,
 )
+from app.application.services.puzzle_trace_digest import (
+    challenge_trace_digest,
+    session_trace_digest,
+)
 from app.application.services.puzzle_trace_verifier import (
     FACE_TRACE_INDICES,
     HOLD_FRAMES_BY_DIFFICULTY,
@@ -99,6 +103,9 @@ class PuzzleChallengeState:
     # v2: the verified face trace window (kept, compactly, for the
     # binding-frame consistency check; None when binding is not required).
     face_window: Optional[FaceWindow] = None
+    # v2: SHA-256 of the canonical encoding of the ACCEPTED trace (see
+    # puzzle_trace_digest). Feeds the attested-binding trace digest.
+    trace_digest: Optional[bytes] = None
 
 
 class PuzzleVerdictResult(NamedTuple):
@@ -482,6 +489,7 @@ class PuzzleSessionManager:
         challenge.face_window = (
             self._compact_window(result.face_window) if session.keep_binding_windows else None
         )
+        challenge.trace_digest = challenge_trace_digest(action.value, trace)
         session.last_event_at = now
         logger.info(
             "Puzzle session %s v2 challenge %s verified from trace (user=%s tenant=%s, metrics=%s)",
@@ -528,6 +536,26 @@ class PuzzleSessionManager:
         binding_frame: Optional[Dict[str, Any]] = None,
         now: Optional[float] = None,
     ) -> PuzzleVerdictResult:
+        """See :meth:`verdict_with_trace_digest` (this drops the digest)."""
+        return self.verdict_with_trace_digest(
+            session_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            require_identity_binding=require_identity_binding,
+            binding_frame=binding_frame,
+            now=now,
+        )[0]
+
+    def verdict_with_trace_digest(
+        self,
+        session_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+        require_identity_binding: bool = False,
+        binding_frame: Optional[Dict[str, Any]] = None,
+        now: Optional[float] = None,
+    ) -> Tuple[PuzzleVerdictResult, Optional[str]]:
         """Return the authoritative verdict and CONSUME the session (single-use).
 
         ``verified`` is True only when ALL of:
@@ -541,6 +569,10 @@ class PuzzleSessionManager:
         replayed against the same id. Unknown / expired sessions return
         ``(False, "SESSION_NOT_FOUND" | "SESSION_EXPIRED")`` (route → HTTP 404).
 
+        The second element is the v2 session trace digest (hex SHA-256 over the
+        canonical encoding of the accepted traces in issued order, see
+        ``puzzle_trace_digest``) on a PASS of a v2 session, else None.
+
         ``binding_checked`` is True only when ``require_identity_binding`` was
         set, the session is contract v2, and the binding-frame consistency check
         was evaluated and passed. It is always False on v1 (flag OFF); the
@@ -549,14 +581,14 @@ class PuzzleSessionManager:
         now = now if now is not None else self._clock()
         session = self._sessions.get(session_id)
         if session is None:
-            return PuzzleVerdictResult(False, "SESSION_NOT_FOUND")
+            return (PuzzleVerdictResult(False, "SESSION_NOT_FOUND"), None)
         if session.consumed:
             # Already used once — anti-replay.
-            return PuzzleVerdictResult(False, "SESSION_CONSUMED")
+            return (PuzzleVerdictResult(False, "SESSION_CONSUMED"), None)
         if session.is_expired(now):
             # Expire-and-evict; treat as not found by the route (404).
             self._sessions.pop(session_id, None)
-            return PuzzleVerdictResult(False, "SESSION_EXPIRED")
+            return (PuzzleVerdictResult(False, "SESSION_EXPIRED"), None)
 
         # From here the session is live and unconsumed: consume it exactly once,
         # regardless of the boolean outcome (single-use is unconditional).
@@ -572,13 +604,13 @@ class PuzzleSessionManager:
                 user_id,
                 tenant_id,
             )
-            return PuzzleVerdictResult(False, "OWNER_MISMATCH")
+            return (PuzzleVerdictResult(False, "OWNER_MISMATCH"), None)
 
         if session.failed:
-            return PuzzleVerdictResult(False, "SESSION_FAILED")
+            return (PuzzleVerdictResult(False, "SESSION_FAILED"), None)
 
         if not session.all_verified():
-            return PuzzleVerdictResult(False, "CHALLENGES_INCOMPLETE")
+            return (PuzzleVerdictResult(False, "CHALLENGES_INCOMPLETE"), None)
 
         binding_checked = False
         if session.trace_contract == "v2" and require_identity_binding:
@@ -590,7 +622,7 @@ class PuzzleSessionManager:
                     session_id,
                     binding_reason,
                 )
-                return PuzzleVerdictResult(False, binding_reason)
+                return (PuzzleVerdictResult(False, binding_reason), None)
             binding_checked = True
 
         logger.info(
@@ -599,7 +631,12 @@ class PuzzleSessionManager:
             user_id,
             tenant_id,
         )
-        return PuzzleVerdictResult(True, None, binding_checked)
+        digest: Optional[str] = None
+        if session.trace_contract == "v2":
+            digests = [c.trace_digest for c in session.challenges]
+            if all(d is not None for d in digests):
+                digest = session_trace_digest(digests)  # type: ignore[arg-type]
+        return (PuzzleVerdictResult(True, None, binding_checked), digest)
 
     # ------------------------------------------------------------------
     # Introspection / maintenance
