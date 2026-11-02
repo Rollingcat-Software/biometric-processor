@@ -34,7 +34,10 @@ from app.api.schemas.single_challenge import (
     VerifyChallengeRequest,
     VerifyChallengeResponse,
 )
-from app.application.services.puzzle_session_manager import PuzzleSessionManager
+from app.application.services.puzzle_session_manager import (
+    FACE_TRACE_INDICES,
+    PuzzleSessionManager,
+)
 from app.application.use_cases.generate_puzzle import GeneratePuzzleUseCase
 from app.application.use_cases.verify_puzzle import VerifyPuzzleUseCase
 from app.core.container import get_generate_puzzle_use_case, get_verify_puzzle_use_case
@@ -56,8 +59,17 @@ router = APIRouter(prefix="/liveness", tags=["Liveness Puzzle"])
 
 @lru_cache(maxsize=1)
 def get_puzzle_session_manager() -> PuzzleSessionManager:
-    """Return the process-wide puzzle session manager (singleton)."""
-    return PuzzleSessionManager()
+    """Return the process-wide puzzle session manager (singleton).
+
+    ``PUZZLE_TRACE_V2_ENABLED`` (default OFF) switches the session to contract
+    v2: per-challenge landmark traces re-scored server-side instead of one
+    client-computed scalar.
+    """
+    from app.core.config import settings
+
+    return PuzzleSessionManager(
+        trace_v2_enabled=bool(getattr(settings, "PUZZLE_TRACE_V2_ENABLED", False))
+    )
 
 
 @router.post(
@@ -656,6 +668,7 @@ async def create_puzzle_session(
             allowed_challenge_types=list(request.allowed_challenge_types),
             count=request.count,
             difficulty=request.difficulty,
+            require_identity_binding=request.require_identity_binding,
         )
     except ValueError as exc:
         logger.warning("create_puzzle_session rejected: %s", exc)
@@ -670,6 +683,10 @@ async def create_puzzle_session(
             )
             for c in session.challenges
         ],
+        trace_contract=session.trace_contract,
+        trace_face_indices=(
+            list(FACE_TRACE_INDICES) if session.trace_contract == "v2" else None
+        ),
     )
 
 
@@ -695,6 +712,13 @@ async def submit_puzzle_challenge(
     manager: PuzzleSessionManager = Depends(get_puzzle_session_manager),
 ) -> PuzzleSessionChallengeResponse:
     """Score one challenge against the issued session."""
+    # S3: under contract v2 submit_challenge runs verify_trace SYNCHRONOUSLY on
+    # the event loop, intentionally. The trace is bounded (<=200 frames, numpy)
+    # and the synchronous call makes each session's read-check-mutate (order,
+    # attempt cap, elapsed-time check, completion) atomic without a lock. Moving
+    # it off the loop (run_in_threadpool / an executor) REQUIRES adding a
+    # per-session lock first, or concurrent submits for one session could race
+    # past the attempt / order / elapsed checks.
     verified, reason_code = manager.submit_challenge(
         session_id,
         action=request.action,
@@ -702,6 +726,7 @@ async def submit_puzzle_challenge(
         start_timestamp_ms=request.start_timestamp_ms,
         end_timestamp_ms=request.end_timestamp_ms,
         confidence=request.confidence,
+        trace=request.trace.model_dump() if request.trace is not None else None,
     )
 
     # Unknown / expired session → 404 (the session id is opaque + ephemeral).
@@ -729,6 +754,10 @@ async def submit_puzzle_challenge(
         200: {"description": "Verdict returned; session consumed."},
         404: {"description": "Unknown or expired session."},
     },
+    # binding_checked is omitted unless it is true, and trace_digest unless it
+    # was requested, so the flag-OFF (v1) and no-binding responses stay
+    # byte-identical: {"verified": ...}.
+    response_model_exclude_none=True,
 )
 async def puzzle_session_verdict(
     session_id: str,
@@ -736,14 +765,23 @@ async def puzzle_session_verdict(
     manager: PuzzleSessionManager = Depends(get_puzzle_session_manager),
 ) -> PuzzleSessionVerdictResponse:
     """Return the authoritative verdict and consume the session (single-use)."""
-    verified, reason_code = manager.verdict(
+    result, trace_digest = manager.verdict_with_trace_digest(
         session_id,
         user_id=request.user_id,
         tenant_id=request.tenant_id,
+        require_identity_binding=request.require_identity_binding,
+        binding_frame=(
+            request.binding_frame.model_dump() if request.binding_frame is not None else None
+        ),
     )
 
     # Unknown / expired session → 404 (an already-consumed id is also gone).
-    if reason_code in ("SESSION_NOT_FOUND", "SESSION_EXPIRED"):
-        raise HTTPException(status_code=404, detail=reason_code)
+    if result.reason_code in ("SESSION_NOT_FOUND", "SESSION_EXPIRED"):
+        raise HTTPException(status_code=404, detail=result.reason_code)
 
-    return PuzzleSessionVerdictResponse(verified=verified)
+    return PuzzleSessionVerdictResponse(
+        verified=result.verified,
+        binding_checked=True if result.binding_checked else None,
+        # Attested binding: only on explicit request (flag-OFF / web wire unchanged).
+        trace_digest=trace_digest if (request.include_trace_digest and result.verified) else None,
+    )

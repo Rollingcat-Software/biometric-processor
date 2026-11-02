@@ -323,6 +323,119 @@ face + 9 hand challenge types (canonical contract:
 - Reachable only via the Identity Core MFA-flow proxy (`/auth/mfa/puzzle/session*`,
   X-API-Key); bio is the sole scoring authority — the client never sends a trusted
   "passed" boolean. Random per-attempt challenges + single-use session defeat replay.
+- **v1 caveat (flag OFF, the default):** SUBMIT carries ONE client-computed scalar
+  per challenge (`ear`, `mar`, `yaw`…) that `score_action_metrics` only thresholds —
+  a modified client can forge it. Order, duration and difficulty are not enforced and
+  the binding-frame consistency check runs only in the web client.
+
+#### Contract v2 — server-side landmark-trace re-scoring (`PUZZLE_TRACE_V2_ENABLED`, default OFF, 2026-11-01)
+- **Flag:** env `PUZZLE_TRACE_V2_ENABLED=true` (config.py; `.env.example`). OFF = v1
+  byte-identical. Rollout: deploy bio + identity + web, then flip the bio flag (the web
+  reads the CREATE advertisement, so no web flag/rebuild is needed to switch).
+- **Advertisement:** CREATE returns `trace_contract: "v2"` + `trace_face_indices`.
+- **SUBMIT `trace`** (`schemas/puzzle_session.py` `PuzzleTrace`): `{version:2,
+  frame_width, frame_height, frames:[{t, f|h}]}`; `f` = the 32 mesh landmarks in
+  `FACE_TRACE_INDICES` order, `h` = 21 hand landmarks (or null = no hand), flat x,y,z
+  ints in 1e-4 units; ≤200 frames. ≈0.5 KB/face frame, ≈0.3 KB/hand frame → a typical
+  challenge is 10–25 KB at ≤25 fps.
+- **Re-scoring** (`app/application/services/puzzle_trace_verifier.py`): web-identical
+  EAR/MAR/brow formulas, head yaw/pitch by Kabsch fit to the MediaPipe canonical face
+  (rigid subset), hand detectors replayed via
+  `ActiveGestureLivenessManager.evaluate_trace` (finger count/math, wave, flip, hold,
+  shape-trace) + web-port tap/pinch/peek. Then per-action temporal shape (blink
+  open→closed→open; wink + other eye open; mouth/brow rest→sustained gesture; turn/look
+  rest→sustained excursion→**return**; nod/shake ≥2 reversals; tap open→touch→release;
+  pinch rest→held ≥0.8×700 ms; peek covered ≥600 ms → no hand ≥350 ms), duration floors
+  (`MIN_SPAN_MS`) + 10 s ceiling, monotonic timestamps with 15–700 ms frame intervals,
+  anti-synthesis plausibility (median |Δ²| jitter ≥2e-4 IOD-normalised for faces / ≥5e-5 for hands, ≤10% identical frame pairs,
+  landmark speed ≤15 face-scales/s (60 hand-scales/s), per-frame scale change bounded).
+  The trace-derived aggregate then goes through `score_action_metrics` — thresholds stay
+  single-sourced. Under v2 the brow metric is `brow_raise_increase` (fractional increase over the
+  5-frame in-trace baseline; the v1 ratio≈1.0 made `≥0.08` trivially true) and the
+  smile metric is `smile_corner_raise` (see the calibration note). `light` and template-less
+  `shape_trace` fail closed (`TRACE_UNSUPPORTED_ACTION`).
+- **Session rules** (`puzzle_session_manager._submit_v2`): scalar-only → `TRACE_REQUIRED`;
+  issued order → `OUT_OF_ORDER`; 3 failed attempts on a challenge burn the session
+  (`SESSION_FAILED`, verdict false); trace span ≤ server-observed time since the previous
+  accepted event + 1.5 s (`TRACE_LONGER_THAN_ELAPSED`); difficulty enforced (easy/standard/
+  hard → ≥1/2/3 challenges and 1/2/3 consecutive frames held).
+- **Binding-frame consistency check (verdict)** (wire fields unchanged:
+  `require_identity_binding`, `binding_frame`): identity-core-api sends
+  `require_identity_binding` + the client-declared `binding_frame {t, f}` when
+  `alsoMatchFaceIdentity` is on; bio requires the frame to lie inside a verified
+  face-challenge window of the SAME session and to match the trace there (position RMS
+  ≤0.12 IOD, scale-normalised ratios within 10%). **What it is NOT:** it only checks the
+  client's declared frame against the client's OWN trace; it does NOT tie the matched
+  512-d embedding to the live capture. A modified client can pass it (declare an in-window
+  frame, submit an embedding from elsewhere). Real binding needs server-observed image
+  data or attested capture. Traces are still client data: v2 makes forging require a
+  coherent, jittered, physically plausible landmark time-series, not one number.
+- **Version handshake:** the verdict response carries `binding_checked: true` ONLY when a
+  required binding check actually ran and passed on a v2 session (omitted otherwise, so
+  the flag-OFF response stays `{verified}`). identity-core-api fails a binding-required
+  step closed without it (unless it recorded at CREATE that bio advertised v1).
+- **Store hygiene:** expired sessions purged on create + submit (full sweep at most every
+  30 s, both contracts; not observable, an expired id was already a 404); v2 only: ≤5 open
+  sessions per (tenant,user), the oldest evicted on the 6th create; face
+  windows kept as float32 landmarks and only when CREATE did not say
+  `require_identity_binding: false` (identity-core-api sends it from `alsoMatchFaceIdentity`).
+- **Unsatisfiable types (v2):** `light`, `shape_trace` (no template issued) and
+  `hold_position` (not rendered by the web client) are FILTERED out of the allow-list at
+  create (logged); if none remain, CREATE returns 400.
+- **Sync scoring (S3):** `verify_trace` runs synchronously on the event loop by design
+  (bounded ≤200 frames; makes each session's check-and-mutate atomic). Moving it to a
+  thread pool requires a per-session lock first.
+- **Known limitations (documented, not fixed):** the session store is process-local
+  (multi-worker uvicorn needs sticky routing or a shared store); traces remain client
+  data (no attestation); thresholds are calibrated on stock face video, not yet on
+  recorded device/webcam traces (see the calibration note below).
+- **Real-face calibration (2026-11-01).** Thresholds were calibrated against MediaPipe
+  landmarks from ~46 real face clips (fivucsas-papers
+  `paper-B-puzzle-pad/bench/calibration-2026-11-01/`, `out/after_fixes.txt`). Changes:
+  SMILE is now the mouth-corner raise INCREASE over the 5-frame in-trace baseline
+  (`smile_corner_raise ≥ 0.03`, plus the web's absolute corner > 0.05 and width > 0.50;
+  0.03 chosen over 0.025: 85% vs 90% of genuine smiles, 17% vs 21% non-smile triggers),
+  no longer MAR ≥ 0.40 (a smile is not a mouth opening); OPEN_MOUTH stays MAR ≥ 0.50 and
+  the web now uses the same 0.50; brows use `brow_raise_increase` over a 5-frame
+  baseline, ≥ 0.15 both / ≥ 0.20 single (photo/still noise reached 0.16); blink/wink
+  re-open level 0.23 (= web `BLINK_EAR_REOPEN`) and ANY closed run with an open frame
+  before and after counts (a 4 s window may start mid-blink); the jitter floor is
+  normalised by inter-ocular distance (`MIN_NATURAL_JITTER_IOD = 2e-4`, anti-smoothing
+  only, see N5); the scale-jump check uses the 3D IOD (a fast head turn is not a scale
+  jump). Side fix: `_LEFT_EYEBROW`/`_RIGHT_EYEBROW` were swapped and CLOSE_LEFT/RIGHT
+  now follow the USER's own eye (MediaPipe 362.. = user's left; the raw frame is not
+  mirrored). The web client got the matching fixes (head-pose sign, baseline-relative
+  gates, ≥2 reversals for nod/shake, tap ≤0.08 / pinch ≤0.12 with an open hand first).
+- **Attested binding trace digest (2026-11-02, opt-in per request):** a v2 verdict request
+  with `include_trace_digest: true` returns `trace_digest` (hex SHA-256 over the canonical
+  encoding of the ACCEPTED traces in issued order, `puzzle_trace_digest.py`) on a pass.
+  identity-core-api asks for it only when its `app.auth.attested-binding` policy requires an
+  Android Key Attestation over (session, nonce, embedding, trace digest, binding frame);
+  see identity-core-api `docs/ATTESTED_PUZZLE_BINDING.md`. Omitted otherwise (wire unchanged).
+- **Cross-repo contract test:** `tests/unit/application/services/test_puzzle_contract.py`
+  asserts the real verifier ACCEPTS every trace the real web engine produced on real
+  landmark segments (`tests/fixtures/puzzle_contract/puzzle_contract_golden_traces.json.gz`,
+  generated by web-app `puzzleContract.test.ts`, derived landmarks only, no images) and
+  pins the shared thresholds to the web's values. Design rule: a client "completed"
+  must imply a server accept. Change a threshold on either side ⇒ regenerate the golden
+  on the web side (`UPDATE_PUZZLE_CONTRACT=1`) and copy it here.
+- **Known limitations (open):**
+  - **N2:** with the flag OFF the wire is behaviourally identical, but NOT byte-identical:
+    the CREATE response carries `trace_contract` / `trace_face_indices` as `null`, and
+    identity-core-api sends `require_identity_binding` regardless of the flag.
+  - **N3:** v2 raises the issued count to `MIN_COUNT_BY_DIFFICULTY` (standard ≥ 2, hard
+    ≥ 3); when the allowed list is shorter than the count, challenges are sampled WITH
+    replacement, so the same challenge can be issued twice.
+  - **N5:** the face `NO_NATURAL_JITTER` floor is unverified against MediaPipe's own
+    temporal smoothing on real webcams; wire quantisation (1e-4) alone already gives
+    ~2.3e-4 IOD-normalised jitter at IOD ≈ 124 px, so the check only rejects smoothed
+    synthetic traces for large faces (IOD ≳ 150 px) — it is an anti-smoothing guard,
+    not a liveness signal. A stalled camera can exceed the 700 ms frame gap (the web
+    restarts the attempt after a 600 ms face gap).
+  - `hard` difficulty holds 3 frames on the server; the web's 0.6 s hold covers it at
+    ≥ 5 fps sampling, but it is not part of the contract test (which uses standard = 2).
+  - Hand thresholds (tap/pinch/wave/flip/peek) are aligned with the web but NOT
+    calibrated on real hand video.
 
 ### Verification Pipeline (Phase 8B/8C, 2026-03-28):
 - **Document scan** — YOLO-based document detection and classification

@@ -2,6 +2,60 @@
 
 ## [Unreleased]
 
+### 2026-11-02 — Puzzle verdict `trace_digest` for the attested puzzle binding (opt-in field)
+
+- New `app/application/services/puzzle_trace_digest.py`: canonical SHA-256 digest of each
+  ACCEPTED v2 trace (`FPT1` encoding) and of the session (`FPS1`, accepted challenges in
+  issued order). Stored per challenge on a successful v2 SUBMIT.
+- Verdict request gains `include_trace_digest` (default false); on a passing v2 session the
+  response then carries `trace_digest`. Without the field the response is byte-identical.
+  identity-core-api requests it only for attested bindings
+  (identity-core-api `docs/ATTESTED_PUZZLE_BINDING.md`).
+- `PuzzleSessionManager.verdict_with_trace_digest` (the existing `verdict_with_details` /
+  `verdict` keep their return shapes). Golden vector shared with client-apps.
+
+### 2026-11-01 — Puzzle contract v2: security-review fixes (flag OFF, `PUZZLE_TRACE_V2_ENABLED`)
+
+- **S1 store hygiene:** `purge_expired` now runs (amortised, ≤ every 30 s) on create and
+  submit (both contracts; not observable, still 404); v2 only: ≤5 open sessions per
+  (tenant,user) (oldest evicted); per-challenge face windows stored as float32 landmarks and only when
+  CREATE did not send `require_identity_binding: false` (new optional CREATE field).
+- **S5 version handshake:** verdict response adds `binding_checked: true` only when a
+  required binding check ran and passed on a v2 session; omitted otherwise
+  (`response_model_exclude_none`), so v1 / no-binding responses are unchanged.
+  New `PuzzleSessionManager.verdict_with_details`; `verdict()` keeps its 2-tuple.
+- **N4:** v2 CREATE filters `light`, `shape_trace`, `hold_position` out of the allow-list
+  (unsatisfiable under v2); none left → 400.
+- **S3:** comment at the SUBMIT route + manager: `verify_trace` is synchronous on purpose;
+  moving it off the loop needs a per-session lock. No functional change.
+- **B1 wording:** "split-capture binding" renamed to "binding-frame consistency check" in
+  comments/docs; it only checks the client-declared frame against the client's own trace,
+  a modified client can pass it, and real binding needs server-observed image data or
+  attested capture. Wire fields unchanged.
+- Thresholds/metric definitions untouched (B2: separate calibration on real video).
+
+### 2026-11-01 — Puzzle session contract v2: server-side landmark-trace re-scoring (flag OFF)
+
+- **Gap closed (behind `PUZZLE_TRACE_V2_ENABLED`, default false):** the auth-path puzzle
+  SUBMIT accepted one client-computed scalar per challenge and only thresholded it, so a
+  modified client could forge a pass; order, duration and difficulty were not enforced.
+- New `app/application/services/puzzle_trace_verifier.py`: recomputes EAR/MAR/brow/head
+  pose (face) and finger count/wave/flip/hold/tap/pinch/peek (hand) from a submitted
+  landmark trace, enforces per-action temporal shape, duration floors/ceiling, timestamp
+  sanity and anti-synthesis plausibility, then applies the unchanged
+  `score_action_metrics` thresholds. Hand detectors reused via the new
+  `ActiveGestureLivenessManager.evaluate_trace`.
+- `PuzzleSessionManager` v2: scalar-only submissions rejected, issued order enforced,
+  3 attempts per challenge then the session is burned, trace span bounded by the
+  server-observed elapsed time, difficulty enforced (count floor + hold frames),
+  optional `binding_frame` consistency check at the verdict (see the review-fix entry
+  above for its limits). Clock injectable for tests.
+- Schemas/routes: `trace` on SUBMIT, `require_identity_binding` + `binding_frame` on
+  VERDICT, `trace_contract` + `trace_face_indices` on CREATE. v1 unchanged when OFF.
+- Tests: 82 new (`tests/unit/application/services/test_puzzle_trace_verifier.py`,
+  `test_puzzle_session_v2.py`) using realistic traces generated from the MediaPipe
+  canonical face model (`puzzle_trace_factory.py`).
+
 ### 2026-11-01 — Early paper drafts moved out of this repository
 
 - The three early manuscript drafts `docs/FIVUCSAS_Biometric_Processor_Paper{,_v2,_v3}.docx`

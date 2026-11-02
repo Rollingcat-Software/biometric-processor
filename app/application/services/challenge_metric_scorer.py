@@ -45,6 +45,24 @@ session-based detectors use:
     shape_trace                                  dtw_cost        ≤ 0.25
     peek_a_boo                                   covered_then_revealed == True
 
+Contract v2 (``PUZZLE_TRACE_V2_ENABLED``): on the puzzle-session path the
+scalar is no longer taken from the client. ``puzzle_trace_verifier`` recomputes
+it from a submitted landmark trace (after temporal-shape, duration and
+plausibility checks) and passes the trace-derived aggregate through THIS
+function, so the thresholds below stay the single source of truth. Under v2 two
+face metrics use their own keys and calibrated gates (2026-11-01, real-face
+calibration):
+
+    smile                                       smile_corner_raise  ≥ 0.03
+    raise_eyebrows                              brow_raise_increase ≥ 0.15
+    raise_left_brow / raise_right_brow          brow_raise_increase ≥ 0.20
+
+``brow_raise_increase`` is the fractional increase of the brow→eye distance over
+the in-trace neutral baseline (the v1 web ratio is ≈1.0 at rest, so the v1
+``brow_raise ≥ 0.08`` was trivially satisfiable); ``smile_corner_raise`` is the
+increase of the web smile corner-raise feature over the in-trace baseline. The
+v1 scalar keys (``mar`` for smile, ``brow_raise``) keep their v1 gates.
+
 The gate returns ``None`` on pass, or a ``(reason_code, message)`` tuple on
 failure. The puzzle path additionally treats an absent metric as a failure
 (``METRIC_REQUIRED``); the verify-challenge path passes through absent metrics.
@@ -65,8 +83,32 @@ _EYE_CLOSE_EAR_MAX: float = 0.21
 # MAR ≥ this → smile/mouth-open confirmed.
 _SMILE_MAR_MIN: float = 0.40
 _OPEN_MOUTH_MAR_MIN: float = 0.50
-# Brow-raise metric ≥ this → confirmed (eyebrow_threshold=0.08).
+# Brow-raise metric ≥ this → confirmed (eyebrow_threshold=0.08). v1 scalar path only.
 _BROW_RAISE_MIN: float = 0.08
+# Contract v2 brow raise (``brow_raise_increase`` = fractional increase of the
+# brow→eye distance over the in-trace neutral baseline, median of the first
+# ``BROW_BASELINE_FRAMES`` = 5 trace frames). Calibrated 2026-11-01 on 46 real
+# face clips (fivucsas-papers paper-B bench/calibration-2026-11-01, brow.txt):
+# on still faces and static photos the 2-frame-held noise of this ratio reaches
+# p95 0.11 (both brows) and p95 0.19-0.20 (one brow), so the old 0.08 gate was
+# passable by a photo; every genuine raise the verifier accepted measured
+# ≥ 0.23. Both brows ≥ 0.15, a single brow ≥ 0.20. The web gate uses the same
+# values against the same baseline (web constants EYEBROW_RAISE_THRESHOLD /
+# SINGLE_BROW_THRESHOLD = 1.15 / 1.20).
+_BROW_RAISE_V2_BOTH_MIN: float = 0.15
+_BROW_RAISE_V2_SINGLE_MIN: float = 0.20
+# Contract v2 smile (``smile_corner_raise`` = increase of the web smile
+# corner-raise feature — mean height of the mouth corners above the lip
+# midpoint over face height (nose tip→chin) — over the in-trace baseline,
+# median of the first 5 trace frames). MAR ≥ 0.40 measured a mouth OPENING, not a
+# smile: only 3/20 real smiles reached it. Corner-raise increase ≥ 0.03 accepts
+# 85% of real smiles while a non-smiling window triggers it 17% of the time
+# (0.025: 90% / 21%); the web's own absolute gate (corner > 0.05 AND mouth
+# width / face height > 0.50) is required on the same frames, which cuts the
+# non-smile trigger further (calibration smile.txt).
+_SMILE_CORNER_RAISE_MIN: float = 0.03
+_SMILE_CORNER_ABS_MIN: float = 0.05
+_SMILE_WIDTH_RATIO_MIN: float = 0.50
 # |yaw| ≥ this (degrees) → head turn confirmed.
 _HEAD_YAW_MIN_DEG: float = 15.0
 # |pitch| ≥ this (degrees) → head look up/down confirmed.
@@ -169,8 +211,11 @@ def score_action_metrics(
             return ("EYE_NOT_CLOSED", "Eye EAR is above the closed-eye threshold.")
         return None
 
-    # --- Face: smile (MAR ≥ min) ---
+    # --- Face: smile (v1: MAR ≥ min; v2 trace: corner-raise increase ≥ min) ---
     if action == ChallengeType.SMILE:
+        corner = _to_float(metrics.get("smile_corner_raise"))
+        if corner is not None and corner < _SMILE_CORNER_RAISE_MIN:
+            return ("SMILE_NOT_DETECTED", "Mouth-corner raise below the smile threshold.")
         mar = _to_float(metrics.get("mar"))
         if mar is not None and mar < _SMILE_MAR_MIN:
             return ("SMILE_NOT_DETECTED", "Mouth-aspect ratio below the smile threshold.")
@@ -189,6 +234,15 @@ def score_action_metrics(
         ChallengeType.RAISE_LEFT_BROW,
         ChallengeType.RAISE_RIGHT_BROW,
     ):
+        increase = _to_float(metrics.get("brow_raise_increase"))
+        if increase is not None:
+            floor = (
+                _BROW_RAISE_V2_BOTH_MIN
+                if action == ChallengeType.RAISE_EYEBROWS
+                else _BROW_RAISE_V2_SINGLE_MIN
+            )
+            if increase < floor:
+                return ("BROW_NOT_RAISED", "Brow-raise increase below the acceptance threshold.")
         brow = _to_float(metrics.get("brow_raise"))
         if brow is not None and brow < _BROW_RAISE_MIN:
             return ("BROW_NOT_RAISED", "Brow-raise metric below the acceptance threshold.")
