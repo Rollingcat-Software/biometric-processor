@@ -9,6 +9,9 @@ on:
       - 'Dockerfile*'
       - 'demo-ui/**'
       - '.github/workflows/ci.yml'
+      - 'app/**'
+      - 'alembic/**'
+      - 'docker-compose.prod.yml'
   pull_request:
     branches: [main, dev]
     paths:
@@ -17,6 +20,9 @@ on:
       - 'Dockerfile*'
       - 'demo-ui/**'
       - '.github/workflows/ci.yml'
+      - 'app/**'
+      - 'alembic/**'
+      - 'docker-compose.prod.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
