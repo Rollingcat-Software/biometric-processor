@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### 2026-11-04 - Deploys pulled by the mordecai deployer; Hetzner deploy workflow removed
+
+- Removed `.github/workflows/deploy-hetzner.yml`. It deployed over SSH to the
+  decommissioned Hetzner box or waited for a self-hosted runner that a public repository
+  must not have. Production on mordecai is now deployed by the FIVUCSAS pull deployer
+  (`infra/deployer/`), which ships the newest `main` commit with a green `CI Pipeline` push
+  run and rolls back on a failed health check. CI is unchanged.
+
 ### 2026-11-02 — Puzzle verdict `trace_digest` for the attested puzzle binding (opt-in field)
 
 - New `app/application/services/puzzle_trace_digest.py`: canonical SHA-256 digest of each
