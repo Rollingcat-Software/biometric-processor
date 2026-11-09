@@ -207,10 +207,15 @@ class DeepFaceExtractor:
         This method contains the actual blocking DeepFace call.
         Called by AsyncEmbeddingExtractor via thread pool for non-blocking execution.
 
-        CRITICAL OPTIMIZATION:
-            This method sets enforce_detection=False to skip redundant face detection.
-            Face detection is already done by FaceDetector, so we only need embedding extraction.
-            This eliminates duplicate DeepFace.extract_faces() calls and improves performance by 20-40%.
+        Detection on the crop:
+            ``enforce_detection=False`` does NOT skip detection. With any
+            ``detector_backend`` other than ``"skip"``, DeepFace.represent runs
+            the detector again on the already-cropped face and aligns on its
+            landmarks; ``enforce_detection=False`` only stops it from raising
+            when that second pass finds nothing (it then embeds the whole crop).
+            The second pass is part of the embedding the stored templates were
+            made with, so removing it (``"skip"``) changes every embedding and
+            needs the verification threshold re-validated first.
 
         Args:
             face_image: Pre-detected face region as numpy array (H, W, C)
@@ -226,13 +231,13 @@ class DeepFaceExtractor:
         try:
             logger.debug(f"Extracting embedding using {self._model_name}")
 
-            # CRITICAL FIX: Set enforce_detection=False to skip redundant detection
-            # Face is already detected and cropped by FaceDetector
+            # The detector runs again on this crop (see the docstring); only a
+            # miss is tolerated, so a crop with no re-detected face still embeds.
             embedding_objs = DeepFace.represent(
                 img_path=face_image,
                 model_name=self._model_name,
                 detector_backend=self._detector_backend,
-                enforce_detection=False,  # Skip detection - already done!
+                enforce_detection=False,
                 align=True,
                 normalization="base",  # Use base normalization (L2 norm)
             )
