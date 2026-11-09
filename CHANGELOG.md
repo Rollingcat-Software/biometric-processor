@@ -15,6 +15,19 @@
   `ImportError` guard (`celery`/`kombu` sit in `app/workers`, reached only from the unmounted
   admin module inside a `try`; `dlib`, `webrtcvad` and `opentelemetry` are guarded optional
   imports).
+- **Matching-policy change, not only an import fix.** Because `find_created_at` always
+  returned `None`, the aged-embedding branch in `VerifyFaceUseCase.match_embedding` had never
+  run in production. With this fix a template older than `VERIFICATION_THRESHOLD_AGED_YEARS`
+  (default 2.0, i.e. more than 730 days) is matched against `VERIFICATION_THRESHOLD_AGED`
+  (default 0.55, not set on production) instead of `VERIFICATION_THRESHOLD` (0.4 on
+  production). That raises the accepted cosine distance for those users by 0.15 and so can
+  raise FAR. Effect today: none. A read-only query on production `biometric_db` on
+  2026-11-09 found 22 live `face_embeddings` rows, oldest created 2026-03-17 15:10:41 UTC,
+  0 older than 730 days, so the first template turns aged in March 2028. Any published
+  FAR/FRR figure measured at the standard threshold is unaffected until then. To keep one
+  threshold for everyone, set `VERIFICATION_THRESHOLD_AGED` equal to
+  `VERIFICATION_THRESHOLD` (allowed by the config validator). The applied threshold is
+  pinned by `tests/unit/application/test_verify_face_aged_threshold.py`.
 
 ### 2026-11-04 - Deploys pulled by the mordecai deployer; Hetzner deploy workflow removed
 
