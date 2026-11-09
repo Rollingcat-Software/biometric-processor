@@ -94,6 +94,37 @@ container. The earlier manual-SQL workaround for embedding-ciphertext
 backfill (Task #81) is obsolete; `backfill_embedding_ciphertext.py` was
 also repaired in the same PR.
 
+Since #189 (2026-11-09) the chain builds the whole schema on an EMPTY database
+(chain: 0001, 0002, 0002a_embedding_tables, 0003, 0004, 0005). Before that it had
+never run from scratch: reserved `metadata` attribute in `models.py`, unnamed
+ENUMs in 0001, no revision creating `face_embeddings` / `voice_enrollments`, and a
+34-character revision id in a `VARCHAR(32)` version column. The CI job
+`Alembic Migrations (empty DB)` keeps it that way. Rules for new revisions:
+- Write revisions by hand. Autogenerate is disabled (`target_metadata = None` in
+  `alembic/env.py`) because `models.py` does not describe the migrated schema: it proposed
+  dropping `voice_enrollments`, `client_embedding_observations` and `biometric_data`.
+- Never name a mapped attribute `metadata`; use `meta = mapped_column("metadata", ...)`.
+- `postgresql.ENUM(name="...", create_type=False)` for a type created by `op.execute`.
+- Any table a revision touches must be created by an earlier revision.
+- Local check: `ALEMBIC_TEST_DATABASE_URL=postgresql://...empty_db pytest
+  tests/integration/persistence/test_alembic_empty_database.py
+  tests/integration/persistence/test_alembic_existing_database.py` (the second creates and
+  drops scratch databases, so the role needs CREATEDB) and the DB-free
+  `pytest tests/unit/infrastructure/database/`.
+- `0002a` keeps an existing `face_embeddings` / `voice_enrollments` only if it already has
+  every column 0002a creates; a pre-alembic table (`scripts/init-db.sql`) stops the upgrade
+  with the missing columns named and must be reconciled by hand.
+- Downgrading below `0002a` would delete every enrollment, so its `downgrade()` refuses while
+  either table holds a row. Back up and empty or drop the tables by hand first.
+- Known gap: the 0001 proctoring tables do not match the Postgres proctoring
+  repositories (unused while `PROCTOR_STORAGE_TYPE=memory`).
+- Known gap: `FaceEmbeddingModel` drifts from the migrated `face_embeddings` (`tenant_id`
+  UUID vs VARCHAR, `ARRAY(Float)` vs `vector(512)`, model-only columns such as `metadata`,
+  no `enrollment_type` / `deleted_at`). Nothing queries through it.
+- Follow-up (repo settings, owner): `main` has no required status checks, so a red
+  `Alembic Migrations (empty DB)` job does not block a merge. The workflow is path-filtered,
+  so requiring it would also block PRs that never trigger it unless the filter goes too.
+
 Runs on port 8001. API docs at `/docs`. Demo UI served at root `/` (disabled in production).
 
 ## Security (Production)

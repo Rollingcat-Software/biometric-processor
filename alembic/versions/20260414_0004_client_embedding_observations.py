@@ -28,6 +28,12 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     """Create client_embedding_observations table."""
 
+    # This revision id is 34 characters, but alembic creates
+    # alembic_version.version_num as VARCHAR(32), so stamping it failed with
+    # "value too long" (issue #189). Widen the column first; the stamp runs
+    # after upgrade() in the same transaction. Kept on downgrade (harmless).
+    op.execute("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(64)")
+
     # Ensure pgvector is available (no-op if already enabled by 0001_initial)
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 

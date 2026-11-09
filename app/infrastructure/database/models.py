@@ -87,6 +87,14 @@ class FaceEmbeddingModel(Base):
 
     Stores face embedding vectors along with quality metadata
     for face recognition operations.
+
+    Not the schema source of truth: the alembic revisions are. The migrated
+    ``face_embeddings`` table differs from this model (``tenant_id`` VARCHAR
+    and nullable, ``embedding`` is ``vector(512)``, it has ``enrollment_type``
+    and ``deleted_at`` and none of ``embedding_dimension``, ``model_name``,
+    ``model_version``, ``source_image_hash`` or ``metadata``). No runtime code
+    queries through this model, and alembic autogenerate is disabled in
+    ``alembic/env.py`` because of this drift.
     """
     __tablename__ = "face_embeddings"
 
@@ -103,7 +111,10 @@ class FaceEmbeddingModel(Base):
     model_version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     quality_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     source_image_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    metadata: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # ``metadata`` is reserved by SQLAlchemy Declarative (issue #189): the
+    # attribute is ``meta``, mapped to a column named ``metadata``. The
+    # migrated face_embeddings table has no such column (see the docstring).
+    meta: Mapped[Optional[str]] = mapped_column("metadata", Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -322,7 +333,8 @@ class APIKeyModel(Base):
     )
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    metadata: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    # Attribute ``meta``, column ``metadata`` (reserved name, see FaceEmbeddingModel).
+    meta: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSONB, nullable=True)
 
     def __repr__(self) -> str:
         return f"<APIKey(id={self.id}, name={self.name}, prefix={self.key_prefix})>"
