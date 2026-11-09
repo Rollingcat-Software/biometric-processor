@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### 2026-11-09 - Challenge draws come from the OS CSPRNG behind a random source port
+
+- New port `app/domain/interfaces/random_source.py` (`IRandomSource`: choice, sample,
+  randint, shuffle) and adapter `app/infrastructure/security/random_source.py`;
+  `csprng_random_source()` draws from `secrets.SystemRandom`. The container exposes one
+  `get_random_source()` singleton and injects it everywhere.
+- Every challenge draw now goes through it instead of the module-level `random`
+  functions (Mersenne Twister, predictable from observed output): Puzzle session
+  challenges, order and finger targets (`PuzzleSessionManager`), the legacy puzzle
+  generator, active-liveness order and flash colour, gesture order, finger and math
+  targets, and shape templates. Draw semantics are unchanged (same calls, same ranges).
+- Tests inject a seeded source; a fixed-seed chi-square smoke test checks the session
+  sampler is uniform over ordered pairs, first position and finger targets. A fitness test
+  fails if `app/api`, `app/application` or `app/domain` imports `random` or uses
+  `numpy.random`.
+
 ### 2026-11-04 - Deploys pulled by the mordecai deployer; Hetzner deploy workflow removed
 
 - Removed `.github/workflows/deploy-hetzner.yml`. It deployed over SSH to the

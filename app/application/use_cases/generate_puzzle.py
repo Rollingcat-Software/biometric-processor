@@ -5,13 +5,14 @@ liveness puzzles with configurable difficulty and step sequences.
 """
 
 import logging
-import random
 from datetime import datetime, timedelta
 from typing import List, Optional, Set, Tuple
 
 from app.api.schemas.active_liveness import ChallengeType
 from app.domain.entities.puzzle import Puzzle, PuzzleDifficulty, PuzzleStep
 from app.domain.interfaces.puzzle_repository import IPuzzleRepository
+from app.domain.interfaces.random_source import IRandomSource
+from app.infrastructure.security.random_source import csprng_random_source
 
 logger = logging.getLogger(__name__)
 
@@ -61,14 +62,24 @@ class GeneratePuzzleUseCase:
         "eyebrow_threshold": 0.08,  # Eyebrow raise
     }
 
-    def __init__(self, puzzle_repository: IPuzzleRepository):
+    def __init__(
+        self,
+        puzzle_repository: IPuzzleRepository,
+        random_source: Optional[IRandomSource] = None,
+    ):
         """Initialize generate puzzle use case.
 
         Args:
             puzzle_repository: Repository for puzzle persistence
+            random_source: Source of the step draws (OS CSPRNG by default)
         """
         self._repository = puzzle_repository
+        self._random = random_source or csprng_random_source()
         logger.info("GeneratePuzzleUseCase initialized")
+
+    @property
+    def random_source(self) -> IRandomSource:
+        return self._random
 
     def _get_available_challenges(self) -> List[ChallengeType]:
         """Get list of available challenge types.
@@ -118,7 +129,7 @@ class GeneratePuzzleUseCase:
 
         # Determine number of steps
         config_min, config_max = config["steps"]
-        num_steps = random.randint(
+        num_steps = self._random.randint(
             max(min_steps, config_min),
             min(max_steps, config_max),
         )
@@ -146,7 +157,7 @@ class GeneratePuzzleUseCase:
                 ] or valid_candidates
 
             # Select random action
-            action = random.choice(valid_candidates)
+            action = self._random.choice(valid_candidates)
 
             steps.append(
                 PuzzleStep(

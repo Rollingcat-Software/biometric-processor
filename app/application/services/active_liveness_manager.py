@@ -3,7 +3,6 @@
 import hashlib
 import logging
 import os
-import random
 import time
 import uuid
 from pathlib import Path
@@ -24,6 +23,8 @@ from app.api.schemas.active_liveness import (
 )
 from app.application.services.active_liveness_token_service import ActiveLivenessTokenService
 from app.application.services.light_challenge_service import LightChallengeService
+from app.domain.interfaces.random_source import IRandomSource
+from app.infrastructure.security.random_source import csprng_random_source
 
 logger = logging.getLogger(__name__)
 
@@ -52,16 +53,28 @@ class ActiveLivenessManager:
         eyebrow_threshold: float = 0.08,
         light_challenge_service: Optional[LightChallengeService] = None,
         token_service: Optional[ActiveLivenessTokenService] = None,
+        random_source: Optional[IRandomSource] = None,
     ) -> None:
         self._blink_threshold = blink_threshold
         self._smile_threshold = smile_threshold
         self._head_turn_threshold = head_turn_threshold
         self._mouth_open_threshold = mouth_open_threshold
         self._eyebrow_threshold = eyebrow_threshold
-        self._light_challenge_service = light_challenge_service or LightChallengeService()
+        self._random = random_source or csprng_random_source()
+        self._light_challenge_service = light_challenge_service or LightChallengeService(
+            random_source=self._random
+        )
         self._token_service = token_service or ActiveLivenessTokenService()
         self._face_landmarker = None
         logger.info("ActiveLivenessManager initialized")
+
+    @property
+    def random_source(self) -> IRandomSource:
+        return self._random
+
+    @property
+    def light_challenge_service(self) -> LightChallengeService:
+        return self._light_challenge_service
 
     def _get_face_landmarker(self):
         if self._face_landmarker is None:
@@ -174,7 +187,7 @@ class ActiveLivenessManager:
                 ChallengeType.TURN_RIGHT,
             ]
             if config.randomize:
-                random.shuffle(available)
+                self._random.shuffle(available)
             challenge_types = available[: config.num_challenges]
 
         return [
