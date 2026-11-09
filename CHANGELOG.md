@@ -20,6 +20,11 @@
   `tests/integration/persistence/test_alembic_empty_database.py`, which drives the face,
   voice and client-observation repositories through the migrated schema. The integration
   job now builds its schema with `alembic upgrade head` instead of a hand-written copy.
+- `PgVectorEmbeddingRepository.find_created_at` used `pytz`, which is not installed (pandas 3
+  dropped it), so it logged an error and returned `None` for every user and the aged-template
+  threshold in `VerifyFaceUseCase` never applied. It now uses `datetime.timezone.utc`. Found by
+  the new repository test against the migrated schema. Effect today: only enrollments older
+  than `VERIFICATION_THRESHOLD_AGED_YEARS` (default 2) get `VERIFICATION_THRESHOLD_AGED`.
 - Not changed: the proctoring tables from 0001 still differ from what
   `PostgresSessionRepository` / `PostgresIncidentRepository` write. Both are unused while
   `PROCTOR_STORAGE_TYPE=memory` and `PROCTORING_ROUTER_ENABLED=false` (the defaults).
