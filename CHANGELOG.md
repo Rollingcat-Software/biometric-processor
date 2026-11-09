@@ -5,20 +5,34 @@
 ### 2026-11-09 - `alembic upgrade head` builds the schema on an empty database (#189)
 
 - `models.py`: `FaceEmbeddingModel.metadata` and `APIKeyModel.metadata` are now the attribute
-  `meta` mapped to the unchanged column `metadata` (the name is reserved by SQLAlchemy
-  Declarative, so importing the models, and with it every alembic command, failed).
+  `meta` mapped to a column named `metadata` (the name is reserved by SQLAlchemy Declarative,
+  so importing the models, and with it every alembic command, failed). `api_keys.metadata`
+  exists in the migrated schema; `face_embeddings` has no `metadata` column (model drift, below).
+- `alembic/env.py` no longer imports the models and sets `target_metadata = None`:
+  autogenerate is disabled. The models do not describe the migrated schema
+  (`FaceEmbeddingModel` differs from `face_embeddings`; `voice_enrollments`,
+  `client_embedding_observations` and `biometric_data` have no model), so
+  `alembic revision --autogenerate` proposed dropping live tables. It and `alembic check`
+  now stop with "does not provide a MetaData object". Write revisions by hand.
 - 0001: the four `postgresql.ENUM(...)` columns pass the type as `name=`; the positional
   argument is an enum value, so the types had no name and `proctor_sessions` failed.
 - New revision `0002a_embedding_tables` between 0002 and 0003 creates `face_embeddings` and
   `voice_enrollments` (`IF NOT EXISTS`) in the shape the pgvector repositories use. No
   revision created them before, so 0003 and 0005 failed on an empty database. A database
-  already at 0003 or later never runs it.
+  already at 0003 or later never runs it. An existing table is kept only when it already
+  has every column 0002a creates; otherwise (for example `face_embeddings` from
+  `scripts/init-db.sql`) the upgrade stops with an error naming the missing columns. Its
+  downgrade drops the two tables only while both are empty and refuses while either stores
+  an enrollment.
 - 0004 widens `alembic_version.version_num` to `VARCHAR(64)` before its own 34-character
   revision id is stamped into the default `VARCHAR(32)` column.
 - CI: new `Alembic Migrations (empty DB)` job (pgvector pg17) runs `upgrade head`, a
   `downgrade base` / `upgrade head` round trip, and
   `tests/integration/persistence/test_alembic_empty_database.py`, which drives the face,
-  voice and client-observation repositories through the migrated schema. The integration
+  voice and client-observation repositories through the migrated schema, plus
+  `test_alembic_existing_database.py` (pre-existing tables, guarded downgrade, autogenerate
+  refusal) in scratch databases. The CI path filters now include `alembic.ini` and
+  `requirements*.lock`. The integration
   job now builds its schema with `alembic upgrade head` instead of a hand-written copy.
 - `PgVectorEmbeddingRepository.find_created_at` used `pytz`, which is not installed (pandas 3
   dropped it), so it logged an error and returned `None` for every user and the aged-template
