@@ -273,6 +273,34 @@ leaves the device. Two additive JSON routes accept it:
   a derived, non-invertible 512-d embedding, over TLS, stored encrypted (Fernet) —
   data minimization, NOT "biometric data never leaves the device".
 
+### Face embedding colour order and pipeline id (2026-11-09)
+- **The model gets RGB.** Facenet512's weights are davidsandberg/facenet's Inception
+  ResNet v1 (2018), trained on images decoded by `tf.image.decode_image` (RGB). DeepFace
+  0.0.98 `represent()` flips the RGB face from `extract_faces` to BGR before the model
+  (`# rgb to bgr` in `modules/representation.py`), so the old extractor fed BGR.
+  `DeepFaceExtractor.extract_sync` now calls `extract_faces` (same backend,
+  `enforce_detection=False`, `align=True`, RGB face) and passes that face to `represent`
+  with `detector_backend="skip"`, which forwards it unchanged. With the order flipped back
+  the new code reproduces the old embeddings to cosine 1 - 2e-16 (16 LFW images), so the
+  channel order is the only change. `FACENET_CHANNEL_ORDER` in
+  `app/domain/embedding_pipeline.py` is the one definition; the web client has its own
+  (`facePreprocess.ts`) and both must ship together.
+- **Pipeline id per template.** `face_embeddings.metadata.embedding_pipeline` (existing
+  JSONB column, no migration): `server-deepface-facenet512-rgb` for image enrollments,
+  or the optional `embedding_pipeline` field of `POST /enroll-embedding` (identity-core-api
+  does not forward it yet). The CENTROID averages only INDIVIDUAL rows of the pipeline being
+  enrolled; a prior centroid of another pipeline is replaced, not fused; pruning above the
+  cap of five drops other pipelines first. Rows without an id are the pre-2026-11-09 BGR
+  templates.
+- **Re-enrollment.** Every template written before this change is BGR and is not
+  comparable with RGB probes. On 2026-11-09 production had 22 active rows (17 INDIVIDUAL,
+  5 CENTROID) for 6 users in 3 tenants, none with a pipeline id. After deploying the
+  processor and web-app changes together, each of those users deletes the face enrollment
+  and enrolls again (the owner accepted this). Do not rely on "enroll again" alone for the
+  client path: a client vector without an id joins the legacy group and is averaged with the
+  BGR samples. Find who still has a legacy template (read-only):
+  `SELECT user_id, tenant_id, count(*) FROM face_embeddings WHERE deleted_at IS NULL AND NOT (metadata ? 'embedding_pipeline') GROUP BY 1, 2;`
+
 ### Client-computed VOICE embedding (GPU-less, audit H3, flag-gated, default OFF — 2026-06-12):
 Mirror of the face embedding path for VOICE. The browser computes the 256-d
 Resemblyzer GE2E speaker embedding locally (onnxruntime-web) and submits ONLY the
