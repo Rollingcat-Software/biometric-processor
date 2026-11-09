@@ -94,6 +94,21 @@ container. The earlier manual-SQL workaround for embedding-ciphertext
 backfill (Task #81) is obsolete; `backfill_embedding_ciphertext.py` was
 also repaired in the same PR.
 
+Since #189 (2026-11-09) the chain builds the whole schema on an EMPTY database
+(chain: 0001, 0002, 0002a_embedding_tables, 0003, 0004, 0005). Before that it had
+never run from scratch: reserved `metadata` attribute in `models.py`, unnamed
+ENUMs in 0001, no revision creating `face_embeddings` / `voice_enrollments`, and a
+34-character revision id in a `VARCHAR(32)` version column. The CI job
+`Alembic Migrations (empty DB)` keeps it that way. Rules for new revisions:
+- Never name a mapped attribute `metadata`; use `meta = mapped_column("metadata", ...)`.
+- `postgresql.ENUM(name="...", create_type=False)` for a type created by `op.execute`.
+- Any table a revision touches must be created by an earlier revision.
+- Local check: `ALEMBIC_TEST_DATABASE_URL=postgresql://...empty_db pytest
+  tests/integration/persistence/test_alembic_empty_database.py` and the DB-free
+  `pytest tests/unit/infrastructure/database/`.
+- Known gap: the 0001 proctoring tables do not match the Postgres proctoring
+  repositories (unused while `PROCTOR_STORAGE_TYPE=memory`).
+
 Runs on port 8001. API docs at `/docs`. Demo UI served at root `/` (disabled in production).
 
 ## Security (Production)

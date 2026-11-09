@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### 2026-11-09 - `alembic upgrade head` builds the schema on an empty database (#189)
+
+- `models.py`: `FaceEmbeddingModel.metadata` and `APIKeyModel.metadata` are now the attribute
+  `meta` mapped to the unchanged column `metadata` (the name is reserved by SQLAlchemy
+  Declarative, so importing the models, and with it every alembic command, failed).
+- 0001: the four `postgresql.ENUM(...)` columns pass the type as `name=`; the positional
+  argument is an enum value, so the types had no name and `proctor_sessions` failed.
+- New revision `0002a_embedding_tables` between 0002 and 0003 creates `face_embeddings` and
+  `voice_enrollments` (`IF NOT EXISTS`) in the shape the pgvector repositories use. No
+  revision created them before, so 0003 and 0005 failed on an empty database. A database
+  already at 0003 or later never runs it.
+- 0004 widens `alembic_version.version_num` to `VARCHAR(64)` before its own 34-character
+  revision id is stamped into the default `VARCHAR(32)` column.
+- CI: new `Alembic Migrations (empty DB)` job (pgvector pg17) runs `upgrade head`, a
+  `downgrade base` / `upgrade head` round trip, and
+  `tests/integration/persistence/test_alembic_empty_database.py`, which drives the face,
+  voice and client-observation repositories through the migrated schema. The integration
+  job now builds its schema with `alembic upgrade head` instead of a hand-written copy.
+- Not changed: the proctoring tables from 0001 still differ from what
+  `PostgresSessionRepository` / `PostgresIncidentRepository` write. Both are unused while
+  `PROCTOR_STORAGE_TYPE=memory` and `PROCTORING_ROUTER_ENABLED=false` (the defaults).
+
 ### 2026-11-04 - Deploys pulled by the mordecai deployer; Hetzner deploy workflow removed
 
 - Removed `.github/workflows/deploy-hetzner.yml`. It deployed over SSH to the
