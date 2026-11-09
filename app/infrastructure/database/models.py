@@ -103,7 +103,9 @@ class FaceEmbeddingModel(Base):
     model_version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     quality_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     source_image_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    metadata: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # ``metadata`` is reserved by SQLAlchemy Declarative (issue #189): the
+    # attribute is ``meta``, the database column keeps the name ``metadata``.
+    meta: Mapped[Optional[str]] = mapped_column("metadata", Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -322,7 +324,8 @@ class APIKeyModel(Base):
     )
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    metadata: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    # Attribute ``meta``, column ``metadata`` (reserved name, see FaceEmbeddingModel).
+    meta: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSONB, nullable=True)
 
     def __repr__(self) -> str:
         return f"<APIKey(id={self.id}, name={self.name}, prefix={self.key_prefix})>"
