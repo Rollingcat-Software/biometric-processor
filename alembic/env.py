@@ -13,9 +13,6 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 
-# Import models for autogenerate support
-from app.infrastructure.database.models import Base
-
 # Alembic Config object
 config = context.config
 
@@ -23,8 +20,15 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Model metadata for autogenerate
-target_metadata = Base.metadata
+# Autogenerate is disabled on purpose (no target metadata). The schema is
+# defined by the revisions in alembic/versions, not by the declarative models
+# in app/infrastructure/database/models.py: those do not describe the migrated
+# tables (FaceEmbeddingModel has columns the table lacks, voice_enrollments,
+# client_embedding_observations and biometric_data have no model), so
+# `alembic revision --autogenerate` proposed dropping live tables. Write
+# revisions by hand; `alembic revision --autogenerate` and `alembic check`
+# now stop with "does not provide a MetaData object".
+target_metadata = None
 
 # Database URL from environment
 DATABASE_URL = os.getenv(
@@ -59,8 +63,6 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        compare_type=True,
-        compare_server_default=True,
     )
 
     with context.begin_transaction():
@@ -72,8 +74,6 @@ def do_run_migrations(connection: Connection) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
-        compare_type=True,
-        compare_server_default=True,
     )
 
     with context.begin_transaction():

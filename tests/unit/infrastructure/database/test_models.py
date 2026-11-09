@@ -1,10 +1,11 @@
 """Regression tests for the declarative ORM models (issue #189).
 
-``alembic/env.py`` imports ``Base`` from this module for ``target_metadata``.
 SQLAlchemy Declarative reserves the attribute name ``metadata``, so a model
-that declared ``metadata`` as a mapped attribute made the import (and every
-alembic command) fail before any migration ran. The column in the database
-is still called ``metadata``; only the Python attribute differs.
+that declared ``metadata`` as a mapped attribute made this module (and, while
+``alembic/env.py`` imported it for ``target_metadata``, every alembic command)
+fail on import. The mapped column is still called ``metadata``; only the
+Python attribute differs. ``api_keys.metadata`` exists in the migrated
+schema; ``face_embeddings`` has no such column (see ``FaceEmbeddingModel``).
 """
 
 import importlib

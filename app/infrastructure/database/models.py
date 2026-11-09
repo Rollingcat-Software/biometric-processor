@@ -87,6 +87,14 @@ class FaceEmbeddingModel(Base):
 
     Stores face embedding vectors along with quality metadata
     for face recognition operations.
+
+    Not the schema source of truth: the alembic revisions are. The migrated
+    ``face_embeddings`` table differs from this model (``tenant_id`` VARCHAR
+    and nullable, ``embedding`` is ``vector(512)``, it has ``enrollment_type``
+    and ``deleted_at`` and none of ``embedding_dimension``, ``model_name``,
+    ``model_version``, ``source_image_hash`` or ``metadata``). No runtime code
+    queries through this model, and alembic autogenerate is disabled in
+    ``alembic/env.py`` because of this drift.
     """
     __tablename__ = "face_embeddings"
 
@@ -104,7 +112,8 @@ class FaceEmbeddingModel(Base):
     quality_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     source_image_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     # ``metadata`` is reserved by SQLAlchemy Declarative (issue #189): the
-    # attribute is ``meta``, the database column keeps the name ``metadata``.
+    # attribute is ``meta``, mapped to a column named ``metadata``. The
+    # migrated face_embeddings table has no such column (see the docstring).
     meta: Mapped[Optional[str]] = mapped_column("metadata", Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(

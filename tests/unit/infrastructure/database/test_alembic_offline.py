@@ -3,7 +3,6 @@
 ``alembic upgrade head --sql`` builds every migration into a SQL script
 without a database. It catches, without any infrastructure:
 
-* a model module that cannot be imported by ``alembic/env.py``;
 * a column type that cannot be compiled (an ENUM without a type name);
 * a migration that touches a table no earlier migration created, which is
   what an empty database hits first.
