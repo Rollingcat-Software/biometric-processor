@@ -66,7 +66,9 @@ OBSERVATION_COLUMNS = {
 def _alembic_config():
     from alembic.config import Config
 
-    config = Config(str(REPO_ROOT / "alembic.ini"))
+    # No ini file: alembic/env.py would call logging.config.fileConfig() and
+    # disable the loggers of every module imported before it.
+    config = Config()
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     return config
 

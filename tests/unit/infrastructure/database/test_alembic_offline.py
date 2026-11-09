@@ -34,15 +34,22 @@ _TABLE_CREATE = re.compile(
 _NOT_TABLES = {"conflict", "delete", "update", "commit"}
 
 
+def _alembic_config(**kwargs) -> Config:
+    # No ini file on purpose: alembic/env.py calls logging.config.fileConfig()
+    # when the config has a file name, which disables every existing logger
+    # and breaks caplog assertions in tests that run later in the session.
+    config = Config(**kwargs)
+    config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    return config
+
+
 @pytest.fixture(scope="module")
 def upgrade_sql(monkeypatch_module) -> str:
     monkeypatch_module.setenv(
         "DATABASE_URL", "postgresql+asyncpg://offline:offline@localhost:5432/offline"
     )
     buffer = io.StringIO()
-    config = Config(str(REPO_ROOT / "alembic.ini"), output_buffer=buffer)
-    config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    command.upgrade(config, "head", sql=True)
+    command.upgrade(_alembic_config(output_buffer=buffer), "head", sql=True)
     return buffer.getvalue()
 
 
@@ -110,8 +117,6 @@ def test_upgrade_WhenRevisionIdExceedsVersionColumn_ShouldWidenColumnBeforeStamp
 def test_upgrade_WhenRenderedOffline_ShouldStampTheSingleHeadRevision(
     upgrade_sql: str,
 ) -> None:
-    config = Config(str(REPO_ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    head = ScriptDirectory.from_config(config).get_current_head()
+    head = ScriptDirectory.from_config(_alembic_config()).get_current_head()
 
     assert f"UPDATE alembic_version SET version_num='{head}'" in upgrade_sql
