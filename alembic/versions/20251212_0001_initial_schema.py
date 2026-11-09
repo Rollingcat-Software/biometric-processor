@@ -137,7 +137,7 @@ def upgrade() -> None:
         sa.Column("user_id", sa.String(255), nullable=False),
         sa.Column(
             "status",
-            postgresql.ENUM("session_status", create_type=False),
+            postgresql.ENUM(name="session_status", create_type=False),
             nullable=False,
             server_default="created",
         ),
@@ -188,12 +188,12 @@ def upgrade() -> None:
         ),
         sa.Column(
             "incident_type",
-            postgresql.ENUM("incident_type", create_type=False),
+            postgresql.ENUM(name="incident_type", create_type=False),
             nullable=False,
         ),
         sa.Column(
             "severity",
-            postgresql.ENUM("incident_severity", create_type=False),
+            postgresql.ENUM(name="incident_severity", create_type=False),
             nullable=False,
             server_default="low",
         ),
@@ -205,7 +205,7 @@ def upgrade() -> None:
         sa.Column("details", postgresql.JSONB, nullable=True),
         sa.Column(
             "review_action",
-            postgresql.ENUM("review_action", create_type=False),
+            postgresql.ENUM(name="review_action", create_type=False),
             nullable=False,
             server_default="pending",
         ),

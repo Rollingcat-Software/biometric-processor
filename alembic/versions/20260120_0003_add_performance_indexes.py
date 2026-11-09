@@ -1,7 +1,7 @@
 """Add performance indexes for face embeddings.
 
 Revision ID: 0003_performance_indexes
-Revises: 0002_rate_limits_api_keys
+Revises: 0002a_embedding_tables
 Create Date: 2026-01-20
 
 This migration adds optimized indexes for pgvector similarity search
@@ -31,7 +31,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "0003_performance_indexes"
-down_revision: Union[str, None] = "0002_rate_limits_api_keys"
+down_revision: Union[str, None] = "0002a_embedding_tables"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
