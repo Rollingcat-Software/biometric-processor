@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### 2026-11-09 - Aged-embedding lookup no longer imports the undeclared `pytz`
+
+- `PgVectorEmbeddingRepository.find_created_at` converted the enrollment timestamp with
+  `pytz`, which is not in `requirements.txt` and is not installed in the image. Every
+  verify on production logged `Failed to fetch created_at ...: No module named 'pytz'` and
+  returned `None`, so the adaptive aged-embedding threshold could never apply. It now uses
+  the stdlib `datetime.timezone.utc`. Covered by
+  `tests/unit/infrastructure/persistence/test_pgvector_find_created_at.py`.
+- Scanned every third-party import under `app/` against `requirements.txt`, the known-good
+  lock and the Dockerfile: `pytz` was the only undeclared import on a live path without an
+  `ImportError` guard (`celery`/`kombu` sit in `app/workers`, reached only from the unmounted
+  admin module inside a `try`; `dlib`, `webrtcvad` and `opentelemetry` are guarded optional
+  imports).
+
 ### 2026-11-04 - Deploys pulled by the mordecai deployer; Hetzner deploy workflow removed
 
 - Removed `.github/workflows/deploy-hetzner.yml`. It deployed over SSH to the

@@ -17,7 +17,7 @@ Performance:
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 import asyncpg
@@ -1010,12 +1010,8 @@ class PgVectorEmbeddingRepository:
                 created_at = row["created_at"]
                 # asyncpg returns timezone-aware datetimes; strip tz info so
                 # arithmetic with datetime.utcnow() (naïve) stays consistent.
-                if hasattr(created_at, "tzinfo") and created_at.tzinfo is not None:
-                    import pytz as _pytz
-                    try:
-                        created_at = created_at.astimezone(_pytz.utc).replace(tzinfo=None)
-                    except Exception:
-                        created_at = created_at.replace(tzinfo=None)
+                if created_at.tzinfo is not None:
+                    created_at = created_at.astimezone(timezone.utc).replace(tzinfo=None)
                 return created_at
 
             return None
