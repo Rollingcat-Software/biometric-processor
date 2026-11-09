@@ -8,6 +8,7 @@ from typing import Optional
 
 import numpy as np
 
+from app.domain.embedding_pipeline import FACENET_CHANNEL_ORDER
 from app.domain.exceptions.face_errors import EmbeddingExtractionError
 
 logger = logging.getLogger(__name__)
@@ -207,10 +208,11 @@ class DeepFaceExtractor:
         This method contains the actual blocking DeepFace call.
         Called by AsyncEmbeddingExtractor via thread pool for non-blocking execution.
 
-        CRITICAL OPTIMIZATION:
-            This method sets enforce_detection=False to skip redundant face detection.
-            Face detection is already done by FaceDetector, so we only need embedding extraction.
-            This eliminates duplicate DeepFace.extract_faces() calls and improves performance by 20-40%.
+        The crop from FaceDetector is detected and aligned once more by the
+        configured backend (enforce_detection=False: when nothing is found the
+        whole crop is used), then fed to the model in ``FACENET_CHANNEL_ORDER``
+        (RGB, the order Facenet512 was trained on; see
+        ``app.domain.embedding_pipeline``).
 
         Args:
             face_image: Pre-detected face region as numpy array (H, W, C)
@@ -226,15 +228,31 @@ class DeepFaceExtractor:
         try:
             logger.debug(f"Extracting embedding using {self._model_name}")
 
-            # CRITICAL FIX: Set enforce_detection=False to skip redundant detection
-            # Face is already detected and cropped by FaceDetector
-            embedding_objs = DeepFace.represent(
+            # Detect and align inside the crop exactly as DeepFace.represent did
+            # (same backend, enforce_detection=False, align=True); the face comes
+            # back RGB in [0, 1]. represent() with a detector would flip it to
+            # BGR before the model, so the face is passed with
+            # detector_backend="skip", which hands it to the model unchanged.
+            face_objs = DeepFace.extract_faces(
                 img_path=face_image,
-                model_name=self._model_name,
                 detector_backend=self._detector_backend,
-                enforce_detection=False,  # Skip detection - already done!
+                enforce_detection=False,
                 align=True,
-                normalization="base",  # Use base normalization (L2 norm)
+                color_face="rgb",
+            )
+            if not face_objs:
+                raise EmbeddingExtractionError("No face region produced")
+            face = face_objs[0]["face"]
+            if FACENET_CHANNEL_ORDER == "BGR":
+                face = face[:, :, ::-1]
+
+            embedding_objs = DeepFace.represent(
+                img_path=face,
+                model_name=self._model_name,
+                detector_backend="skip",
+                enforce_detection=False,
+                align=False,
+                normalization="base",  # identity: pixels stay in [0, 1]
             )
 
             if not embedding_objs or len(embedding_objs) == 0:

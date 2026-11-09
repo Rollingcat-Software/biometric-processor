@@ -116,8 +116,13 @@ class PostgresEmbeddingRepository:
         quality_score: float,
         tenant_id: Optional[str] = None,
         fuse_with_existing: bool = False,
+        embedding_pipeline: Optional[str] = None,
     ) -> None:
         """Save or update a face embedding.
+
+        ``embedding_pipeline`` is accepted for the port's signature and not
+        stored: this legacy one-row-per-user table has no metadata column.
+        Production uses ``PgVectorEmbeddingRepository``.
 
         Args:
             user_id: Unique identifier for the user

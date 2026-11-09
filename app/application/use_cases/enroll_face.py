@@ -6,6 +6,7 @@ from typing import Optional
 
 import cv2
 
+from app.domain.embedding_pipeline import SERVER_EMBEDDING_PIPELINE
 from app.domain.entities.face_embedding import FaceEmbedding
 from app.domain.exceptions.face_errors import PoorImageQualityError
 from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
@@ -142,6 +143,7 @@ class EnrollFaceUseCase:
                 quality_score=quality.score,
                 tenant_id=tenant_id,
                 optimize=optimize,
+                embedding_pipeline=SERVER_EMBEDDING_PIPELINE,
             )
 
             return face_embedding
@@ -162,6 +164,7 @@ class EnrollFaceUseCase:
         quality_score: float,
         tenant_id: Optional[str] = None,
         optimize: bool = False,
+        embedding_pipeline: Optional[str] = None,
     ) -> FaceEmbedding:
         """Persist an ALREADY-EXTRACTED embedding as the user's template.
 
@@ -184,6 +187,8 @@ class EnrollFaceUseCase:
             quality_score: Quality score (0-100) associated with this sample.
             tenant_id: Optional tenant identifier for multi-tenancy.
             optimize: Forwarded as ``fuse_with_existing`` (re-enroll & optimize).
+            embedding_pipeline: Id of the pipeline that produced the embedding
+                (``app.domain.embedding_pipeline``); None when unknown.
 
         Returns:
             FaceEmbedding entity describing the stored template.
@@ -197,6 +202,7 @@ class EnrollFaceUseCase:
             quality_score=quality_score,
             tenant_id=tenant_id,
             fuse_with_existing=optimize,
+            embedding_pipeline=embedding_pipeline,
         )
 
         face_embedding = FaceEmbedding.create_new(

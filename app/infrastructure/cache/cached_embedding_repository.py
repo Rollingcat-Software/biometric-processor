@@ -201,6 +201,7 @@ class CachedEmbeddingRepository:
         quality_score: float,
         tenant_id: Optional[str] = None,
         fuse_with_existing: bool = False,
+        embedding_pipeline: Optional[str] = None,
     ) -> None:
         """Save embedding and invalidate cache.
 
@@ -212,6 +213,7 @@ class CachedEmbeddingRepository:
             fuse_with_existing: Forwarded to the underlying repository — the
                 "re-enroll & optimize" fusion flag. See
                 :meth:`IEmbeddingRepository.save`.
+            embedding_pipeline: Forwarded; see :meth:`IEmbeddingRepository.save`.
         """
         # Save to underlying repository
         await self._repository.save(
@@ -220,6 +222,7 @@ class CachedEmbeddingRepository:
             quality_score=quality_score,
             tenant_id=tenant_id,
             fuse_with_existing=fuse_with_existing,
+            embedding_pipeline=embedding_pipeline,
         )
 
         # Invalidate cache for this user

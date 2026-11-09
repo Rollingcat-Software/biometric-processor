@@ -21,6 +21,7 @@ class IEmbeddingRepository(Protocol):
         quality_score: float,
         tenant_id: Optional[str] = None,
         fuse_with_existing: bool = False,
+        embedding_pipeline: Optional[str] = None,
     ) -> None:
         """Save or update a face embedding.
 
@@ -34,6 +35,10 @@ class IEmbeddingRepository(Protocol):
                 the existing centroid (quality-weighted incremental running
                 average) rather than producing a plain replace/average. When
                 False (default), normal enroll behaviour is unchanged.
+            embedding_pipeline: Id of the pipeline that produced the embedding
+                (``app.domain.embedding_pipeline``), recorded with the sample.
+                The user's template averages only samples of this pipeline.
+                None means unknown (rows from before the id existed).
 
         Raises:
             RepositoryError: When save operation fails

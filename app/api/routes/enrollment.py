@@ -349,6 +349,7 @@ async def enroll_embedding(
         quality_score=EnrollFaceUseCase.PRECOMPUTED_EMBEDDING_QUALITY_SCORE,
         tenant_id=tenant_id,
         optimize=False,
+        embedding_pipeline=request.embedding_pipeline,
     )
 
     return EnrollmentResponse(

@@ -65,6 +65,7 @@ class _FakeEmbeddingRepository:
         quality_score: float,
         tenant_id=None,
         fuse_with_existing: bool = False,
+        embedding_pipeline=None,
     ) -> None:
         self.save_calls.append(
             {
@@ -72,6 +73,7 @@ class _FakeEmbeddingRepository:
                 "quality_score": quality_score,
                 "tenant_id": tenant_id,
                 "fuse_with_existing": fuse_with_existing,
+                "embedding_pipeline": embedding_pipeline,
                 "dim": len(embedding),
             }
         )
@@ -203,6 +205,38 @@ async def test_enroll_embedding_stores_template_via_repository_save():
     assert repo.save_calls[0]["user_id"] == "user-7"
     assert repo.save_calls[0]["tenant_id"] == "t1"
     assert repo.save_calls[0]["dim"] == 512
+
+
+@pytest.mark.asyncio
+async def test_enroll_embedding_WhenPipelineIsGiven_ShouldRecordItWithTheTemplate():
+    """The client's pipeline id travels to repository.save so the template can be
+    told apart from templates of another pipeline (channel order, aligner)."""
+    repo = _FakeEmbeddingRepository()
+
+    await enrollment_route.enroll_embedding(
+        request=EmbeddingEnrollRequest(
+            tenant_id="t1",
+            user_id="user-p",
+            embedding=_unit_vector(seed=3),
+            embedding_pipeline="client-facenet512-align2-rgb",
+        ),
+        use_case=_make_enroll_use_case(repo),
+    )
+
+    assert repo.save_calls[0]["embedding_pipeline"] == "client-facenet512-align2-rgb"
+
+
+@pytest.mark.asyncio
+async def test_enroll_embedding_WhenPipelineIsAbsent_ShouldStoreWithoutOne():
+    """Callers that do not send the field (today's identity-core-api) keep working."""
+    repo = _FakeEmbeddingRepository()
+
+    await enrollment_route.enroll_embedding(
+        request=EmbeddingEnrollRequest(tenant_id="t1", user_id="user-q", embedding=_unit_vector(seed=4)),
+        use_case=_make_enroll_use_case(repo),
+    )
+
+    assert repo.save_calls[0]["embedding_pipeline"] is None
 
 
 @pytest.mark.asyncio

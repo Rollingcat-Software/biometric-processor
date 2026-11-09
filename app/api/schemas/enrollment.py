@@ -33,6 +33,17 @@ class EmbeddingEnrollRequest(BaseModel):
             f"{EMBEDDING_DIMENSION} floats."
         ),
     )
+    embedding_pipeline: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9.-]*$",
+        description=(
+            "Id of the client pipeline that produced the embedding (for example "
+            "client-facenet512-align2-rgb). Recorded with the template so templates "
+            "of different pipelines are never averaged together. Optional: absent "
+            "means unknown."
+        ),
+    )
 
     @field_validator("embedding")
     @classmethod

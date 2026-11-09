@@ -10,6 +10,7 @@ import numpy as np
 
 from app.application.use_cases.check_liveness import CheckLivenessUseCase
 from app.core.config import settings
+from app.domain.embedding_pipeline import SERVER_EMBEDDING_PIPELINE
 from app.domain.entities.enrollment_session import EnrollmentSession
 from app.domain.entities.face_embedding import FaceEmbedding
 from app.domain.entities.multi_image_enrollment_result import MultiImageEnrollmentResult
@@ -410,6 +411,7 @@ class EnrollMultiImageUseCase:
             quality_score=fused_quality,
             tenant_id=tenant_id,
             fuse_with_existing=optimize,
+            embedding_pipeline=SERVER_EMBEDDING_PIPELINE,
         )
 
         # Step 7: Mark session as completed

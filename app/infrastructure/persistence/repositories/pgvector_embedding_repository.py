@@ -16,6 +16,7 @@ Performance:
 - Async/await for non-blocking I/O operations
 """
 
+import json
 import logging
 from datetime import datetime
 from typing import List, Optional, Tuple
@@ -23,10 +24,21 @@ from typing import List, Optional, Tuple
 import asyncpg
 import numpy as np
 
+from app.domain.embedding_pipeline import EMBEDDING_PIPELINE_METADATA_KEY
 from app.domain.exceptions.repository_errors import RepositoryError
 from app.infrastructure.security.embedding_cipher import EmbeddingCipher
 
 logger = logging.getLogger(__name__)
+
+# The embedding pipeline id of a row, read from the metadata JSONB column.
+_PIPELINE_SQL = f"metadata->>'{EMBEDDING_PIPELINE_METADATA_KEY}'"
+
+
+def _pipeline_metadata_json(embedding_pipeline: Optional[str]) -> str:
+    """Metadata JSON for a new row: the pipeline id, or the column's default {}."""
+    if embedding_pipeline is None:
+        return "{}"
+    return json.dumps({EMBEDDING_PIPELINE_METADATA_KEY: embedding_pipeline})
 
 # Schema note (GDPR Art. 9 — P1.3):
 #   * ``embedding`` (pgvector) is the ANN search index — kept as plaintext
@@ -200,6 +212,7 @@ class PgVectorEmbeddingRepository:
         quality_score: float,
         tenant_id: Optional[str] = None,
         fuse_with_existing: bool = False,
+        embedding_pipeline: Optional[str] = None,
     ) -> None:
         """Save or update a face embedding.
 
@@ -222,6 +235,14 @@ class PgVectorEmbeddingRepository:
                 only ever improves (or no-ops, when the new sample is rejected
                 upstream by the liveness/quality/anti-spoof gate) — it never
                 degrades the stored template.
+            embedding_pipeline: Id of the pipeline that produced the embedding
+                (``app.domain.embedding_pipeline``), written to ``metadata``.
+                The centroid averages only INDIVIDUAL rows of this pipeline
+                (rows without an id form their own group), a prior centroid of
+                another pipeline is replaced instead of fused, and pruning above
+                the cap drops other pipelines' rows first. Embeddings of
+                different pipelines are not comparable, so mixing them would
+                produce a template that matches neither.
 
         Raises:
             RepositoryError: When save operation fails
@@ -250,6 +271,7 @@ class PgVectorEmbeddingRepository:
 
             # Normalize quality score to 0-1 range (database expects 0-1)
             normalized_quality = quality_score / 100.0 if quality_score > 1.0 else quality_score
+            metadata_json = _pipeline_metadata_json(embedding_pipeline)
 
             async with pool.acquire() as conn:
                 # Insert individual enrollment (never overwrite — accumulate)
@@ -257,11 +279,11 @@ class PgVectorEmbeddingRepository:
                     """
                     INSERT INTO face_embeddings (
                         user_id, tenant_id, embedding, quality_score, enrollment_type,
-                        embedding_ciphertext, key_version
-                    ) VALUES ($1, $2, $3, $4, 'INDIVIDUAL', $5, $6)
+                        embedding_ciphertext, key_version, metadata
+                    ) VALUES ($1, $2, $3, $4, 'INDIVIDUAL', $5, $6, $7::jsonb)
                     """,
                     user_id, tenant_id, embedding_list, normalized_quality,
-                    ciphertext, self._key_version,
+                    ciphertext, self._key_version, metadata_json,
                 )
 
                 # Cap individual enrollments at 5 per user — delete oldest when exceeding
@@ -278,16 +300,17 @@ class PgVectorEmbeddingRepository:
                 if count > MAX_INDIVIDUAL_ENROLLMENTS:
                     # Delete oldest individual enrollments beyond the cap
                     await conn.execute(
-                        """
+                        f"""
                         DELETE FROM face_embeddings
                         WHERE id IN (
                             SELECT id FROM face_embeddings
                             WHERE user_id = $1 AND enrollment_type = 'INDIVIDUAL' AND deleted_at IS NULL
-                            ORDER BY quality_score ASC, created_at ASC
+                            ORDER BY ({_PIPELINE_SQL} IS DISTINCT FROM $3) DESC,
+                                     quality_score ASC, created_at ASC
                             LIMIT $2
                         )
                         """,
-                        user_id, count - MAX_INDIVIDUAL_ENROLLMENTS,
+                        user_id, count - MAX_INDIVIDUAL_ENROLLMENTS, embedding_pipeline,
                     )
                     logger.info(
                         f"Pruned {count - MAX_INDIVIDUAL_ENROLLMENTS} lowest-quality enrollment(s) "
@@ -302,8 +325,9 @@ class PgVectorEmbeddingRepository:
                 prior_centroid_quality: float = 0.0
                 if fuse_with_existing:
                     prior_row = await conn.fetchrow(
-                        """
-                        SELECT embedding, embedding_ciphertext, quality_score
+                        f"""
+                        SELECT embedding, embedding_ciphertext, quality_score,
+                               {_PIPELINE_SQL} AS embedding_pipeline
                         FROM face_embeddings
                         WHERE user_id = $1
                           AND enrollment_type = 'CENTROID'
@@ -313,7 +337,12 @@ class PgVectorEmbeddingRepository:
                         user_id,
                     )
                     has_centroid = 1 if prior_row else 0
-                    if prior_row is not None:
+                    # A centroid of another pipeline is not comparable: it is
+                    # replaced by this pipeline's average instead of fused.
+                    if (
+                        prior_row is not None
+                        and prior_row["embedding_pipeline"] == embedding_pipeline
+                    ):
                         prior_centroid_vec = self._decode_row_embedding(
                             prior_row, user_id=user_id
                         )
@@ -334,13 +363,14 @@ class PgVectorEmbeddingRepository:
                 # Centroid as average of all individual embeddings
                 # pgvector doesn't support vector * scalar, so use simple AVG
                 # Quality filtering is done by the enrollment cap (keeps top 5 by quality)
-                centroid_sql = """
+                centroid_sql = f"""
                     SELECT
                         AVG(embedding)::vector(512) as avg_emb,
                         AVG(quality_score) as avg_q,
                         count(*) as n
                     FROM face_embeddings
                     WHERE user_id = $1 AND enrollment_type = 'INDIVIDUAL' AND deleted_at IS NULL
+                      AND {_PIPELINE_SQL} IS NOT DISTINCT FROM $2
                 """
 
                 # Compute centroid in SQL for parity with existing semantics,
@@ -348,6 +378,7 @@ class PgVectorEmbeddingRepository:
                 centroid_row = await conn.fetchrow(
                     centroid_sql,
                     user_id,
+                    embedding_pipeline,
                 )
                 if centroid_row and centroid_row["avg_emb"] is not None:
                     centroid_vec = np.array(centroid_row["avg_emb"], dtype=np.float32)
@@ -386,12 +417,12 @@ class PgVectorEmbeddingRepository:
                             """
                             INSERT INTO face_embeddings (
                                 user_id, tenant_id, embedding, quality_score, enrollment_type,
-                                embedding_ciphertext, key_version
+                                embedding_ciphertext, key_version, metadata
                             )
-                            VALUES ($1, $2, $3, $4, 'CENTROID', $5, $6)
+                            VALUES ($1, $2, $3, $4, 'CENTROID', $5, $6, $7::jsonb)
                             """,
                             user_id, tenant_id, centroid_list, centroid_quality,
-                            centroid_ciphertext, self._key_version,
+                            centroid_ciphertext, self._key_version, metadata_json,
                         )
                     else:
                         # Update existing centroid (plaintext + ciphertext in lockstep)
@@ -402,12 +433,13 @@ class PgVectorEmbeddingRepository:
                                 quality_score = $3,
                                 embedding_ciphertext = $4,
                                 key_version = $5,
+                                metadata = $6::jsonb,
                                 updated_at = CURRENT_TIMESTAMP
                             WHERE user_id = $1
                               AND enrollment_type = 'CENTROID'
                             """,
                             user_id, centroid_list, centroid_quality,
-                            centroid_ciphertext, self._key_version,
+                            centroid_ciphertext, self._key_version, metadata_json,
                         )
 
                 # Get final count
