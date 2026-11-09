@@ -356,7 +356,7 @@ async def verify_face(
     """Verify a user's face (1:1 matching).
 
     This endpoint:
-    1. Detects face in uploaded image
+    1. Detects face in uploaded image (once, shared by liveness and matching)
     2. Extracts face embedding
     3. Retrieves stored embedding for user
     4. Compares embeddings
@@ -412,7 +412,9 @@ async def verify_face(
         # add a floor here: if the score is below 0.4 we reject even if
         # is_live happened to be True (e.g. a very marginal borderline case).
         VERIFY_MIN_LIVENESS_SCORE = 0.4
-        liveness_result = await liveness_use_case.execute(image_path=image_path)
+        # The liveness check's face detection is reused by the verification
+        # below, so the image is detected once per request, not twice.
+        liveness_result, detected = await liveness_use_case.execute_with_detection(image_path=image_path)
         if not liveness_result.is_live or liveness_result.score < VERIFY_MIN_LIVENESS_SCORE:
             # 2026-05-12 fix: expand the rejection log so operators can
             # distinguish a real spoof verdict from a model-load failure or
@@ -451,7 +453,9 @@ async def verify_face(
 
         # Execute verification use case
         try:
-            result = await use_case.execute(user_id=user_id, image_path=image_path, tenant_id=tenant_id)
+            result = await use_case.execute(
+                user_id=user_id, image_path=image_path, tenant_id=tenant_id, detected=detected
+            )
         except PoorImageQualityError as e:
             logger.warning(f"Verification rejected due to poor image quality: {e.message}")
             return VerificationResponse(

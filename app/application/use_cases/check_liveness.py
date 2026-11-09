@@ -1,6 +1,5 @@
 """Liveness check use case."""
 
-import asyncio
 import json
 import logging
 import time
@@ -10,6 +9,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from app.application.services.face_image_detection import DetectedFaceImage, detect_face_image
 from app.application.services.face_signal_metrics import extract_face_signal_metrics
 from app.core.config import get_settings
 from app.domain.entities.liveness_result import LivenessResult
@@ -96,30 +96,41 @@ class CheckLivenessUseCase:
             MultipleFacesError: When multiple faces are found
             LivenessCheckError: When liveness check fails
         """
+        liveness_result, _ = await self.execute_with_detection(image_path)
+        return liveness_result
+
+    async def execute_with_detection(
+        self, image_path: str
+    ) -> tuple[LivenessResult, DetectedFaceImage | None]:
+        """Execute the liveness check and hand back the face detection it made.
+
+        A caller that goes on to process the same image (the ``/verify`` route)
+        reuses the returned detection instead of detecting a second time. The
+        detection is ``None`` when the anti-spoof model-missing policy produced
+        the result, because no detection completed.
+
+        Raises:
+            The same errors as :meth:`execute`.
+        """
         logger.info("Starting liveness check")
 
         # USER-BUG-7 (2026-05-01): per-stage timing for slow-verify reports.
         t_start = time.perf_counter()
 
-        # Step 1: Load image (P2.11: offload blocking decode + disk I/O off the event loop)
-        t0 = time.perf_counter()
-        image = await asyncio.to_thread(cv2.imread, image_path)
-        if image is None:
-            raise ValueError(f"Failed to load image: {image_path}")
-        decode_ms = (time.perf_counter() - t0) * 1000
-
-        # Step 2: Detect face (to ensure there's a face before liveness check)
+        # Steps 1-2: decode, then detect the face once (shared with /verify).
         logger.debug("Step 1/2: Detecting face...")
-        t0 = time.perf_counter()
         try:
-            detection = await self._detector.detect(image)
+            detected = await detect_face_image(self._detector, image_path)
         except LivenessModelLoadError as exc:
             # 2026-05-12 compound liveness bug: the DeepFace anti-spoof model
             # (MiniFASNet) failed to load. Apply the configured policy
             # (LIVENESS_ANTISPOOF_MODEL_MISSING_POLICY) instead of silently
             # tagging every user as a spoof.
-            return self._handle_antispoof_model_missing(exc)
-        detect_ms = (time.perf_counter() - t0) * 1000
+            return self._handle_antispoof_model_missing(exc), None
+        image = detected.fresh_image()
+        detection = detected.detection
+        decode_ms = detected.decode_ms
+        detect_ms = detected.detect_ms
 
         logger.debug(f"Face detected with confidence: {detection.confidence:.2f}")
 
@@ -411,7 +422,7 @@ class CheckLivenessUseCase:
             f"total={total_ms:.0f}ms"
         )
 
-        return liveness_result
+        return liveness_result, detected
 
     # ------------------------------------------------------------------
     # Anti-spoof model-missing policy (2026-05-12)

@@ -1,13 +1,11 @@
 """Face verification use case."""
 
-import asyncio
 import logging
 import time
 from datetime import datetime
 from typing import Optional
 
-import cv2
-
+from app.application.services.face_image_detection import DetectedFaceImage, detect_face_image
 from app.core.config import settings
 from app.domain.entities.verification_result import VerificationResult
 from app.domain.exceptions.face_errors import PoorImageQualityError
@@ -69,6 +67,7 @@ class VerifyFaceUseCase:
         user_id: str,
         image_path: str,
         tenant_id: Optional[str] = None,
+        detected: Optional[DetectedFaceImage] = None,
     ) -> VerificationResult:
         """Execute face verification.
 
@@ -76,6 +75,8 @@ class VerifyFaceUseCase:
             user_id: User identifier to verify against
             image_path: Path to image file
             tenant_id: Optional tenant identifier for multi-tenancy
+            detected: The decode and face detection already made on
+                ``image_path`` in this request; when given, neither runs again
 
         Returns:
             VerificationResult with verification outcome
@@ -96,22 +97,18 @@ class VerifyFaceUseCase:
         stage_ms: dict[str, float] = {}
         t_start = time.perf_counter()
 
-        # Step 1: Load image (P2.11: offload blocking decode + disk I/O off the event loop)
-        t0 = time.perf_counter()
-        image = await asyncio.to_thread(cv2.imread, image_path)
-        if image is None:
-            raise ValueError(f"Failed to load image: {image_path}")
-        stage_ms["decode"] = (time.perf_counter() - t0) * 1000
-
-        # Step 2: Detect face
-        # Client pre-crops to 224×224 — detection only as fallback.
-        # When the input image is already ~224×224 (client-cropped), this step
-        # is fast (<10ms) because there is only one face region covering most of
-        # the frame. Full-frame detection (640×480+) previously cost 200-730ms.
-        logger.debug("Step 1/5: Detecting face...")
-        t0 = time.perf_counter()
-        detection = await self._detector.detect(image)
-        stage_ms["detect"] = (time.perf_counter() - t0) * 1000
+        # Steps 1-2: decode and detect, unless the caller already did both on
+        # this image (the /verify route shares the liveness check's detection).
+        if detected is None:
+            logger.debug("Step 1/5: Detecting face...")
+            detected = await detect_face_image(self._detector, image_path)
+            stage_ms["decode"] = detected.decode_ms
+            stage_ms["detect"] = detected.detect_ms
+            detection_source = "own"
+        else:
+            detection_source = "shared"
+        image = detected.fresh_image()
+        detection = detected.detection
 
         # Step 3: Extract face region
         logger.debug("Step 2/6: Extracting face region...")
@@ -163,6 +160,7 @@ class VerifyFaceUseCase:
         timing_summary = " ".join(f"{k}={v:.0f}ms" for k, v in stage_ms.items())
         logger.info(
             f"face/verify: {timing_summary} total={total_ms:.0f}ms "
+            f"detection={detection_source} "
             f"user_id={user_id} verified={result.verified} "
             f"distance={result.distance:.4f} confidence={result.confidence:.4f} "
             f"threshold={result.threshold}"

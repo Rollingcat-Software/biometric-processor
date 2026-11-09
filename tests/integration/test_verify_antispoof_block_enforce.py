@@ -109,13 +109,14 @@ def mocks(tmp_path):
         )
     )
 
-    liveness_uc = Mock()
-    liveness_uc.execute = AsyncMock(
-        return_value=LivenessResult(
-            is_live=True, score=92.0, challenge="none",
-            challenge_completed=True, confidence=0.91,
-        )
+    liveness = LivenessResult(
+        is_live=True, score=92.0, challenge="none",
+        challenge_completed=True, confidence=0.91,
     )
+    liveness_uc = Mock()
+    liveness_uc.execute = AsyncMock(return_value=liveness)
+    # /verify takes the liveness verdict together with its face detection.
+    liveness_uc.execute_with_detection = AsyncMock(return_value=(liveness, None))
 
     storage = Mock()
     storage.save_temp = AsyncMock(return_value=str(image_path))
