@@ -16,9 +16,25 @@ shape the code expects *before* 0005 runs: 0003 adds indexes on
 ``face_embeddings`` and 0005 adds ``embedding_ciphertext`` and ``key_version``
 to both tables, so those columns are deliberately not created here.
 
-``IF NOT EXISTS`` keeps it a no-op on a database whose tables were created
-out of band (the ``scripts/*.sql`` era). A database already stamped at 0003
-or later never runs it, because it is an ancestor of that revision.
+Databases that already have the tables (created out of band, the
+``scripts/*.sql`` era) are handled as follows:
+
+* a table that already has every column listed in ``REQUIRED_COLUMNS`` is
+  kept as it is, rows included (``IF NOT EXISTS``);
+* a table that lacks any of them (for example ``face_embeddings`` from
+  ``scripts/init-db.sql``, which has no ``enrollment_type`` or ``is_active``,
+  or the 128-dimension table from ``scripts/init-database.sql``) stops the
+  upgrade with an error naming the missing columns. Such a table also needs
+  constraint and data decisions (``init-db.sql`` has ``UNIQUE (user_id,
+  tenant_id)``, which forbids the per-user centroid row), so it is reconciled
+  by hand, not guessed at here.
+
+A database already stamped at 0003 or later never runs this revision, because
+it is an ancestor of that revision.
+
+``downgrade()`` drops the two tables only while both are empty. With stored
+enrollments it refuses: this revision cannot tell whether it created the
+tables or found them, and dropping them would delete every enrollment.
 
 Column notes (all derived from the SQL the repositories issue):
 * ``tenant_id`` is ``VARCHAR``: the repositories compare it with
@@ -40,6 +56,53 @@ depends_on: Union[str, Sequence[str], None] = None
 
 FACE_EMBEDDING_DIMENSION = 512  # Facenet512
 VOICE_EMBEDDING_DIMENSION = 256  # Resemblyzer GE2E
+ENROLLMENT_TABLES = ("face_embeddings", "voice_enrollments")
+
+# Columns created below; an existing table must already have all of them.
+REQUIRED_COLUMNS = (
+    "id",
+    "user_id",
+    "tenant_id",
+    "embedding",
+    "quality_score",
+    "enrollment_type",
+    "is_active",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+)
+
+
+def _require_current_shape(table: str) -> None:
+    """Stop the upgrade when ``table`` exists without the expected columns."""
+    required = ", ".join(f"'{column}'" for column in REQUIRED_COLUMNS)
+    op.execute(
+        f"""
+        DO $$
+        DECLARE
+            missing TEXT;
+        BEGIN
+            IF to_regclass('{table}') IS NULL THEN
+                RETURN;
+            END IF;
+            SELECT string_agg(required.column_name, ', ' ORDER BY required.column_name)
+              INTO missing
+              FROM unnest(ARRAY[{required}]) AS required(column_name)
+             WHERE NOT EXISTS (
+                   SELECT 1 FROM information_schema.columns c
+                    WHERE c.table_schema = current_schema()
+                      AND c.table_name = '{table}'
+                      AND c.column_name = required.column_name);
+            IF missing IS NOT NULL THEN
+                RAISE EXCEPTION
+                    'Table {table} already exists without column(s) %. It predates '
+                    'the alembic chain; reconcile it by hand (see revision '
+                    '0002a_embedding_tables) and run the upgrade again.', missing;
+            END IF;
+        END
+        $$
+        """
+    )
 
 
 def _create_enrollment_table(table: str, dimension: int) -> None:
@@ -79,11 +142,39 @@ def _create_enrollment_table(table: str, dimension: int) -> None:
 def upgrade() -> None:
     """Create face_embeddings and voice_enrollments when they do not exist."""
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    for table in ENROLLMENT_TABLES:
+        _require_current_shape(table)
     _create_enrollment_table("face_embeddings", FACE_EMBEDDING_DIMENSION)
     _create_enrollment_table("voice_enrollments", VOICE_EMBEDDING_DIMENSION)
 
 
 def downgrade() -> None:
-    """Drop both tables. This deletes every stored enrollment."""
+    """Drop both tables, but only while neither holds a row.
+
+    Raises (and the whole downgrade rolls back) when either table stores an
+    enrollment. To go below this revision on purpose, back the tables up,
+    drop or empty them by hand, then downgrade.
+    """
+    op.execute(
+        """
+        DO $$
+        DECLARE
+            name TEXT;
+            stored BOOLEAN;
+        BEGIN
+            FOREACH name IN ARRAY ARRAY['face_embeddings', 'voice_enrollments'] LOOP
+                IF to_regclass(name) IS NOT NULL THEN
+                    EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I)', name) INTO stored;
+                    IF stored THEN
+                        RAISE EXCEPTION
+                            'Refusing to drop % while it stores enrollments. Back it '
+                            'up, drop or empty it by hand, then downgrade again.', name;
+                    END IF;
+                END IF;
+            END LOOP;
+        END
+        $$
+        """
+    )
     op.execute("DROP TABLE IF EXISTS voice_enrollments")
     op.execute("DROP TABLE IF EXISTS face_embeddings")

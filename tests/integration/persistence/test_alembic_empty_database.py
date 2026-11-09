@@ -7,7 +7,8 @@ so a column the code uses but no migration creates fails here.
 Gated on ``ALEMBIC_TEST_DATABASE_URL`` (for example
 ``postgresql://test:test@localhost:5432/alembic_db``). The database must be
 empty: the fixture refuses to run otherwise and leaves it at ``base`` again
-on teardown (which also exercises every ``downgrade()``).
+on teardown (which also exercises every ``downgrade()``). Databases that
+already hold tables or rows are covered by ``test_alembic_existing_database.py``.
 """
 
 from __future__ import annotations
@@ -110,6 +111,9 @@ def migrated_database():
     try:
         yield DATABASE_URL
     finally:
+        # 0002a refuses to drop enrollment tables that hold rows, so the rows
+        # the repository tests wrote are removed first.
+        asyncio.run(_fetch("TRUNCATE face_embeddings, voice_enrollments"))
         command.downgrade(config, "base")
         patcher.undo()
 
