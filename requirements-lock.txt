@@ -11,7 +11,7 @@
 #
 # The pins below are also stale vs requirements.txt:
 #   - tensorflow-cpu==2.15.0 here vs TF 2.21 in requirements.txt + Dockerfile
-#   - keras==3.13.2 here, which is wire-incompatible with TF 2.15's tf.keras
+#   - keras==3.15.0 here, which is wire-incompatible with TF 2.15's tf.keras
 #     (= Keras 2). Installing from this lock would break DeepFace at boot.
 #
 # Reproducibility in production is provided by Docker image digests (immutable
@@ -32,7 +32,7 @@
 # CRITICAL: Version constraints to prevent breaking changes
 # ===========================================
 numpy==1.26.4
-keras==3.13.2
+keras==3.15.0
 tensorflow-cpu==2.15.0
 
 # ===========================================
