@@ -63,7 +63,6 @@ only when the session was created with binding possibly required.
 from __future__ import annotations
 
 import logging
-import random
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -72,6 +71,8 @@ from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 import numpy as np
 
 from app.api.schemas.active_liveness import ChallengeType
+from app.domain.interfaces.random_source import IRandomSource
+from app.infrastructure.security.random_source import csprng_random_source
 from app.application.services.challenge_metric_scorer import (
     metric_is_present,
     score_action_metrics,
@@ -199,6 +200,7 @@ class PuzzleSessionManager:
         trace_v2_enabled: bool = False,
         gesture_manager: Any = None,
         clock: Optional[Callable[[], float]] = None,
+        random_source: Optional[IRandomSource] = None,
     ) -> None:
         self._ttl = int(ttl_seconds) if ttl_seconds is not None else self.DEFAULT_TTL_SECONDS
         self._sessions: Dict[str, PuzzleSession] = {}
@@ -208,11 +210,18 @@ class PuzzleSessionManager:
         self._trace_v2 = bool(trace_v2_enabled)
         self._gesture_manager = gesture_manager
         self._clock: Callable[[], float] = clock or (lambda: time.time())
+        # Challenge order and finger targets must be unpredictable: OS CSPRNG
+        # unless a test injects a seeded source.
+        self._random = random_source or csprng_random_source()
         logger.info(
             "PuzzleSessionManager initialised (ttl=%ss, trace_contract=%s)",
             self._ttl,
             "v2" if self._trace_v2 else "v1",
         )
+
+    @property
+    def random_source(self) -> IRandomSource:
+        return self._random
 
     @property
     def trace_v2_enabled(self) -> bool:
@@ -282,16 +291,16 @@ class PuzzleSessionManager:
         # distinct types are allowed; otherwise sample WITH replacement so a
         # caller can ask for more challenges than distinct allowed types.
         if count <= len(pool):
-            chosen = random.sample(pool, count)
+            chosen = self._random.sample(pool, count)
         else:
-            chosen = [random.choice(pool) for _ in range(count)]
+            chosen = [self._random.choice(pool) for _ in range(count)]
 
         challenges: List[PuzzleChallengeState] = []
         for action in chosen:
             params: Dict[str, Any] = {}
             if action in self._TARGETED_ACTIONS:
                 # Ask for 1..5 fingers (avoid 0=fist), mirroring the gesture manager.
-                params["target"] = random.randint(1, 5)
+                params["target"] = self._random.randint(1, 5)
             challenges.append(PuzzleChallengeState(action=action, params=params))
 
         session = PuzzleSession(

@@ -43,6 +43,7 @@ from app.domain.interfaces.embedding_extractor import IEmbeddingExtractor
 from app.domain.interfaces.embedding_repository import IEmbeddingRepository
 from app.domain.exceptions.liveness_errors import LivenessCheckError
 from app.domain.interfaces.event_bus import IEventBus
+from app.domain.interfaces.random_source import IRandomSource
 from app.domain.interfaces.active_liveness_session_repository import IActiveLivenessSessionRepository
 
 # Domain interfaces (imported for type hints)
@@ -54,6 +55,7 @@ from app.domain.interfaces.similarity_calculator import ISimilarityCalculator
 
 # Infrastructure implementations
 from app.infrastructure.ml.card_type.yolo_card_type_detector import YOLOCardTypeDetector
+from app.infrastructure.security.random_source import csprng_random_source
 from app.infrastructure.ml.factories.detector_factory import FaceDetectorFactory
 from app.infrastructure.ml.factories.extractor_factory import EmbeddingExtractorFactory
 from app.infrastructure.ml.factories.similarity_factory import SimilarityCalculatorFactory
@@ -193,10 +195,16 @@ def get_file_storage() -> IFileStorage:
 
 
 @lru_cache()
+def get_random_source() -> IRandomSource:
+    """Source for every challenge draw: the OS CSPRNG (singleton)."""
+    return csprng_random_source()
+
+
+@lru_cache()
 def get_active_liveness_manager() -> ActiveLivenessManager:
     """Get active liveness manager instance."""
 
-    return ActiveLivenessManager()
+    return ActiveLivenessManager(random_source=get_random_source())
 
 
 @lru_cache()
@@ -624,7 +632,7 @@ def get_active_gesture_liveness_manager() -> ActiveGestureLivenessManager:
             "(set ACTIVE_GESTURE_LIVENESS_ENABLED=true to enable)."
         )
     logger.info("Creating ActiveGestureLivenessManager (landmarks-only, server-side)")
-    return ActiveGestureLivenessManager()
+    return ActiveGestureLivenessManager(random_source=get_random_source())
 
 
 def get_start_active_gesture_liveness_use_case() -> StartActiveGestureLivenessUseCase:
@@ -1165,7 +1173,9 @@ def get_puzzle_repository():
 
 def get_generate_puzzle_use_case() -> GeneratePuzzleUseCase:
     """Get generate puzzle use case instance."""
-    return GeneratePuzzleUseCase(puzzle_repository=get_puzzle_repository())
+    return GeneratePuzzleUseCase(
+        puzzle_repository=get_puzzle_repository(), random_source=get_random_source()
+    )
 
 
 def get_verify_puzzle_use_case() -> VerifyPuzzleUseCase:

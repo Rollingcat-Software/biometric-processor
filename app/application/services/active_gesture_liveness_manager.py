@@ -37,7 +37,6 @@ import json
 import logging
 import math
 import os
-import random
 import time
 import uuid
 from dataclasses import dataclass
@@ -46,6 +45,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from app.domain.interfaces.random_source import IRandomSource
+from app.infrastructure.security.random_source import csprng_random_source
 from app.api.schemas.active_liveness import (
     ActiveLivenessConfig,
     ActiveLivenessResponse,
@@ -291,7 +292,9 @@ class ActiveGestureLivenessManager:
         finger_tap_max_dist_scaled: float = DEFAULT_FINGER_TAP_MAX_DIST_SCALED,
         pinch_max_dist_scaled: float = DEFAULT_PINCH_MAX_DIST_SCALED,
         hold_max_variance: float = DEFAULT_HOLD_MAX_VARIANCE,
+        random_source: Optional[IRandomSource] = None,
     ) -> None:
+        self._random = random_source or csprng_random_source()
         self._finger_open_th = finger_open_distance
         self._thumb_open_th = thumb_open_distance
         self._wave_min_freq = wave_min_freq_hz
@@ -318,6 +321,10 @@ class ActiveGestureLivenessManager:
     # ------------------------------------------------------------------
     # Session lifecycle
     # ------------------------------------------------------------------
+
+    @property
+    def random_source(self) -> IRandomSource:
+        return self._random
 
     def create_session(
         self, config: Optional[ActiveLivenessConfig | GestureLivenessConfig] = None
@@ -370,7 +377,7 @@ class ActiveGestureLivenessManager:
         else:
             pool = list(self._default_pool())
             if config.randomize:
-                random.shuffle(pool)
+                self._random.shuffle(pool)
 
         pool = pool[: max(1, config.num_challenges)]
         return [
@@ -409,13 +416,13 @@ class ActiveGestureLivenessManager:
                 target = config.target_finger_count
                 if target is None:
                     # Ask for 1..5 by default (avoid 0 = fist, avoid two-hand).
-                    target = random.randint(1, 5)
+                    target = self._random.randint(1, 5)
                 per_challenge[str(idx)] = {"target": int(target), "matched_frames": 0}
             elif gtype == ChallengeType.MATH:
                 target = config.target_finger_count
                 if target is None:
-                    target = random.randint(1, 5)
-                a = random.randint(0, target)
+                    target = self._random.randint(1, 5)
+                a = self._random.randint(0, target)
                 b = target - a
                 per_challenge[str(idx)] = {
                     "target": int(target),
@@ -425,7 +432,7 @@ class ActiveGestureLivenessManager:
             elif gtype == ChallengeType.SHAPE_TRACE:
                 try:
                     templates = load_shape_template_catalog().templates
-                    picked = random.choice(templates) if templates else None
+                    picked = self._random.choice(templates) if templates else None
                 except Exception:  # pragma: no cover - defensive
                     logger.warning("Shape templates unavailable; SHAPE_TRACE will fail closed")
                     picked = None

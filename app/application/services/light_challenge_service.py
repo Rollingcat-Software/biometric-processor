@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import random
 import time
 from typing import Optional, Sequence
 
 import numpy as np
+
+from app.domain.interfaces.random_source import IRandomSource
+from app.infrastructure.security.random_source import csprng_random_source
 
 
 class LightChallengeService:
@@ -26,17 +28,23 @@ class LightChallengeService:
         minimum_delay_ms: int = 50,
         min_color_shift: float = 0.05,
         colors: Optional[Sequence[str]] = None,
+        random_source: Optional[IRandomSource] = None,
     ) -> None:
         self._flash_duration_ms = flash_duration_ms
         self._expected_response_window_ms = expected_response_window_ms
         self._minimum_delay_ms = minimum_delay_ms
         self._min_color_shift = min_color_shift
         self._colors = tuple(colors or self.COLORS)
+        self._random = random_source or csprng_random_source()
+
+    @property
+    def random_source(self) -> IRandomSource:
+        return self._random
 
     def generate_challenge(self) -> dict:
         issued_at = time.time()
         return {
-            "color": random.choice(self._colors),
+            "color": self._random.choice(self._colors),
             "available_colors": list(self._colors),
             "issued_at": issued_at,
             "expires_at": issued_at + (self._expected_response_window_ms / 1000.0),

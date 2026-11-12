@@ -27,13 +27,14 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.application.services.light_challenge_service import LightChallengeService
+from app.core.container import get_random_source
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Liveness"], prefix="/liveness")
 
-# Single shared service; stateless aside from RNG / config.
-_service = LightChallengeService()
+# Single shared service; stateless aside from the random source / config.
+_service = LightChallengeService(random_source=get_random_source())
 
 
 class FlashChallengeStartResponse(BaseModel):

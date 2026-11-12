@@ -40,7 +40,11 @@ from app.application.services.puzzle_session_manager import (
 )
 from app.application.use_cases.generate_puzzle import GeneratePuzzleUseCase
 from app.application.use_cases.verify_puzzle import VerifyPuzzleUseCase
-from app.core.container import get_generate_puzzle_use_case, get_verify_puzzle_use_case
+from app.core.container import (
+    get_generate_puzzle_use_case,
+    get_random_source,
+    get_verify_puzzle_use_case,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +72,8 @@ def get_puzzle_session_manager() -> PuzzleSessionManager:
     from app.core.config import settings
 
     return PuzzleSessionManager(
-        trace_v2_enabled=bool(getattr(settings, "PUZZLE_TRACE_V2_ENABLED", False))
+        trace_v2_enabled=bool(getattr(settings, "PUZZLE_TRACE_V2_ENABLED", False)),
+        random_source=get_random_source(),
     )
 
 
